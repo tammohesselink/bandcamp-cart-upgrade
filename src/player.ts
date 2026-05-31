@@ -194,6 +194,14 @@ export class Player {
     return this.playlists.get(id)?.tracks ?? [];
   }
 
+  /** Stop audio, remove injected UI, and reset the body padding. */
+  destroy() {
+    this.audio.pause();
+    this.audio.src = '';
+    this.wrapper.remove();
+    document.body.style.paddingBottom = '';
+  }
+
   removeTracksByReleaseUrl(id: PlaylistId, releaseUrl: string) {
     const state = this.playlists.get(id);
     if (!state) return;

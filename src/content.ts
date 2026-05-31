@@ -1,17 +1,15 @@
 import type { CartItem, PlaylistTrack } from './types';
 import { parseTralbum } from './bandcamp';
 import { Player } from './player';
+import { probeCart, probeDiscography, injectDiscographyButton } from './probe';
 import { normalizeUrl } from './url';
 import {
   readPageContext,
   SEL_SIDECART_BODY,
   SEL_SIDECART_ITEM_LIST,
   SEL_SIDECART_ITEM_LINK,
-  SEL_MUSIC_GRID,
-  SEL_LEFT_MIDDLE_COLUMNS,
   SEL_MUSIC_GRID_ITEM,
   SEL_GRID_ITEM_TITLE,
-  SEL_FEATURED_GRID,
 } from './bandcamp-dom';
 import { sendBcpMessage } from './messages';
 
@@ -207,7 +205,14 @@ async function main() {
   };
 
   // Keep cart state in sync when Bandcamp's own JS updates the sidecart.
-  watchSidecart(player);
+  const sidecartObserver = watchSidecart(player);
+
+  // Tear down on navigation away: disconnect the observer, stop audio, and
+  // remove the injected UI so subsequent pages start clean.
+  window.addEventListener('pagehide', () => {
+    sidecartObserver?.disconnect();
+    player.destroy();
+  }, { once: true });
 
   if (cartItems.length > 0) {
     player.setStatus(`Loading 0 / ${cartItems.length}…`, 'loading');
@@ -348,7 +353,7 @@ function addSidecartItem(releaseUrl: string, title: string, price: number | null
   contents.appendChild(p);
   reveal.appendChild(contents);
   item.appendChild(reveal);
-  target.appendChild(item);
+  withSuppressedObserver(() => target.appendChild(item));
 }
 
 function removeSidecartItem(releaseUrl: string): void {
@@ -365,7 +370,7 @@ function removeSidecartItem(releaseUrl: string): void {
       while (el && el.parentElement !== sidecartBody) {
         el = el.parentElement;
       }
-      el?.remove();
+      withSuppressedObserver(() => el?.remove());
       break;
     }
   }
@@ -378,11 +383,27 @@ function removeSidecartItem(releaseUrl: string): void {
   }
 }
 
-function watchSidecart(player: Player): void {
+// Set to true when the extension itself is mutating #sidecartBody (add/remove
+// item) so the MutationObserver callback skips the re-probe and avoids a
+// feedback loop. Cleared after a tick (macrotask) to ensure the queued
+// MutationObserver microtask fires while the flag is still set.
+let suppressSidecartObserver = false;
+
+function withSuppressedObserver(fn: () => void): void {
+  suppressSidecartObserver = true;
+  fn();
+  setTimeout(() => { suppressSidecartObserver = false; }, 0);
+}
+
+function watchSidecart(player: Player): MutationObserver | null {
   const sidecartBody = document.querySelector<HTMLElement>(SEL_SIDECART_BODY);
-  if (!sidecartBody) return;
-  const observer = new MutationObserver(() => refreshCartState(player));
+  if (!sidecartBody) return null;
+  const observer = new MutationObserver(() => {
+    if (suppressSidecartObserver) return;
+    refreshCartState(player);
+  });
   observer.observe(sidecartBody, { childList: true, subtree: true });
+  return observer;
 }
 
 function updateSyncNum(responseBody: unknown): void {
@@ -393,95 +414,6 @@ function updateSyncNum(responseBody: unknown): void {
   }
 }
 
-// --- Cart DOM probe -----------------------------------------------------------
-
-function probeCart(): CartItem[] {
-  const sidecartBody = document.querySelector<HTMLElement>(SEL_SIDECART_BODY);
-  if (!sidecartBody) {
-    console.warn('[bcp] #sidecartBody not found — cart may be empty or DOM changed');
-    return [];
-  }
-
-  const seen = new Set<string>();
-  const items: CartItem[] = [];
-
-  for (const link of Array.from(sidecartBody.querySelectorAll<HTMLAnchorElement>(SEL_SIDECART_ITEM_LINK))) {
-    const url = link.href;
-    if (seen.has(url)) continue;
-    seen.add(url);
-
-    const typeMatch = url.match(/\/(track|album)\//);
-    const type =
-      typeMatch?.[1] === 'album' ? 'album' :
-      typeMatch?.[1] === 'track' ? 'track' :
-      'unknown';
-
-    const rawTitle = link.textContent?.trim() ?? '';
-    const purchaseTypeMatch = rawTitle.match(/,\s*digital\s+(track|album)$/i);
-    const purchaseType: 'track' | 'album' | undefined =
-      purchaseTypeMatch?.[1]?.toLowerCase() === 'album' ? 'album' :
-      purchaseTypeMatch?.[1]?.toLowerCase() === 'track' ? 'track' :
-      undefined;
-    const title = rawTitle.replace(/,\s*digital\s+(track|album)$/i, '').trim();
-
-    items.push({ url, type, title, artist: '', thumbnailUrl: '', purchaseType });
-  }
-
-  return items;
-}
-
-// --- Discography DOM probe ---------------------------------------------------
-
-function probeDiscography(): CartItem[] {
-  if (window.location.pathname !== '/music' && window.location.pathname !== '/') return [];
-
-  // Try the standard music grid first; fall back to scanning the whole column.
-  const grid = document.querySelector<HTMLElement>(SEL_MUSIC_GRID);
-  const container = grid ?? document.querySelector<HTMLElement>(SEL_LEFT_MIDDLE_COLUMNS);
-  if (!container) return [];
-
-  const seen = new Set<string>();
-  const items: CartItem[] = [];
-
-  const selector = 'a[href*="/album/"], a[href*="/track/"]';
-  for (const link of Array.from(container.querySelectorAll<HTMLAnchorElement>(selector))) {
-    // Resolve relative URLs (Bandcamp grid hrefs are relative: "/album/lateral")
-    const url = new URL(link.href, window.location.href).href;
-
-    // Skip in-page section links or hash-only hrefs
-    if (!url.match(/\/(album|track)\//)) continue;
-    if (seen.has(url)) continue;
-    seen.add(url);
-
-    const typeMatch = url.match(/\/(track|album)\//);
-    const type = typeMatch?.[1] === 'album' ? 'album' : 'track';
-
-    const title = link.querySelector(SEL_GRID_ITEM_TITLE)?.textContent?.trim() ?? link.textContent?.trim() ?? '';
-
-    items.push({ url, type, title, artist: '', thumbnailUrl: '' });
-  }
-
-  return items;
-}
-
-// --- Discography button injection --------------------------------------------
-
-function injectDiscographyButton(): HTMLButtonElement {
-  const featuredGrid = document.querySelector<HTMLElement>(SEL_FEATURED_GRID);
-  const grid = document.querySelector<HTMLElement>(SEL_MUSIC_GRID);
-  const target = featuredGrid ?? grid ?? document.querySelector<HTMLElement>(SEL_LEFT_MIDDLE_COLUMNS);
-
-  const button = document.createElement('button');
-  button.className = 'bcp-discography-btn';
-  button.textContent = 'Loading label discography…';
-  button.disabled = true;
-
-  if (target) {
-    target.parentElement?.insertBefore(button, target);
-  }
-
-  return button;
-}
 
 // --- Fetch + parse -----------------------------------------------------------
 
