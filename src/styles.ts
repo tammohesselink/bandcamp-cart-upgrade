@@ -374,4 +374,127 @@ input[type=range].bcp-tempo {
 .bcp-grid-play-btn:hover {
   opacity: 1;
 }
+
+.bcp-cart-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.bcp-in-cart-badge {
+  color: #1da0c3;
+  font-size: 11px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.bcp-cart-action-btn {
+  background: none;
+  border: 1px solid #444;
+  border-radius: 3px;
+  color: #999;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 10px;
+  padding: 2px 6px;
+  white-space: nowrap;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.bcp-cart-action-btn:hover:not(:disabled) {
+  color: #ccc;
+  border-color: #666;
+}
+
+.bcp-cart-action-btn:disabled {
+  color: #555;
+  border-color: #333;
+  cursor: default;
+}
+
+.bcp-remove-btn {
+  color: #e05c5c;
+  border-color: #6e2e2e;
+}
+
+.bcp-remove-btn:hover:not(:disabled) {
+  color: #ff7070;
+  border-color: #e05c5c;
+}
+
+.bcp-queue-cart-marker {
+  color: #1da0c3;
+  font-size: 11px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.bcp-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  z-index: 2147483647;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.bcp-modal {
+  background: #1a1a1a;
+  border: 1px solid #2e2e2e;
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  max-width: 360px;
+  padding: 20px 24px;
+  width: 90%;
+}
+
+.bcp-modal-title {
+  color: #f0f0f0;
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.bcp-modal-body {
+  color: #aaa;
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+
+.bcp-modal-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.bcp-modal-btn {
+  background: none;
+  border: 1px solid #444;
+  border-radius: 4px;
+  color: #999;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  padding: 6px 14px;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.bcp-modal-btn:hover {
+  color: #ccc;
+  border-color: #666;
+}
+
+.bcp-modal-btn-destructive {
+  background: #e05c5c;
+  border-color: #e05c5c;
+  color: #fff;
+}
+
+.bcp-modal-btn-destructive:hover {
+  background: #c94c4c;
+  border-color: #c94c4c;
+  color: #fff;
+}
 `;

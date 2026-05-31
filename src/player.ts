@@ -1,6 +1,8 @@
 import type { PlaylistId, PlaylistTrack } from './types';
 import { PLAYER_CSS } from './styles';
 
+type CartAddType = 'track' | 'release';
+
 declare namespace chrome {
   namespace storage {
     const local: {
@@ -58,6 +60,12 @@ export class Player {
 
   private queueVisible = false;
   private seeking = false;
+
+  private cartUrls = new Set<string>();
+  private cartActionsEl!: HTMLElement;
+
+  onCartAdd?: (track: PlaylistTrack, addType: CartAddType) => Promise<void>;
+  onCartRemove?: (track: PlaylistTrack, cartItemUrl: string) => Promise<void>;
 
   constructor(initialPlaylist: PlaylistTrack[]) {
     this.audio = new Audio();
@@ -146,7 +154,109 @@ export class Player {
     }
   }
 
+  setCartUrls(urls: Set<string>) {
+    this.cartUrls = urls;
+    this.updateQueueEl();
+    const state = this.active();
+    if (state) {
+      const track = state.tracks[state.lastIndex];
+      if (track) this.updateCartActions(track);
+    }
+  }
+
+  removeCartUrl(url: string) {
+    const normalized = normalizeUrl(url);
+    if (!this.cartUrls.has(normalized)) return;
+    const updated = new Set(this.cartUrls);
+    updated.delete(normalized);
+    this.setCartUrls(updated);
+  }
+
+  addCartUrl(url: string) {
+    const normalized = normalizeUrl(url);
+    if (this.cartUrls.has(normalized)) return;
+    const updated = new Set(this.cartUrls);
+    updated.add(normalized);
+    this.setCartUrls(updated);
+  }
+
+  // Returns the starting index of the newly added tracks, or null if nothing was added.
+  addTracksToPlaylist(id: PlaylistId, tracks: PlaylistTrack[]): number | null {
+    let state = this.playlists.get(id);
+    if (!state) {
+      // Initialise the playlist on first add (e.g. cart was empty at page load).
+      if (tracks.length === 0) return null;
+      this.setPlaylist(id, id === 'cart' ? 'Cart' : 'Label discography', []);
+      state = this.playlists.get(id)!;
+    }
+    const existingPages = new Set(state.tracks.map((t) => t.pageUrl));
+    const toAdd = tracks.filter((t) => !existingPages.has(t.pageUrl));
+    if (toAdd.length === 0) return null;
+    const startIndex = state.tracks.length;
+    state.tracks.push(...toAdd);
+    if (this.activeId === id) this.updateQueueEl();
+    return startIndex;
+  }
+
+  getPlaylistTracks(id: PlaylistId): PlaylistTrack[] {
+    return this.playlists.get(id)?.tracks ?? [];
+  }
+
+  removeTracksByReleaseUrl(id: PlaylistId, releaseUrl: string) {
+    const state = this.playlists.get(id);
+    if (!state) return;
+    const normalized = normalizeUrl(releaseUrl);
+    const removedBefore = state.tracks
+      .slice(0, state.lastIndex)
+      .filter((t) => normalizeUrl(t.releaseUrl) === normalized).length;
+    const currentRemoved =
+      normalizeUrl(state.tracks[state.lastIndex]?.releaseUrl ?? '') === normalized;
+    state.tracks = state.tracks.filter((t) => normalizeUrl(t.releaseUrl) !== normalized);
+    // Adjust lastIndex so next() advances to the right track after the audio ends.
+    // When the current track is removed, step back one extra so next() lands on
+    // the first surviving track after the removed section.
+    const adjustment = currentRemoved ? removedBefore + 1 : removedBefore;
+    state.lastIndex = Math.min(
+      Math.max(0, state.lastIndex - adjustment),
+      Math.max(0, state.tracks.length - 1)
+    );
+    if (this.activeId === id) {
+      // Don't touch the audio — let the current stream finish naturally.
+      this.updateQueueEl();
+      this.updateNavButtons();
+    }
+  }
+
+  removeTrackByPageUrl(id: PlaylistId, pageUrl: string) {
+    const state = this.playlists.get(id);
+    if (!state) return;
+    const normalized = normalizeUrl(pageUrl);
+    const idx = state.tracks.findIndex((t) => normalizeUrl(t.pageUrl) === normalized);
+    if (idx === -1) return;
+    const isCurrentTrack = idx === state.lastIndex;
+    state.tracks.splice(idx, 1);
+    if (idx < state.lastIndex) {
+      state.lastIndex = Math.max(0, state.lastIndex - 1);
+    } else if (isCurrentTrack) {
+      state.lastIndex = Math.min(state.lastIndex, Math.max(0, state.tracks.length - 1));
+    }
+    if (this.activeId === id) {
+      this.updateQueueEl();
+      this.updateNavButtons();
+    }
+  }
+
   // --- Private helpers -------------------------------------------------------
+
+  // A track is "in cart" if either its release URL or its own page URL appears
+  // in cartUrls. Individual track purchases use the track page URL in the sidecart,
+  // while album purchases use the album URL.
+  private isInCart(track: PlaylistTrack): boolean {
+    return (
+      this.cartUrls.has(normalizeUrl(track.releaseUrl)) ||
+      this.cartUrls.has(normalizeUrl(track.pageUrl))
+    );
+  }
 
   private active(): PlaylistState | null {
     if (this.activeId === null) return null;
@@ -276,6 +386,8 @@ export class Player {
     const tempoArea = el('div', 'bcp-tempo-area');
     tempoArea.append(tempoLabel, this.tempoSlider, this.tempoResetBtn, this.tempoRangeBtn, this.tempoMTBtn);
 
+    this.cartActionsEl = el('div', 'bcp-cart-actions');
+
     this.queueToggleBtn = btn('☰', 'bcp-btn');
     this.queueToggleBtn.title = 'Toggle queue';
     this.queueToggleBtn.addEventListener('click', () => this.toggleQueue());
@@ -285,6 +397,7 @@ export class Player {
     bar.append(
       this.artworkEl,
       trackInfo,
+      this.cartActionsEl,
       controls,
       seekArea,
       tempoArea,
@@ -323,6 +436,13 @@ export class Player {
 
       item.append(num, text);
 
+      if (this.isInCart(track)) {
+        const marker = el('div', 'bcp-queue-cart-marker');
+        marker.textContent = '✓';
+        marker.title = 'In cart';
+        item.append(marker);
+      }
+
       if (track.unplayable) {
         const hint = el('div', 'bcp-no-stream');
         hint.textContent = '⚠ no stream';
@@ -354,6 +474,7 @@ export class Player {
     this.seekBar.value = '0';
     this.updateNavButtons();
     this.updateQueueEl();
+    this.updateCartActions(track);
 
     if (track.unplayable || !track.streamUrl) {
       this.playPauseBtn.textContent = '▶';
@@ -452,6 +573,108 @@ export class Player {
     this.queueEl.classList.toggle('bcp-visible', this.queueVisible);
   }
 
+  private updateCartActions(track: PlaylistTrack) {
+    this.cartActionsEl.innerHTML = '';
+
+    if (!track.releaseId) return;
+
+    if (this.isInCart(track)) {
+      // Determine which URL the cart holds: individual track adds use track.pageUrl,
+      // release/album adds use track.releaseUrl.
+      const cartItemUrl = this.cartUrls.has(normalizeUrl(track.pageUrl))
+        ? track.pageUrl
+        : track.releaseUrl;
+
+      const badge = el('span', 'bcp-in-cart-badge');
+      badge.textContent = '✓ In cart';
+
+      const removeBtn = btn('Remove', 'bcp-cart-action-btn bcp-remove-btn');
+      removeBtn.addEventListener('click', async () => {
+        const releaseLabel = track.albumTitle || track.trackTitle || 'this release';
+        const confirmed = await this.showConfirm(
+          'Remove from cart',
+          `Remove "${releaseLabel}" from your cart?`
+        );
+        if (!confirmed) return;
+        removeBtn.disabled = true;
+        await this.onCartRemove?.(track, cartItemUrl);
+        removeBtn.disabled = false;
+      });
+
+      this.cartActionsEl.append(badge, removeBtn);
+    } else {
+      if (track.releaseType === 'album' && track.trackId !== null) {
+        const addTrackBtn = btn('+ Track', 'bcp-cart-action-btn');
+        addTrackBtn.title = 'Add this track to cart';
+        addTrackBtn.addEventListener('click', async () => {
+          addTrackBtn.disabled = true;
+          await this.onCartAdd?.(track, 'track');
+          addTrackBtn.disabled = false;
+        });
+
+        const addReleaseBtn = btn('+ Release', 'bcp-cart-action-btn');
+        addReleaseBtn.title = 'Add the full release to cart';
+        addReleaseBtn.addEventListener('click', async () => {
+          addReleaseBtn.disabled = true;
+          await this.onCartAdd?.(track, 'release');
+          addReleaseBtn.disabled = false;
+        });
+
+        this.cartActionsEl.append(addTrackBtn, addReleaseBtn);
+      } else {
+        const addCartBtn = btn('+ Cart', 'bcp-cart-action-btn');
+        addCartBtn.title = 'Add to cart';
+        addCartBtn.addEventListener('click', async () => {
+          addCartBtn.disabled = true;
+          await this.onCartAdd?.(track, 'release');
+          addCartBtn.disabled = false;
+        });
+
+        this.cartActionsEl.append(addCartBtn);
+      }
+    }
+  }
+
+  private showConfirm(title: string, body: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      const backdrop = el('div', 'bcp-modal-backdrop');
+
+      const modal = el('div', 'bcp-modal');
+
+      const titleEl = el('div', 'bcp-modal-title');
+      titleEl.textContent = title;
+
+      const bodyEl = el('div', 'bcp-modal-body');
+      bodyEl.textContent = body;
+
+      const actions = el('div', 'bcp-modal-actions');
+      const cancelBtn = btn('Cancel', 'bcp-modal-btn');
+      const confirmBtn = btn('Remove', 'bcp-modal-btn bcp-modal-btn-destructive');
+
+      const close = (result: boolean) => {
+        backdrop.remove();
+        document.removeEventListener('keydown', onKey);
+        resolve(result);
+      };
+
+      const onKey = (e: KeyboardEvent) => {
+        if (e.key === 'Escape') close(false);
+      };
+
+      cancelBtn.addEventListener('click', () => close(false));
+      confirmBtn.addEventListener('click', () => close(true));
+      backdrop.addEventListener('click', (e) => {
+        if (e.target === backdrop) close(false);
+      });
+      document.addEventListener('keydown', onKey);
+
+      actions.append(cancelBtn, confirmBtn);
+      modal.append(titleEl, bodyEl, actions);
+      backdrop.appendChild(modal);
+      document.body.appendChild(backdrop);
+    });
+  }
+
   private updateTempoUI() {
     const range = TEMPO_RANGES[this.tempoRangeIndex]!;
     this.tempoSlider.min = String(range.min);
@@ -492,4 +715,8 @@ function fmtTime(seconds: number): string {
   const m = Math.floor(s / 60);
   const rem = s % 60;
   return `${m}:${rem.toString().padStart(2, '0')}`;
+}
+
+function normalizeUrl(url: string): string {
+  return url.toLowerCase().replace(/\/+$/, '');
 }
