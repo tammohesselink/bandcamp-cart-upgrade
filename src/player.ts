@@ -52,6 +52,7 @@ export class Player {
 
   private queueVisible = false;
   private playerVisible = true;
+  private discographyExpected = false;
   private collapseBtn!: HTMLButtonElement;
   private seeking = false;
 
@@ -103,10 +104,17 @@ export class Player {
 
     if (initialPlaylist.length > 0) {
       this.setPlaylist('cart', 'Cart', initialPlaylist);
+    } else {
+      this.updateHeader();
     }
   }
 
   // --- Public API -----------------------------------------------------------
+
+  expectDiscography() {
+    this.discographyExpected = true;
+    this.updateHeader();
+  }
 
   setPlaylist(id: PlaylistId, label: string, tracks: PlaylistTrack[]) {
     const isNew = !this.playlists.has(id);
@@ -321,12 +329,13 @@ export class Player {
 
     const entries: [PlaylistId, string][] = [
       ['currentpage', 'Current page'],
-      ['cart', 'Cart'],
       ['discography', 'Label discography'],
+      ['cart', 'Cart'],
     ];
 
     for (const [id, label] of entries) {
       const state = this.playlists.get(id);
+      if (!state && (id !== 'discography' || !this.discographyExpected)) continue;
       const tab = document.createElement('button');
       tab.className = 'bcp-tab' + (id === this.activeId ? ' bcp-tab-active' : '');
       tab.textContent = state?.label ?? label;

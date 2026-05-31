@@ -587,6 +587,7 @@ async function main() {
   }
 
   if (discoItems.length > 0) {
+    player.expectDiscography();
     const discoBtn = injectDiscographyButton();
     console.log('[bcp] Discography releases found:');
     console.table(discoItems.map((it) => ({ type: it.type, url: it.url })));
