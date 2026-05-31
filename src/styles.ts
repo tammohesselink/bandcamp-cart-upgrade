@@ -524,4 +524,14 @@ input[type=range].bcp-tempo {
   border-color: #c94c4c;
   color: #fff;
 }
+
+a.itemName.bcp-playing {
+  color: #1da0c3 !important;
+  font-weight: 600;
+}
+
+.music-grid-item.bcp-playing p.title {
+  color: #1da0c3 !important;
+  font-weight: 600;
+}
 `;

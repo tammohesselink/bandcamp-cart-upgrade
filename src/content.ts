@@ -31,6 +31,11 @@ let latestSyncNum: number | null = null;
 // "digital track" suffix in the sidecart link text instead.
 let cartItemTypes = new Map<string, 'track' | 'album'>();
 
+// Index maps for the active cart and discography playlists, used to resolve
+// which page element to highlight when the playing track changes.
+let activeCartIndexMap: Map<string, number> = new Map();
+let activeDiscoIndexMap: Map<string, number> = new Map();
+
 // Maps normalised cart item URL → Bandcamp cart line-item id.
 // req=del needs this id (assigned when the item entered the cart), not the tralbum id.
 // Populated from cart_data.items in cart operation responses.
@@ -397,6 +402,19 @@ async function main() {
   cartItemTypes = buildCartItemTypes(cartItems);
   player.setCartUrls(buildCartUrlSet(cartItems));
 
+  player.onTrackChange = (id, index) => {
+    if (id === 'cart') {
+      highlightCartItem(index);
+      clearDiscoHighlight();
+    } else if (id === 'discography') {
+      clearCartHighlight();
+      highlightDiscoItem(index);
+    } else {
+      clearCartHighlight();
+      clearDiscoHighlight();
+    }
+  };
+
   // Wire up cart mutation callbacks.
   player.onCartAdd = async (track, addType) => {
     const tralbumId = addType === 'track' ? track.trackId : track.releaseId;
@@ -446,6 +464,7 @@ async function main() {
         : await fetchTracksForUrl(track.releaseUrl).then((r) => r.length > 0 ? r : [track]);
       const startIndex = player.addTracksToPlaylist('cart', tracksToAdd);
       if (startIndex !== null) {
+        activeCartIndexMap.set(normalizeUrl(cartItemUrl), startIndex);
         injectPlayButtonForSidecartItem(cartItemUrl, startIndex, player);
       }
       refreshCartStatus(player);
@@ -545,6 +564,7 @@ async function main() {
       return;
     }
 
+    activeCartIndexMap = cartIndexMap;
     player.setPlaylist('cart', 'Cart', cartTracks);
     document.body.style.paddingBottom = `${player.wrapper.offsetHeight}px`;
     injectCartPlayButtons(cartIndexMap, player);
@@ -576,6 +596,7 @@ async function main() {
     });
 
     if (discoTracks.length > 0) {
+      activeDiscoIndexMap = discoIndexMap;
       player.setPlaylist('discography', 'Label discography', discoTracks);
       player.setPlaylistStatus('discography', `${discoTracks.length} tracks (${discoItems.length} releases)`, 'info');
       discoBtn.textContent = `Play label discography (${discoTracks.length} tracks, ${discoItems.length} releases)`;
@@ -832,6 +853,65 @@ async function resolvePlaylist(
   }
 
   return { tracks, indexMap };
+}
+
+function findReleaseUrlForIndex(indexMap: Map<string, number>, activeIndex: number): string | null {
+  let bestUrl: string | null = null;
+  let bestStart = -1;
+  for (const [url, start] of indexMap) {
+    if (start <= activeIndex && start > bestStart) {
+      bestStart = start;
+      bestUrl = url;
+    }
+  }
+  return bestUrl;
+}
+
+function highlightCartItem(index: number): void {
+  const sidecartBody = document.querySelector<HTMLElement>(SEL_SIDECART_BODY);
+  if (!sidecartBody) return;
+  for (const el of Array.from(sidecartBody.querySelectorAll<HTMLElement>('.bcp-playing'))) {
+    el.classList.remove('bcp-playing');
+  }
+  const activeUrl = findReleaseUrlForIndex(activeCartIndexMap, index);
+  if (!activeUrl) return;
+  const normalized = normalizeUrl(activeUrl);
+  for (const link of Array.from(sidecartBody.querySelectorAll<HTMLAnchorElement>(SEL_SIDECART_ITEM_LINK))) {
+    if (normalizeUrl(link.href) === normalized) {
+      link.classList.add('bcp-playing');
+      break;
+    }
+  }
+}
+
+function clearCartHighlight(): void {
+  const sidecartBody = document.querySelector<HTMLElement>(SEL_SIDECART_BODY);
+  if (!sidecartBody) return;
+  for (const el of Array.from(sidecartBody.querySelectorAll<HTMLElement>('.bcp-playing'))) {
+    el.classList.remove('bcp-playing');
+  }
+}
+
+function highlightDiscoItem(index: number): void {
+  for (const li of Array.from(document.querySelectorAll<HTMLElement>(`${SEL_MUSIC_GRID_ITEM}.bcp-playing`))) {
+    li.classList.remove('bcp-playing');
+  }
+  const activeUrl = findReleaseUrlForIndex(activeDiscoIndexMap, index);
+  if (!activeUrl) return;
+  try {
+    const itemPath = new URL(activeUrl).pathname;
+    document.querySelector<HTMLElement>(
+      `${SEL_MUSIC_GRID_ITEM} a[href="${CSS.escape(itemPath)}"]`
+    )?.closest<HTMLElement>(SEL_MUSIC_GRID_ITEM)?.classList.add('bcp-playing');
+  } catch {
+    // invalid URL — skip
+  }
+}
+
+function clearDiscoHighlight(): void {
+  for (const li of Array.from(document.querySelectorAll<HTMLElement>(`${SEL_MUSIC_GRID_ITEM}.bcp-playing`))) {
+    li.classList.remove('bcp-playing');
+  }
 }
 
 function injectCartPlayButtons(indexMap: Map<string, number>, player: Player): void {
