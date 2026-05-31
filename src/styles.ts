@@ -121,7 +121,7 @@ export const PLAYER_CSS = `
 
 #bcp-header {
   background: #111;
-  border-top: 4px solid #1da0c3;
+  border-top: 2px solid #1da0c3;
   padding: 5px 16px;
   font-size: 12px;
   color: #999;
@@ -130,6 +130,7 @@ export const PLAYER_CSS = `
 
 #bcp-bar {
   background: #111;
+  border-top: 2px solid #1da0c3;
   height: 72px;
   display: flex;
   align-items: center;
@@ -153,11 +154,18 @@ export const PLAYER_CSS = `
 }
 
 .bcp-track-title {
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 500;
   color: #f0f0f0;
+  text-decoration: none;
+}
+
+.bcp-track-title[href]:hover {
+  color: #1da0c3;
+  text-decoration: underline;
 }
 
 .bcp-track-sub {
@@ -167,6 +175,16 @@ export const PLAYER_CSS = `
   color: #888;
   font-size: 11px;
   margin-top: 2px;
+}
+
+.bcp-track-album-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.bcp-track-album-link:hover {
+  color: #1da0c3;
+  text-decoration: underline;
 }
 
 .bcp-controls {
@@ -579,5 +597,40 @@ a.itemName.bcp-playing {
 .music-grid-item.bcp-playing p.title {
   color: #1da0c3 !important;
   font-weight: 600;
+}
+
+/* Partial-checkout: checkboxes and button injected into Bandcamp's sidecart */
+
+.bcp-cart-checkbox {
+  accent-color: #1da0c3;
+  cursor: pointer;
+  height: 13px;
+  margin: 0 4px 0 0;
+  vertical-align: middle;
+  width: 13px;
+}
+
+.bcp-checkout-selected-btn {
+  display: block;
+  margin: 6px 0 0;
+  padding: 5px 10px;
+  background: #1da0c3;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.bcp-checkout-selected-btn:hover:not(:disabled) {
+  opacity: 0.85;
+}
+
+.bcp-checkout-selected-btn:disabled {
+  background: #ccc;
+  color: #666;
+  cursor: default;
 }
 `;

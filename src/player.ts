@@ -32,7 +32,7 @@ export class Player {
   private activeId: PlaylistId | null = null;
 
   private artworkEl!: HTMLImageElement;
-  private titleEl!: HTMLElement;
+  private titleEl!: HTMLAnchorElement;
   private subEl!: HTMLElement;
   private playPauseBtn!: HTMLButtonElement;
   private prevBtn!: HTMLButtonElement;
@@ -63,6 +63,7 @@ export class Player {
 
   onCartAdd?: (track: PlaylistTrack, addType: CartAddType) => Promise<boolean | void>;
   onCartRemove?: (track: PlaylistTrack, cartItemUrl: string) => Promise<void>;
+  onCheckoutSelected?: (selectedRawUrls: string[]) => Promise<void>;
   onPlaybackStart?: () => void;
   onCurrentPageTrackChange?: (pageUrl: string) => void;
   onTrackChange?: (id: PlaylistId, index: number) => void;
@@ -328,14 +329,17 @@ export class Player {
 
   // --- Private helpers -------------------------------------------------------
 
-  // A track is "in cart" if either its release URL or its own page URL appears
-  // in cartUrls. Individual track purchases use the track page URL in the sidecart,
-  // while album purchases use the album URL.
+  // Returns the cart-item key for a track: pageUrl for single-track purchases
+  // (where Bandcamp stores the track page URL in the sidecart), releaseUrl for
+  // full-release purchases. This is the URL used as the key in cartUrls and is
+  // the unit of selection for partial checkout.
+  private cartItemKeyFor(track: PlaylistTrack): string {
+    return this.cartUrls.has(normalizeUrl(track.pageUrl)) ? track.pageUrl : track.releaseUrl;
+  }
+
+  // A track is "in cart" if its cart-item key appears in cartUrls.
   private isInCart(track: PlaylistTrack): boolean {
-    return (
-      this.cartUrls.has(normalizeUrl(track.releaseUrl)) ||
-      this.cartUrls.has(normalizeUrl(track.pageUrl))
-    );
+    return this.cartUrls.has(normalizeUrl(this.cartItemKeyFor(track)));
   }
 
   private active(): PlaylistState | null {
@@ -354,6 +358,10 @@ export class Player {
 
     const tabs = document.createElement('div');
     tabs.id = 'bcp-tabs';
+
+    const label = document.createElement('span');
+    label.textContent = 'Playlist type:';
+    tabs.appendChild(label);
 
     const entries: [PlaylistId, string][] = [
       ['currentpage', 'Current page'],
@@ -387,8 +395,11 @@ export class Player {
     this.artworkEl.alt = '';
 
     const trackInfo = el('div', 'bcp-track-info');
-    this.titleEl = el('div', 'bcp-track-title');
+    this.titleEl = document.createElement('a');
+    this.titleEl.className = 'bcp-track-title';
     this.titleEl.textContent = 'No tracks loaded';
+    this.titleEl.target = '_blank';
+    this.titleEl.rel = 'noopener noreferrer';
     this.subEl = el('div', 'bcp-track-sub');
     trackInfo.append(this.titleEl, this.subEl);
 
@@ -572,7 +583,18 @@ export class Player {
 
     this.artworkEl.src = track.artworkUrl || '';
     this.titleEl.textContent = track.trackTitle || '(untitled)';
-    this.subEl.textContent = [track.artist, track.albumTitle].filter(Boolean).join(' — ');
+    this.titleEl.href = track.pageUrl;
+    this.subEl.innerHTML = '';
+    if (track.artist) this.subEl.appendChild(document.createTextNode(track.albumTitle ? `${track.artist} — ` : track.artist));
+    if (track.albumTitle) {
+      const albumLink = document.createElement('a');
+      albumLink.className = 'bcp-track-album-link';
+      albumLink.href = track.releaseUrl;
+      albumLink.target = '_blank';
+      albumLink.rel = 'noopener noreferrer';
+      albumLink.textContent = track.albumTitle;
+      this.subEl.appendChild(albumLink);
+    }
     if (needsReload) {
       this.currentTimeEl.textContent = '0:00';
       this.seekBar.value = '0';
@@ -702,12 +724,9 @@ export class Player {
     if (this.isInCart(track)) {
       // Determine which URL the cart holds: individual track adds use track.pageUrl,
       // release/album adds use track.releaseUrl.
-      const cartItemUrl = this.cartUrls.has(normalizeUrl(track.pageUrl))
-        ? track.pageUrl
-        : track.releaseUrl;
-
-      const badge = el('span', 'bcp-in-cart-badge');
-      badge.textContent = '✓ In cart';
+      const cartItemUrl = this.cartItemKeyFor(track);
+      // If the individual track URL is NOT in cartUrls the album was purchased as a whole.
+      const inCartAsAlbum = !this.cartUrls.has(normalizeUrl(track.pageUrl));
 
       const removeBtn = btn('Remove', 'bcp-cart-action-btn bcp-remove-btn');
       removeBtn.addEventListener('click', async () => {
@@ -722,6 +741,8 @@ export class Player {
         removeBtn.disabled = false;
       });
 
+      const badge = el('span', 'bcp-in-cart-badge');
+      badge.textContent = inCartAsAlbum ? '✓ In cart (full album)' : '✓ In cart';
       this.cartActionsEl.append(badge, removeBtn);
     } else {
       if (track.releaseType === 'album' && track.trackId !== null) {

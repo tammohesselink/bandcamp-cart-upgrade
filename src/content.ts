@@ -7,6 +7,8 @@ import { normalizeUrl } from './url';
 import {
   readPageContext,
   isTrackOrAlbumPage,
+  isCheckoutPage,
+  clickCheckout,
   SEL_SIDECART_BODY,
   SEL_SIDECART_ITEM_LIST,
   SEL_SIDECART_ITEM_LINK,
@@ -30,6 +32,13 @@ let latestSyncNum: number | null = null;
 // detection alone is unreliable. We derive the type from the "digital album" /
 // "digital track" suffix in the sidecart link text instead.
 let cartItemTypes = new Map<string, 'track' | 'album'>();
+
+// Normalised URLs of cart items the user has checked for partial checkout.
+let cartSelection = new Set<string>();
+
+// The injected "Checkout selected (N)" button, kept as a reference so it can
+// be updated without re-injecting.
+let checkoutSelectedBtn: HTMLButtonElement | null = null;
 
 // Index maps for the active cart and discography playlists, used to resolve
 // which page element to highlight when the playing track changes.
@@ -99,6 +108,37 @@ async function loadSnapshots(): Promise<CartSnapshot[]> {
 
 function saveSnapshots(snapshots: CartSnapshot[]): void {
   chrome.storage.local.set({ [CART_HISTORY_KEY]: { snapshots, updatedAt: Date.now() } }).catch(() => {});
+}
+
+// --- Pending-restore storage (partial checkout) -------------------------------
+// Leftovers from a partial checkout are persisted here and re-added
+// automatically on the next non-checkout Bandcamp page load.
+
+const PENDING_RESTORE_KEY = 'bcp_pending_restore_v1';
+const MAX_RESTORE_ATTEMPTS = 3;
+
+interface PendingRestore {
+  items: SavedCartItem[];
+  savedAt: number;
+  attempts: number;
+}
+
+async function loadPendingRestore(): Promise<PendingRestore | null> {
+  try {
+    const result = await chrome.storage.local.get(PENDING_RESTORE_KEY);
+    return (result[PENDING_RESTORE_KEY] as PendingRestore | undefined) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function savePendingRestore(items: SavedCartItem[]): Promise<void> {
+  const entry: PendingRestore = { items, savedAt: Date.now(), attempts: 0 };
+  return chrome.storage.local.set({ [PENDING_RESTORE_KEY]: entry });
+}
+
+function clearPendingRestore(): void {
+  chrome.storage.local.remove(PENDING_RESTORE_KEY).catch(() => {});
 }
 
 // --- Cart history modal ------------------------------------------------------
@@ -248,6 +288,108 @@ function showSnapshotListModal(
   });
 }
 
+// --- Cart mutation primitives -------------------------------------------------
+// Used by doRestore (cart history), onCheckoutSelected (partial checkout), and
+// the auto-restore-on-return path. Keeping the hardened add/remove logic here
+// ensures sync_num handling and line-item-id resolution are always consistent.
+
+async function addCartItem(item: SavedCartItem, cartLengthHint: number): Promise<boolean> {
+  const tracks = await fetchTracksForUrl(item.url);
+  if (tracks.length === 0) {
+    console.error('[bcp] cart-add: could not fetch release page for', item.url);
+    return false;
+  }
+
+  const track = tracks[0]!;
+  const isTrackAdd = item.purchaseType === 'track';
+  const tralbumId = isTrackAdd ? (track.trackId ?? track.releaseId) : track.releaseId;
+  const tralbumType = isTrackAdd ? 't' : (track.releaseType === 'track' ? 't' : 'a');
+  const minPrice = isTrackAdd ? (track.trackMinPrice ?? track.minPrice) : track.minPrice;
+
+  if (tralbumId === null) {
+    console.error('[bcp] cart-add: no tralbum id for', item.url, track);
+    return false;
+  }
+
+  const ctx = readPageContext(latestSyncNum);
+  console.log('[bcp] cart-add', { url: item.url, tralbumId, tralbumType, minPrice, syncNum: ctx.syncNum });
+
+  const result = await sendBcpMessage({
+    type: 'cart-add',
+    tralbumId,
+    tralbumType,
+    minPrice: minPrice ?? 0,
+    bandId: track.bandId,
+    releaseUrl: item.url,
+    syncNum: ctx.syncNum,
+    clientId: ctx.clientId,
+    fanId: ctx.fanId,
+    countryCode: ctx.countryCode,
+    cartLength: cartLengthHint,
+  });
+
+  if (result.ok) {
+    updateSyncNum(result.body);
+    return true;
+  }
+
+  console.error('[bcp] cart-add failed for', item.url, { error: result.error, body: result.body });
+  return false;
+}
+
+async function removeCartItem(item: SavedCartItem): Promise<boolean> {
+  const tracks = await fetchTracksForUrl(item.url);
+  if (tracks.length === 0) {
+    console.error('[bcp] cart-remove: could not fetch release page for', item.url);
+    return false;
+  }
+
+  const track = tracks[0]!;
+  const isTrackItem = item.purchaseType === 'track';
+  const tralbumId = isTrackItem ? (track.trackId ?? track.releaseId) : track.releaseId;
+  if (tralbumId === null) {
+    console.error('[bcp] cart-remove: no tralbum id for', item.url, track);
+    return false;
+  }
+
+  let lineItemId: number | null = cartLineItemIds.get(normalizeUrl(item.url)) ?? null;
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const idToSend = lineItemId ?? tralbumId;
+    const ctx = readPageContext(latestSyncNum);
+    console.log('[bcp] cart-remove', { url: item.url, idToSend, syncNum: ctx.syncNum });
+
+    const result = await sendBcpMessage({
+      type: 'cart-remove',
+      tralbumId: idToSend,
+      releaseUrl: item.url,
+      syncNum: ctx.syncNum,
+      clientId: ctx.clientId,
+      fanId: ctx.fanId,
+    });
+
+    if (!result.ok) {
+      console.error('[bcp] cart-remove failed for', item.url, result.error, result.body);
+      return false;
+    }
+
+    updateSyncNum(result.body);
+
+    const responseItems = ((result.body as Record<string, unknown> | null)?.cart_data as Record<string, unknown> | null)?.items;
+    if (Array.isArray(responseItems)) {
+      updateCartLineItemIds(responseItems as Record<string, unknown>[]);
+      if (lineItemId === null) lineItemId = cartLineItemIds.get(normalizeUrl(item.url)) ?? null;
+    }
+
+    const resync = (result.body as Record<string, unknown> | null)?.resync;
+    if ((resync || lineItemId !== idToSend) && attempt === 0 && lineItemId !== null) continue;
+
+    return true;
+  }
+
+  return false;
+}
+
 async function doRestore(button: HTMLButtonElement, toAdd: SavedCartItem[], toRemove: SavedCartItem[]): Promise<void> {
   button.disabled = true;
   let changed = 0;
@@ -255,111 +397,23 @@ async function doRestore(button: HTMLButtonElement, toAdd: SavedCartItem[], toRe
   const total = toAdd.length + toRemove.length;
 
   for (let i = 0; i < toAdd.length; i++) {
-    const item = toAdd[i]!;
     button.textContent = `Restoring ${i + 1} / ${total}…`;
-
-    const tracks = await fetchTracksForUrl(item.url);
-    if (tracks.length === 0) {
-      console.error('[bcp] restore: could not fetch release page for', item.url);
-      errors.push(`Could not load: ${item.title || item.url}`);
-      continue;
-    }
-
-    const track = tracks[0]!;
-    const isTrackAdd = item.purchaseType === 'track';
-    const tralbumId = isTrackAdd ? (track.trackId ?? track.releaseId) : track.releaseId;
-    const tralbumType = isTrackAdd ? 't' : (track.releaseType === 'track' ? 't' : 'a');
-    const minPrice = isTrackAdd ? (track.trackMinPrice ?? track.minPrice) : track.minPrice;
-
-    if (tralbumId === null) {
-      console.error('[bcp] restore: no tralbum id for', item.url, track);
-      errors.push(`No ID for: ${item.title || item.url}`);
-      continue;
-    }
-
-    const ctx = readPageContext(latestSyncNum);
-    console.log('[bcp] restore cart-add', { url: item.url, tralbumId, tralbumType, minPrice, syncNum: ctx.syncNum });
-
-    const result = await sendBcpMessage({
-      type: 'cart-add',
-      tralbumId,
-      tralbumType,
-      minPrice: minPrice ?? 0,
-      bandId: track.bandId,
-      releaseUrl: item.url,
-      syncNum: ctx.syncNum,
-      clientId: ctx.clientId,
-      fanId: ctx.fanId,
-      countryCode: ctx.countryCode,
-      cartLength: probeCart().length + i,
-    });
-
-    if (result.ok) {
-      updateSyncNum(result.body);
+    const ok = await addCartItem(toAdd[i]!, probeCart().length + i);
+    if (ok) {
       changed++;
     } else {
-      console.error('[bcp] restore cart-add failed for', item.url, { error: result.error, body: result.body });
-      errors.push(`Add failed "${item.title || item.url}": ${result.error ?? 'unknown'}`);
+      errors.push(`Could not restore: ${toAdd[i]!.title || toAdd[i]!.url}`);
     }
   }
 
   for (let i = 0; i < toRemove.length; i++) {
-    const item = toRemove[i]!;
     button.textContent = `Restoring ${toAdd.length + i + 1} / ${total}…`;
-
-    const tracks = await fetchTracksForUrl(item.url);
-    if (tracks.length === 0) {
-      errors.push(`Could not load: ${item.title || item.url}`);
-      continue;
+    const ok = await removeCartItem(toRemove[i]!);
+    if (ok) {
+      changed++;
+    } else {
+      errors.push(`Remove failed: ${toRemove[i]!.title || toRemove[i]!.url}`);
     }
-
-    const track = tracks[0]!;
-    const isTrackItem = item.purchaseType === 'track';
-    const tralbumId = isTrackItem ? (track.trackId ?? track.releaseId) : track.releaseId;
-    if (tralbumId === null) {
-      errors.push(`No ID for: ${item.title || item.url}`);
-      continue;
-    }
-
-    let lineItemId: number | null = cartLineItemIds.get(normalizeUrl(item.url)) ?? null;
-    let removeOk = false;
-
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const idToSend = lineItemId ?? tralbumId;
-      const ctx = readPageContext(latestSyncNum);
-      console.log('[bcp] restore cart-remove', { url: item.url, idToSend, syncNum: ctx.syncNum });
-
-      const result = await sendBcpMessage({
-        type: 'cart-remove',
-        tralbumId: idToSend,
-        releaseUrl: item.url,
-        syncNum: ctx.syncNum,
-        clientId: ctx.clientId,
-        fanId: ctx.fanId,
-      });
-
-      if (!result.ok) {
-        console.error('[bcp] restore cart-remove failed for', item.url, result.error, result.body);
-        errors.push(`Remove failed "${item.title || item.url}": ${result.error ?? 'unknown'}`);
-        break;
-      }
-
-      updateSyncNum(result.body);
-
-      const responseItems = ((result.body as Record<string, unknown> | null)?.cart_data as Record<string, unknown> | null)?.items;
-      if (Array.isArray(responseItems)) {
-        updateCartLineItemIds(responseItems as Record<string, unknown>[]);
-        if (lineItemId === null) lineItemId = cartLineItemIds.get(normalizeUrl(item.url)) ?? null;
-      }
-
-      const resync = (result.body as Record<string, unknown> | null)?.resync;
-      if ((resync || lineItemId !== idToSend) && attempt === 0 && lineItemId !== null) continue;
-
-      removeOk = true;
-      break;
-    }
-
-    if (removeOk) changed++;
   }
 
   if (changed === 0 && total > 0) {
@@ -378,6 +432,90 @@ async function doRestore(button: HTMLButtonElement, toAdd: SavedCartItem[], toRe
 main().catch(console.error);
 
 async function main() {
+  // --- Auto-restore leftovers from a partial checkout -----------------------
+  // When the user does a partial checkout, the leftover cart items are saved to
+  // storage. On the next non-checkout Bandcamp page we re-add them automatically
+  // so their cart is restored to the pre-checkout state (minus what they bought).
+  let autoRestoreCount = 0;
+  if (!isCheckoutPage()) {
+    const pending = await loadPendingRestore();
+    if (pending && pending.items.length > 0) {
+      if (pending.attempts >= MAX_RESTORE_ATTEMPTS) {
+        console.warn('[bcp] pending restore exceeded max attempts, clearing', pending.items);
+        clearPendingRestore();
+      } else {
+        // Increment the attempt counter before mutating so a crash mid-restore
+        // still advances the counter and eventually clears the key.
+        await chrome.storage.local.set({
+          [PENDING_RESTORE_KEY]: { ...pending, attempts: pending.attempts + 1 },
+        }).catch(() => {});
+
+        // Show a centered modal so the user knows not to close the tab.
+        const total = pending.items.length;
+        const ff = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+
+        const backdrop = document.createElement('div');
+        Object.assign(backdrop.style, {
+          position: 'fixed', inset: '0', background: 'rgba(0,0,0,0.65)',
+          zIndex: '2147483647', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontFamily: ff,
+        });
+
+        const card = document.createElement('div');
+        Object.assign(card.style, {
+          background: '#1a1a1a', border: '1px solid #2e2e2e', borderTop: '3px solid #1da0c3',
+          borderRadius: '8px', boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
+          padding: '28px 36px', textAlign: 'center', minWidth: '260px',
+        });
+
+        const titleEl = document.createElement('div');
+        Object.assign(titleEl.style, { color: '#f0f0f0', fontSize: '15px', fontWeight: '600', marginBottom: '10px' });
+        titleEl.textContent = 'Restoring cart…';
+
+        const progressEl = document.createElement('div');
+        Object.assign(progressEl.style, { color: '#1da0c3', fontSize: '13px' });
+        progressEl.textContent = `0 / ${total} items`;
+
+        const noteEl = document.createElement('div');
+        Object.assign(noteEl.style, { color: '#666', fontSize: '11px', marginTop: '10px' });
+        noteEl.textContent = 'Please don\'t close this tab';
+
+        card.append(titleEl, progressEl, noteEl);
+        backdrop.appendChild(card);
+        document.body.appendChild(backdrop);
+
+        // Prevent accidental tab close while items are being re-added.
+        const onBeforeUnload = (e: BeforeUnloadEvent) => { e.preventDefault(); };
+        window.addEventListener('beforeunload', onBeforeUnload);
+
+        let allOk = true;
+        for (let i = 0; i < pending.items.length; i++) {
+          const ok = await addCartItem(pending.items[i]!, probeCart().length + i);
+          progressEl.textContent = `${i + 1} / ${total} items`;
+          if (ok) {
+            autoRestoreCount++;
+          } else {
+            allOk = false;
+          }
+        }
+
+        window.removeEventListener('beforeunload', onBeforeUnload);
+        backdrop.remove();
+
+        if (allOk) {
+          clearPendingRestore();
+        } else {
+          console.warn(
+            '[bcp] auto-restore: some items failed (attempt',
+            pending.attempts + 1,
+            ') — will retry on next page load'
+          );
+        }
+      }
+    }
+  }
+  // --------------------------------------------------------------------------
+
   const cartItems = probeCart();
 
   const liveItems: SavedCartItem[] = cartItems.map((i) => ({ url: i.url, title: i.title, purchaseType: i.purchaseType }));
@@ -416,6 +554,10 @@ async function main() {
   const player = new Player([]);
   document.body.appendChild(player.wrapper);
   document.body.style.paddingBottom = '90px';
+
+  if (autoRestoreCount > 0) {
+    player.showToast(`Restored ${autoRestoreCount} item${autoRestoreCount !== 1 ? 's' : ''} to cart`);
+  }
 
   // Build the initial cart URL set and purchase-type map.
   cartItemTypes = buildCartItemTypes(cartItems);
@@ -494,6 +636,7 @@ async function main() {
       if (startIndex !== null) {
         activeCartIndexMap.set(normalizeUrl(cartItemUrl), startIndex);
         injectPlayButtonForSidecartItem(cartItemUrl, startIndex, player);
+        injectCheckboxForSidecartItem(cartItemUrl);
       }
       refreshCartStatus(player);
     } else {
@@ -563,11 +706,63 @@ async function main() {
         player.removeTracksByReleaseUrl('cart', track.releaseUrl);
       }
       removeSidecartItem(cartItemUrl);
+      cartSelection.delete(normalizeUrl(cartItemUrl));
+      updateCheckoutSelectedBtn();
       refreshCartStatus(player);
       return;
     }
 
     player.setStatus('Remove failed: could not sync cart state', 'error');
+  };
+
+  // Partial-checkout: remove unselected items, persist leftovers for restore,
+  // then navigate to checkout in the same tab.
+  player.onCheckoutSelected = async (selectedRawUrls) => {
+    const current = probeCart();
+    const sel = new Set(selectedRawUrls.map(normalizeUrl));
+    const leftover = current.filter((i) => !sel.has(normalizeUrl(i.url)));
+
+    // Selecting everything is a normal full-cart checkout — no cart mutations.
+    if (leftover.length === 0) {
+      if (!clickCheckout()) {
+        player.showToast('Could not find checkout button — opening cart page', 'warn');
+        location.assign('/cart');
+      }
+      return;
+    }
+
+    // Persist leftovers before touching the cart so a crash/early-close still
+    // leaves the restore key in place.
+    await savePendingRestore(
+      leftover.map((i) => ({ url: i.url, title: i.title, purchaseType: i.purchaseType }))
+    );
+
+    // Remove the leftover items from the cart, leaving only the selected ones.
+    // This is the safe equivalent of "remove everything then re-add selected":
+    // same end state (cart = selected only at checkout) without ever emptying
+    // the cart or re-deriving IDs for items we want to keep.
+    const failedRemovals: string[] = [];
+    for (const item of leftover) {
+      const ok = await removeCartItem({ url: item.url, title: item.title, purchaseType: item.purchaseType });
+      if (!ok) failedRemovals.push(item.title || item.url);
+    }
+
+    if (failedRemovals.length > 0) {
+      // Abort: navigating with unremoved items would charge the user for
+      // things they didn't select. The pending key stays, so leftovers will be
+      // reconciled automatically on the next non-checkout page load.
+      player.showToast(
+        `Could not remove ${failedRemovals.length} item${failedRemovals.length !== 1 ? 's' : ''} — checkout aborted`,
+        'error'
+      );
+      console.error('[bcp] partial checkout aborted, remove failures:', failedRemovals);
+      return;
+    }
+
+    if (!clickCheckout()) {
+      player.showToast('Could not find checkout button — opening cart page', 'warn');
+      location.assign('/cart');
+    }
   };
 
   // Keep cart state in sync when Bandcamp's own JS updates the sidecart.
@@ -601,6 +796,8 @@ async function main() {
     player.setPlaylist('cart', 'Cart', cartTracks);
     document.body.style.paddingBottom = `${player.wrapper.offsetHeight}px`;
     injectCartPlayButtons(cartIndexMap, player);
+    cartItems.forEach((item) => injectCheckboxForSidecartItem(item.url));
+    injectCheckoutSelectedBtn(player);
 
     const unplayable = cartTracks.filter((t) => t.unplayable).length;
     if (unplayable > 0) {
@@ -668,6 +865,12 @@ function refreshCartState(player: Player): void {
   const fresh = probeCart();
   cartItemTypes = buildCartItemTypes(fresh);
   player.setCartUrls(buildCartUrlSet(fresh));
+  // Prune selected items no longer in the cart (e.g. removed via native sidecart).
+  const freshUrls = new Set(fresh.map((i) => normalizeUrl(i.url)));
+  for (const key of Array.from(cartSelection)) {
+    if (!freshUrls.has(key)) cartSelection.delete(key);
+  }
+  updateCheckoutSelectedBtn();
 }
 
 function refreshCartStatus(player: Player): void {
@@ -685,6 +888,68 @@ function refreshCartStatus(player: Player): void {
   } else {
     player.setPlaylistStatus('cart', `${tracks.length} tracks (${releaseCount} releases)`, 'info');
   }
+}
+
+function updateCheckoutSelectedBtn(): void {
+  if (!checkoutSelectedBtn) return;
+  const n = cartSelection.size;
+  checkoutSelectedBtn.disabled = n === 0;
+  checkoutSelectedBtn.textContent = `Checkout selected (${n})`;
+}
+
+function injectCheckboxForSidecartItem(url: string): void {
+  const sidecartBody = document.querySelector<HTMLElement>(SEL_SIDECART_BODY);
+  if (!sidecartBody) return;
+  const normalized = normalizeUrl(url);
+  for (const link of Array.from(sidecartBody.querySelectorAll<HTMLAnchorElement>(SEL_SIDECART_ITEM_LINK))) {
+    if (normalizeUrl(link.href) !== normalized) continue;
+    if (link.parentElement?.querySelector('.bcp-cart-checkbox')) return; // already injected
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.className = 'bcp-cart-checkbox';
+    checkbox.checked = cartSelection.has(normalized);
+    checkbox.addEventListener('change', () => {
+      if (checkbox.checked) {
+        cartSelection.add(normalized);
+      } else {
+        cartSelection.delete(normalized);
+      }
+      updateCheckoutSelectedBtn();
+    });
+    // Insert before the play button if present, otherwise before the link.
+    const playBtn = link.previousElementSibling;
+    const insertBefore = playBtn?.classList.contains('bcp-cart-play-btn') ? playBtn : link;
+    withSuppressedObserver(() => link.parentElement?.insertBefore(checkbox, insertBefore));
+    break;
+  }
+}
+
+function injectCheckoutSelectedBtn(player: Player): void {
+  if (checkoutSelectedBtn) return;
+  const anchor = document.querySelector<HTMLElement>(SEL_SIDECART_BODY);
+  if (!anchor) return;
+
+  const btn = document.createElement('button');
+  btn.className = 'bcp-checkout-selected-btn';
+  btn.disabled = true;
+  btn.textContent = 'Checkout selected (0)';
+  btn.addEventListener('click', async () => {
+    const current = probeCart();
+    const selectedRawUrls = current
+      .filter((i) => cartSelection.has(normalizeUrl(i.url)))
+      .map((i) => i.url);
+    if (selectedRawUrls.length === 0) return;
+    btn.disabled = true;
+    btn.textContent = 'Preparing…';
+    try {
+      await player.onCheckoutSelected?.(selectedRawUrls);
+    } finally {
+      updateCheckoutSelectedBtn();
+    }
+  });
+
+  anchor.insertAdjacentElement('afterend', btn);
+  checkoutSelectedBtn = btn;
 }
 
 function injectPlayButtonForSidecartItem(url: string, index: number, player: Player): void {

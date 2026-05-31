@@ -2,6 +2,7 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { probeCart, probeDiscography, injectDiscographyButton, readDataCart, injectRestoreCartButton, type DataCartItem } from '../src/probe';
+import { findCheckoutControl, clickCheckout } from '../src/bandcamp-dom';
 
 function fixture(name: string): string {
   return readFileSync(join(__dirname, 'fixtures', name), 'utf-8');
@@ -342,5 +343,67 @@ describe('injectRestoreCartButton — no sidecart anchor', () => {
 
   it('returns null when #sidecart, #sidecartReveal and #sidecartBody are absent', () => {
     expect(injectRestoreCartButton(5)).toBeNull();
+  });
+});
+
+// --- findCheckoutControl / clickCheckout ------------------------------------
+
+describe('findCheckoutControl — with checkout link', () => {
+  beforeEach(() => loadFixture('sidecart-with-checkout.html'));
+
+  it('finds the known .checkout-link selector', () => {
+    const control = findCheckoutControl();
+    expect(control).not.toBeNull();
+    expect(control?.classList.contains('checkout-link')).toBe(true);
+  });
+
+  it('clickCheckout returns true and the element is found', () => {
+    let clicked = false;
+    const control = document.querySelector<HTMLElement>('.checkout-link')!;
+    control.addEventListener('click', () => { clicked = true; });
+    const result = clickCheckout();
+    expect(result).toBe(true);
+    expect(clicked).toBe(true);
+  });
+});
+
+describe('findCheckoutControl — text-content fallback', () => {
+  beforeEach(() => {
+    // A sidecart with only a generic button whose text contains "Check out"
+    document.documentElement.innerHTML = `
+      <body>
+        <div id="sidecart">
+          <button class="some-other-class">Check out now</button>
+        </div>
+      </body>
+    `;
+  });
+
+  it('finds the control via text-content fallback', () => {
+    const control = findCheckoutControl();
+    expect(control).not.toBeNull();
+    expect(control?.tagName).toBe('BUTTON');
+  });
+});
+
+describe('findCheckoutControl — no checkout control present', () => {
+  beforeEach(() => loadFixture('sidecart-with-items.html'));
+
+  it('returns null when no checkout control exists in the sidecart', () => {
+    expect(findCheckoutControl()).toBeNull();
+  });
+
+  it('clickCheckout returns false', () => {
+    expect(clickCheckout()).toBe(false);
+  });
+});
+
+describe('findCheckoutControl — no sidecart in DOM', () => {
+  beforeEach(() => {
+    document.documentElement.innerHTML = '<body></body>';
+  });
+
+  it('returns null when sidecart containers are absent', () => {
+    expect(findCheckoutControl()).toBeNull();
   });
 });
