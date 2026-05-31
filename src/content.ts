@@ -561,6 +561,11 @@ async function main() {
     player.destroy();
   }, { once: true });
 
+  // Inject the discography button up front (in its disabled "Loading…" state) so it's
+  // visible while the cart loads, instead of appearing only after the cart finishes.
+  const discoBtn = discoItems.length > 0 ? injectDiscographyButton() : null;
+  if (discoItems.length > 0) player.expectDiscography();
+
   if (cartItems.length > 0) {
     player.setStatus(`Loading 0 / ${cartItems.length}…`, 'loading');
 
@@ -595,9 +600,7 @@ async function main() {
     player.setStatus('Cart is empty', 'info');
   }
 
-  if (discoItems.length > 0) {
-    player.expectDiscography();
-    const discoBtn = injectDiscographyButton();
+  if (discoItems.length > 0 && discoBtn) {
     console.log('[bcp] Discography releases found:');
     console.table(discoItems.map((it) => ({ type: it.type, url: it.url })));
 
