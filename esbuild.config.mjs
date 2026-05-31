@@ -5,6 +5,7 @@ const watch = process.argv.includes('--watch');
 
 mkdirSync('dist', { recursive: true });
 copyFileSync('manifest.json', 'dist/manifest.json');
+copyFileSync('popup.html', 'dist/popup.html');
 
 const sharedOptions = {
   bundle: true,
@@ -19,6 +20,7 @@ const sharedOptions = {
 const entries = [
   { entryPoints: ['src/content.ts'], outfile: 'dist/content.js' },
   { entryPoints: ['src/background.ts'], outfile: 'dist/background.js' },
+  { entryPoints: ['src/popup.ts'], outfile: 'dist/popup.js' },
 ];
 
 if (watch) {

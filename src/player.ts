@@ -44,9 +44,11 @@ export class Player {
   private tempoResetBtn!: HTMLButtonElement;
   private tempoRangeBtn!: HTMLButtonElement;
   private tempoMTBtn!: HTMLButtonElement;
+  private discoBtnToggleEl!: HTMLButtonElement;
   private playbackRate = 1;
   private preservesPitch = true;
   private tempoRangeIndex = 1;
+  private showDiscographyButton = true;
   private statusEl!: HTMLElement;
   private queueToggleBtn!: HTMLButtonElement;
 
@@ -65,6 +67,7 @@ export class Player {
   onCurrentPageTrackChange?: (pageUrl: string) => void;
   onTrackChange?: (id: PlaylistId, index: number) => void;
   onSeek?: (fraction: number) => void;
+  onDiscographyButtonVisibilityChange?: (show: boolean) => void;
 
   constructor(initialPlaylist: PlaylistTrack[]) {
     this.audio = new Audio();
@@ -83,6 +86,7 @@ export class Player {
     this.queueEl = this.buildQueueEl();
     this.headerEl = this.buildHeaderEl();
     this.bar = this.buildBarEl();
+    this.updateDiscoBtnToggleUI();
 
     this.wrapper.appendChild(this.collapseBtn);
     this.wrapper.appendChild(this.queueEl);
@@ -91,7 +95,7 @@ export class Player {
 
     this.bindAudioEvents();
 
-    chrome.storage.local.get(['tempoRangeIndex', 'preservesPitch'], (result) => {
+    chrome.storage.local.get(['tempoRangeIndex', 'preservesPitch', 'showDiscographyButton'], (result) => {
       if (typeof result['tempoRangeIndex'] === 'number') {
         this.tempoRangeIndex = result['tempoRangeIndex'] as number;
       }
@@ -99,7 +103,14 @@ export class Player {
         this.preservesPitch = result['preservesPitch'] as boolean;
         this.audio.preservesPitch = this.preservesPitch;
       }
+      if (typeof result['showDiscographyButton'] === 'boolean') {
+        this.showDiscographyButton = result['showDiscographyButton'] as boolean;
+      }
       this.updateTempoUI();
+      this.updateDiscoBtnToggleUI();
+      if (!this.showDiscographyButton) {
+        this.onDiscographyButtonVisibilityChange?.(false);
+      }
     });
 
     if (initialPlaylist.length > 0) {
@@ -110,6 +121,10 @@ export class Player {
   }
 
   // --- Public API -----------------------------------------------------------
+
+  get discographyButtonEnabled(): boolean {
+    return this.showDiscographyButton;
+  }
 
   expectDiscography() {
     this.discographyExpected = true;
@@ -459,6 +474,15 @@ export class Player {
 
     this.cartActionsEl = el('div', 'bcp-cart-actions');
 
+    this.discoBtnToggleEl = btn('Disco', 'bcp-btn bcp-tempo-btn');
+    this.discoBtnToggleEl.title = 'Show play discography button on label page';
+    this.discoBtnToggleEl.addEventListener('click', () => {
+      this.showDiscographyButton = !this.showDiscographyButton;
+      chrome.storage.local.set({ showDiscographyButton: this.showDiscographyButton });
+      this.updateDiscoBtnToggleUI();
+      this.onDiscographyButtonVisibilityChange?.(this.showDiscographyButton);
+    });
+
     this.queueToggleBtn = btn('☰', 'bcp-btn');
     this.queueToggleBtn.title = 'Toggle queue';
     this.queueToggleBtn.addEventListener('click', () => this.toggleQueue());
@@ -472,6 +496,7 @@ export class Player {
       controls,
       seekArea,
       tempoArea,
+      this.discoBtnToggleEl,
       this.queueToggleBtn,
       this.statusEl
     );
@@ -801,6 +826,10 @@ export class Player {
     this.tempoResetBtn.textContent = `${sign}${pct.toFixed(1)}%`;
     this.tempoRangeBtn.textContent = `(${range.label})`;
     this.tempoMTBtn.classList.toggle('bcp-tempo-btn-active', this.preservesPitch);
+  }
+
+  private updateDiscoBtnToggleUI() {
+    this.discoBtnToggleEl.classList.toggle('bcp-tempo-btn-active', this.showDiscographyButton);
   }
 
 }

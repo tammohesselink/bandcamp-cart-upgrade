@@ -3,6 +3,10 @@
   "name": "Bandcamp Cart Player",
   "version": "0.3.0",
   "description": "Embeds a playlist player into your Bandcamp cart",
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Bandcamp Cart Player"
+  },
   "permissions": ["storage"],
   "host_permissions": ["https://bandcamp.com/*", "https://*.bandcamp.com/*"],
   "background": {
