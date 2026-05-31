@@ -12,6 +12,8 @@ const sharedOptions = {
   target: 'es2022',
   sourcemap: watch ? 'inline' : false,
   minify: !watch,
+  // Strip all console/debugger output from production bundles; keep it during dev watch.
+  drop: watch ? [] : ['console', 'debugger'],
 };
 
 const entries = [
