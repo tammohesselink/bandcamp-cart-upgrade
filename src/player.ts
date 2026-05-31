@@ -59,7 +59,7 @@ export class Player {
   private cartUrls = new Set<string>();
   private cartActionsEl!: HTMLElement;
 
-  onCartAdd?: (track: PlaylistTrack, addType: CartAddType) => Promise<void>;
+  onCartAdd?: (track: PlaylistTrack, addType: CartAddType) => Promise<boolean | void>;
   onCartRemove?: (track: PlaylistTrack, cartItemUrl: string) => Promise<void>;
   onPlaybackStart?: () => void;
   onCurrentPageTrackChange?: (pageUrl: string) => void;
@@ -144,6 +144,19 @@ export class Player {
     }
     this.loadTrack(index, silent);
     this.audio.play().catch(console.warn);
+  }
+
+  showToast(msg: string, kind: StatusKind = 'info') {
+    const toast = el('div', `bcp-toast bcp-toast-${kind}`);
+    toast.textContent = msg;
+    document.body.appendChild(toast);
+    // Force reflow so the CSS transition has a starting state to animate from.
+    toast.getBoundingClientRect();
+    toast.classList.add('bcp-toast-visible');
+    setTimeout(() => {
+      toast.classList.remove('bcp-toast-visible');
+      toast.addEventListener('transitionend', () => toast.remove(), { once: true });
+    }, 3000);
   }
 
   setStatus(msg: string, kind: StatusKind = 'info') {
@@ -688,12 +701,22 @@ export class Player {
     } else {
       if (track.releaseType === 'album' && track.trackId !== null) {
         const addTrackBtn = btn('+ Track', 'bcp-cart-action-btn');
-        addTrackBtn.title = 'Add this track to cart';
-        addTrackBtn.addEventListener('click', async () => {
-          addTrackBtn.disabled = true;
-          await this.onCartAdd?.(track, 'track');
-          addTrackBtn.disabled = false;
-        });
+        if (track.purchasable) {
+          addTrackBtn.title = 'Add this track to cart';
+          addTrackBtn.addEventListener('click', async () => {
+            addTrackBtn.disabled = true;
+            const ok = await this.onCartAdd?.(track, 'track');
+            if (ok === false) {
+              addTrackBtn.classList.add('bcp-disabled');
+              addTrackBtn.title = 'Only full release for sale';
+            } else {
+              addTrackBtn.disabled = false;
+            }
+          });
+        } else {
+          addTrackBtn.classList.add('bcp-disabled');
+          addTrackBtn.title = 'Only full release for sale';
+        }
 
         const addReleaseBtn = btn('+ Release', 'bcp-cart-action-btn');
         addReleaseBtn.title = 'Add the full release to cart';
@@ -706,12 +729,22 @@ export class Player {
         this.cartActionsEl.append(addTrackBtn, addReleaseBtn);
       } else {
         const addCartBtn = btn('+ Cart', 'bcp-cart-action-btn');
-        addCartBtn.title = 'Add to cart';
-        addCartBtn.addEventListener('click', async () => {
-          addCartBtn.disabled = true;
-          await this.onCartAdd?.(track, 'release');
-          addCartBtn.disabled = false;
-        });
+        if (track.purchasable) {
+          addCartBtn.title = 'Add to cart';
+          addCartBtn.addEventListener('click', async () => {
+            addCartBtn.disabled = true;
+            const ok = await this.onCartAdd?.(track, 'release');
+            if (ok === false) {
+              addCartBtn.classList.add('bcp-disabled');
+              addCartBtn.title = 'Only full release for sale';
+            } else {
+              addCartBtn.disabled = false;
+            }
+          });
+        } else {
+          addCartBtn.classList.add('bcp-disabled');
+          addCartBtn.title = 'Only full release for sale';
+        }
 
         this.cartActionsEl.append(addCartBtn);
       }

@@ -150,6 +150,34 @@ describe('parseTralbum — album page', () => {
   });
 });
 
+describe('parseTralbum — purchasable flag', () => {
+  it('is true for a normally purchasable single-track page', () => {
+    const tracks = parseTralbum(
+      fixture('single-track.html'),
+      'https://solardrift.bandcamp.com/track/nightfall'
+    );
+    expect(tracks[0]!.purchasable).toBe(true);
+  });
+
+  it('is true for all tracks on an album page (album-only not detectable from album HTML)', () => {
+    const tracks = parseTralbum(
+      fixture('album.html'),
+      'https://solardrift.bandcamp.com/album/echoes-of-the-void'
+    );
+    for (const t of tracks) {
+      expect(t.purchasable).toBe(true);
+    }
+  });
+
+  it('is false for a track page that only offers the full release for purchase', () => {
+    const tracks = parseTralbum(
+      fixture('track-album-only.html'),
+      'https://oddysee.bandcamp.com/track/7th-element'
+    );
+    expect(tracks[0]!.purchasable).toBe(false);
+  });
+});
+
 describe('parseTralbum — invalid HTML', () => {
   it('returns empty array for empty string', () => {
     expect(parseTralbum('', 'https://example.com')).toEqual([]);
