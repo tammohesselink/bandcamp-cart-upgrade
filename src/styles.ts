@@ -12,6 +12,33 @@ export const PLAYER_CSS = `
   box-sizing: border-box;
 }
 
+#bcp-collapse-btn {
+  position: absolute;
+  top: 0;
+  right: 16px;
+  transform: translateY(-100%);
+  background: #111;
+  border: 1px solid #2e2e2e;
+  border-bottom: none;
+  color: #888;
+  cursor: pointer;
+  padding: 3px 9px;
+  font-size: 11px;
+  border-radius: 4px 4px 0 0;
+  line-height: 1.4;
+  transition: color 0.15s;
+}
+
+#bcp-collapse-btn:hover {
+  color: #ccc;
+}
+
+#bcp-wrapper.bcp-collapsed #bcp-queue,
+#bcp-wrapper.bcp-collapsed #bcp-header,
+#bcp-wrapper.bcp-collapsed #bcp-bar {
+  display: none;
+}
+
 #bcp-wrapper * {
   box-sizing: border-box;
 }
