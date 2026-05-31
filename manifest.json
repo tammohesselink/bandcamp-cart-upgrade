@@ -6,7 +6,14 @@
   "permissions": ["storage"],
   "host_permissions": ["https://bandcamp.com/*", "https://*.bandcamp.com/*"],
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "scripts": ["background.js"]
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "bandcamp-cart-player@extension",
+      "strict_min_version": "109.0"
+    }
   },
   "content_scripts": [
     {
