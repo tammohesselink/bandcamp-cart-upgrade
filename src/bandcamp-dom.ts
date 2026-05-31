@@ -130,3 +130,60 @@ export function readPageContext(latestSyncNum: number | null): BandcampPageConte
 
   return { syncNum: syncNum ?? 0, clientId, currency, fanId, countryCode };
 }
+
+// --- Checkout navigation ------------------------------------------------------
+
+/**
+ * Finds Bandcamp's native checkout control within the sidecart. Searches for
+ * known selectors first; falls back to text-content matching so Bandcamp
+ * markup changes only need to be fixed here.
+ *
+ * NOTE: The exact class/id must be verified against the live Bandcamp DOM —
+ * update the known-selectors list below as it becomes available.
+ */
+export function findCheckoutControl(): HTMLElement | null {
+  const containers = [
+    document.getElementById('sidecart'),
+    document.querySelector<HTMLElement>('#sidecartReveal'),
+    document.getElementById('sidecartBody'),
+  ].filter((e): e is HTMLElement => e !== null);
+
+  for (const container of containers) {
+    // Known selectors (extend as Bandcamp's markup becomes confirmed)
+    const known = container.querySelector<HTMLElement>(
+      '.checkout-link, a.checkout, button.checkout, #checkout-button, [data-checkout]'
+    );
+    if (known) return known;
+
+    // Text-content fallback
+    for (const candidate of Array.from(container.querySelectorAll<HTMLElement>('a, button'))) {
+      if (/check\s?out/i.test(candidate.textContent ?? '')) return candidate;
+    }
+  }
+  return null;
+}
+
+/**
+ * Clicks Bandcamp's native checkout control to navigate to checkout in the
+ * same tab. Returns true if the control was found and clicked.
+ */
+export function clickCheckout(): boolean {
+  const control = findCheckoutControl();
+  if (!control) return false;
+  control.click();
+  return true;
+}
+
+/**
+ * Returns true when the current page is Bandcamp's checkout or payment flow,
+ * so the pending-restore auto-re-add does not fire mid-checkout.
+ *
+ * NOTE: Verify the exact checkout URL/host against the live site; the patterns
+ * below cover the most common forms observed in the wild.
+ */
+export function isCheckoutPage(): boolean {
+  return (
+    location.hostname === 'checkout.bandcamp.com' ||
+    /^\/(checkout|payment|cart\/checkout)(\/?$|\/)/i.test(location.pathname)
+  );
+}
