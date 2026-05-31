@@ -1,5 +1,6 @@
 import type { PlaylistId, PlaylistTrack } from './types';
 import { PLAYER_CSS } from './styles';
+import { normalizeUrl } from './url';
 
 type CartAddType = 'track' | 'release';
 
@@ -708,6 +709,3 @@ function fmtTime(seconds: number): string {
   return `${m}:${rem.toString().padStart(2, '0')}`;
 }
 
-function normalizeUrl(url: string): string {
-  return url.toLowerCase().replace(/\/+$/, '');
-}

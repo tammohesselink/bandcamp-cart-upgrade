@@ -1,6 +1,18 @@
 import type { CartItem, PlaylistTrack } from './types';
 import { parseTralbum } from './bandcamp';
 import { Player } from './player';
+import { normalizeUrl } from './url';
+import {
+  readPageContext,
+  SEL_SIDECART_BODY,
+  SEL_SIDECART_ITEM_LIST,
+  SEL_SIDECART_ITEM_LINK,
+  SEL_MUSIC_GRID,
+  SEL_LEFT_MIDDLE_COLUMNS,
+  SEL_MUSIC_GRID_ITEM,
+  SEL_GRID_ITEM_TITLE,
+  SEL_FEATURED_GRID,
+} from './bandcamp-dom';
 import { sendBcpMessage } from './messages';
 
 console.log('[bcp] cart player loaded');
@@ -90,9 +102,7 @@ async function main() {
       }
     }
 
-    const syncNum = readSyncNum();
-    const fanId = readFanId();
-    const clientId = readClientId();
+    const ctx = readPageContext(latestSyncNum);
     const result = await sendBcpMessage({
       type: 'cart-add',
       tralbumId,
@@ -100,10 +110,10 @@ async function main() {
       minPrice,
       bandId: track.bandId,
       releaseUrl: track.releaseUrl,
-      syncNum,
-      clientId,
-      fanId,
-      countryCode: readCountryCode(),
+      syncNum: ctx.syncNum,
+      clientId: ctx.clientId,
+      fanId: ctx.fanId,
+      countryCode: ctx.countryCode,
       cartLength: probeCart().length,
     });
     if (result.ok) {
@@ -150,16 +160,14 @@ async function main() {
 
     for (let attempt = 0; attempt < 2; attempt++) {
       const idToSend = lineItemId ?? tralbumId;
-      const syncNum = readSyncNum();
-      const fanId = readFanId();
-      const clientId = readClientId();
+      const ctx = readPageContext(latestSyncNum);
       const result = await sendBcpMessage({
         type: 'cart-remove',
         tralbumId: idToSend,
         releaseUrl: cartItemUrl,
-        syncNum,
-        clientId,
-        fanId,
+        syncNum: ctx.syncNum,
+        clientId: ctx.clientId,
+        fanId: ctx.fanId,
       });
       if (!result.ok) {
         player.setStatus(`Remove failed: ${result.error ?? 'unknown error'}`, 'error');
@@ -262,10 +270,6 @@ function buildCartUrlSet(items: CartItem[]): Set<string> {
   return new Set(items.map((i) => normalizeUrl(i.url)));
 }
 
-function normalizeUrl(url: string): string {
-  return url.toLowerCase().replace(/\/+$/, '');
-}
-
 function refreshCartState(player: Player): void {
   const fresh = probeCart();
   cartItemTypes = buildCartItemTypes(fresh);
@@ -290,10 +294,10 @@ function refreshCartStatus(player: Player): void {
 }
 
 function injectPlayButtonForSidecartItem(url: string, index: number, player: Player): void {
-  const sidecartBody = document.getElementById('sidecartBody');
+  const sidecartBody = document.querySelector<HTMLElement>(SEL_SIDECART_BODY);
   if (!sidecartBody) return;
   const normalized = normalizeUrl(url);
-  for (const link of Array.from(sidecartBody.querySelectorAll<HTMLAnchorElement>('a.itemName[href]'))) {
+  for (const link of Array.from(sidecartBody.querySelectorAll<HTMLAnchorElement>(SEL_SIDECART_ITEM_LINK))) {
     if (normalizeUrl(link.href) === normalized) {
       if (link.previousElementSibling?.classList.contains('bcp-cart-play-btn')) return;
       const playBtn = document.createElement('button');
@@ -311,10 +315,10 @@ function injectPlayButtonForSidecartItem(url: string, index: number, player: Pla
 }
 
 function addSidecartItem(releaseUrl: string, title: string, price: number | null, addType: 'track' | 'release'): void {
-  const target = document.querySelector('#item_list') ?? document.getElementById('sidecartBody');
+  const target = document.querySelector<HTMLElement>(SEL_SIDECART_ITEM_LIST) ?? document.querySelector<HTMLElement>(SEL_SIDECART_BODY);
   if (!target) return;
 
-  const currency = readCurrency();
+  const { currency } = readPageContext(latestSyncNum);
   const priceText = price !== null
     ? (currency ? `${price.toFixed(2)} ${currency}` : price.toFixed(2))
     : '';
@@ -348,11 +352,11 @@ function addSidecartItem(releaseUrl: string, title: string, price: number | null
 }
 
 function removeSidecartItem(releaseUrl: string): void {
-  const sidecartBody = document.getElementById('sidecartBody');
+  const sidecartBody = document.querySelector<HTMLElement>(SEL_SIDECART_BODY);
   if (!sidecartBody) return;
   const normalized = normalizeUrl(releaseUrl);
   cartItemTypes.delete(normalized);
-  for (const link of Array.from(sidecartBody.querySelectorAll<HTMLAnchorElement>('a.itemName[href]'))) {
+  for (const link of Array.from(sidecartBody.querySelectorAll<HTMLAnchorElement>(SEL_SIDECART_ITEM_LINK))) {
     if (normalizeUrl(link.href) === normalized) {
       // Walk up to the direct child of sidecartBody so we remove the entire item
       // block (title + price rows) even when they are separate siblings inside one
@@ -375,29 +379,10 @@ function removeSidecartItem(releaseUrl: string): void {
 }
 
 function watchSidecart(player: Player): void {
-  const sidecartBody = document.getElementById('sidecartBody');
+  const sidecartBody = document.querySelector<HTMLElement>(SEL_SIDECART_BODY);
   if (!sidecartBody) return;
   const observer = new MutationObserver(() => refreshCartState(player));
   observer.observe(sidecartBody, { childList: true, subtree: true });
-}
-
-// Bandcamp stores the cart sync counter in inline JS (e.g. EcommData or similar blobs).
-// This counter prevents replayed requests; fall back to 0 if not found.
-function readSyncNum(): number {
-  // Prefer the value updated from the last cart mutation response.
-  if (latestSyncNum !== null) return latestSyncNum;
-  // Match both quoted ("sync_num": 15) and unquoted (sync_num: 15) key styles.
-  for (const script of Array.from(document.querySelectorAll('script'))) {
-    const m = (script.textContent ?? '').match(/"?sync_num"?\s*:\s*(\d+)/);
-    if (m) return parseInt(m[1]!, 10);
-  }
-  // Some Bandcamp pages expose it as a data attribute on the cart container.
-  const el = document.querySelector('[data-sync-num]');
-  if (el) {
-    const n = parseInt(el.getAttribute('data-sync-num') ?? '', 10);
-    if (!isNaN(n)) return n;
-  }
-  return 0;
 }
 
 function updateSyncNum(responseBody: unknown): void {
@@ -408,62 +393,10 @@ function updateSyncNum(responseBody: unknown): void {
   }
 }
 
-function readClientId(): string {
-  for (const script of Array.from(document.querySelectorAll('script'))) {
-    const m = (script.textContent ?? '').match(/"?client_id"?\s*:\s*"([^"]*)"/);
-    if (m?.[1]) return m[1];
-  }
-  return '';
-}
-
-function readCurrency(): string {
-  for (const script of Array.from(document.querySelectorAll('script'))) {
-    const m = (script.textContent ?? '').match(/"?currency"?\s*:\s*"([A-Z]{3})"/);
-    if (m?.[1]) return m[1];
-  }
-  return '';
-}
-
-function readFanId(): string {
-  // Strategy 1: "fan_id": 12345 directly in script tags
-  for (const script of Array.from(document.querySelectorAll('script'))) {
-    const text = script.textContent ?? '';
-    const m = text.match(/"?fan_id"?\s*:\s*(\d+)/);
-    if (m?.[1]) return m[1];
-  }
-  // Strategy 2: "fan": {"id": 12345} nested in script tags
-  for (const script of Array.from(document.querySelectorAll('script'))) {
-    const text = script.textContent ?? '';
-    const m = text.match(/"fan"\s*:\s*\{[^}]*?"id"\s*:\s*(\d+)/);
-    if (m?.[1]) return m[1];
-  }
-  // Strategy 3: data-blob JSON attributes (Bandcamp's pagedata / identity blobs)
-  for (const el of Array.from(document.querySelectorAll('[data-blob]'))) {
-    try {
-      const blob = JSON.parse(el.getAttribute('data-blob')!) as Record<string, unknown>;
-      if (typeof blob.fan_id === 'number') return String(blob.fan_id);
-      const fan = blob.fan as Record<string, unknown> | undefined;
-      if (typeof fan?.id === 'number') return String(fan.id);
-    } catch { /* continue */ }
-  }
-  // Strategy 4: data-fan-id attribute
-  const el = document.querySelector('[data-fan-id]');
-  if (el) return el.getAttribute('data-fan-id') ?? '';
-  return '';
-}
-
-function readCountryCode(): string {
-  for (const script of Array.from(document.querySelectorAll('script'))) {
-    const m = (script.textContent ?? '').match(/"?ip_country_code"?\s*:\s*"([A-Z]{2})"/);
-    if (m?.[1]) return m[1];
-  }
-  return '';
-}
-
 // --- Cart DOM probe -----------------------------------------------------------
 
 function probeCart(): CartItem[] {
-  const sidecartBody = document.getElementById('sidecartBody');
+  const sidecartBody = document.querySelector<HTMLElement>(SEL_SIDECART_BODY);
   if (!sidecartBody) {
     console.warn('[bcp] #sidecartBody not found — cart may be empty or DOM changed');
     return [];
@@ -472,7 +405,7 @@ function probeCart(): CartItem[] {
   const seen = new Set<string>();
   const items: CartItem[] = [];
 
-  for (const link of Array.from(sidecartBody.querySelectorAll<HTMLAnchorElement>('a.itemName[href]'))) {
+  for (const link of Array.from(sidecartBody.querySelectorAll<HTMLAnchorElement>(SEL_SIDECART_ITEM_LINK))) {
     const url = link.href;
     if (seen.has(url)) continue;
     seen.add(url);
@@ -503,8 +436,8 @@ function probeDiscography(): CartItem[] {
   if (window.location.pathname !== '/music' && window.location.pathname !== '/') return [];
 
   // Try the standard music grid first; fall back to scanning the whole column.
-  const grid = document.getElementById('music-grid');
-  const container = grid ?? document.querySelector('.leftMiddleColumns');
+  const grid = document.querySelector<HTMLElement>(SEL_MUSIC_GRID);
+  const container = grid ?? document.querySelector<HTMLElement>(SEL_LEFT_MIDDLE_COLUMNS);
   if (!container) return [];
 
   const seen = new Set<string>();
@@ -523,7 +456,7 @@ function probeDiscography(): CartItem[] {
     const typeMatch = url.match(/\/(track|album)\//);
     const type = typeMatch?.[1] === 'album' ? 'album' : 'track';
 
-    const title = link.querySelector('p.title')?.textContent?.trim() ?? link.textContent?.trim() ?? '';
+    const title = link.querySelector(SEL_GRID_ITEM_TITLE)?.textContent?.trim() ?? link.textContent?.trim() ?? '';
 
     items.push({ url, type, title, artist: '', thumbnailUrl: '' });
   }
@@ -534,9 +467,9 @@ function probeDiscography(): CartItem[] {
 // --- Discography button injection --------------------------------------------
 
 function injectDiscographyButton(): HTMLButtonElement {
-  const featuredGrid = document.querySelector('ol.featured-grid');
-  const grid = document.getElementById('music-grid');
-  const target = featuredGrid ?? grid ?? document.querySelector('.leftMiddleColumns');
+  const featuredGrid = document.querySelector<HTMLElement>(SEL_FEATURED_GRID);
+  const grid = document.querySelector<HTMLElement>(SEL_MUSIC_GRID);
+  const target = featuredGrid ?? grid ?? document.querySelector<HTMLElement>(SEL_LEFT_MIDDLE_COLUMNS);
 
   const button = document.createElement('button');
   button.className = 'bcp-discography-btn';
@@ -640,10 +573,10 @@ async function resolvePlaylist(
 }
 
 function injectCartPlayButtons(indexMap: Map<string, number>, player: Player): void {
-  const sidecartBody = document.getElementById('sidecartBody');
+  const sidecartBody = document.querySelector<HTMLElement>(SEL_SIDECART_BODY);
   if (!sidecartBody) return;
 
-  for (const link of Array.from(sidecartBody.querySelectorAll<HTMLAnchorElement>('a.itemName[href]'))) {
+  for (const link of Array.from(sidecartBody.querySelectorAll<HTMLAnchorElement>(SEL_SIDECART_ITEM_LINK))) {
     const index = indexMap.get(link.href);
     if (index === undefined) continue;
 
@@ -673,8 +606,8 @@ function injectDiscographyPlayButtons(
     // Bandcamp uses relative hrefs so we match by pathname.
     const itemPath = new URL(item.url).pathname;
     const li = document.querySelector<HTMLElement>(
-      `.music-grid-item a[href="${itemPath}"]`
-    )?.closest<HTMLElement>('.music-grid-item');
+      `${SEL_MUSIC_GRID_ITEM} a[href="${CSS.escape(itemPath)}"]`
+    )?.closest<HTMLElement>(SEL_MUSIC_GRID_ITEM);
     if (!li) continue;
 
     const playBtn = document.createElement('button');
@@ -687,7 +620,7 @@ function injectDiscographyPlayButtons(
       player.jumpTo('discography', index);
     });
 
-    const titleEl = li.querySelector<HTMLElement>('p.title');
+    const titleEl = li.querySelector<HTMLElement>(SEL_GRID_ITEM_TITLE);
     if (titleEl) {
       titleEl.insertBefore(playBtn, titleEl.firstChild);
     } else {
