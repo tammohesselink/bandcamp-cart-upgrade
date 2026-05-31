@@ -2,6 +2,17 @@
 // single diff when Bandcamp changes their markup, rather than hunting across
 // multiple source files.
 
+// Native track/album page player
+export const SEL_NATIVE_PLAYER      = '.inline_player';
+export const SEL_NATIVE_PLAY_BUTTON = '.inline_player .playbutton';
+export const SEL_NATIVE_TRACK_TABLE = '#track_table';
+export const SEL_NATIVE_TRACK_ROW   = 'tr.track_row_view';
+export const SEL_NATIVE_ROW_PLAY    = '.play_col, .play_status';
+
+export function isTrackOrAlbumPage(): boolean {
+  return /^\/(track|album)\//.test(location.pathname);
+}
+
 // Cart sidebar
 export const SEL_SIDECART_BODY = '#sidecartBody';
 export const SEL_SIDECART_ITEM_LIST = '#item_list';

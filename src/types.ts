@@ -1,4 +1,4 @@
-export type PlaylistId = 'cart' | 'discography';
+export type PlaylistId = 'currentpage' | 'cart' | 'discography';
 
 export interface SavedCartItem {
   url: string;
