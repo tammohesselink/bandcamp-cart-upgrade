@@ -60,6 +60,24 @@ function buildCartItemTypes(items: CartItem[]): Map<string, 'track' | 'album'> {
   return map;
 }
 
+// --- Settings ----------------------------------------------------------------
+
+const SETTINGS_KEY = 'bcp_settings_v1';
+
+interface BcpSettings {
+  showCartHistoryBtn: boolean;
+}
+
+async function loadSettings(): Promise<BcpSettings> {
+  try {
+    const result = await chrome.storage.local.get(SETTINGS_KEY);
+    const stored = result[SETTINGS_KEY] as Partial<BcpSettings> | undefined;
+    return { showCartHistoryBtn: true, ...stored };
+  } catch {
+    return { showCartHistoryBtn: true };
+  }
+}
+
 // --- Cart history storage ----------------------------------------------------
 
 const CART_HISTORY_KEY = 'bcp_cart_history_v1';
@@ -366,7 +384,8 @@ async function main() {
   const snapshots = addSnapshotIfChanged(await loadSnapshots(), liveItems);
   saveSnapshots(snapshots);
 
-  if (snapshots.length > 0) {
+  const settings = await loadSettings();
+  if (settings.showCartHistoryBtn && snapshots.length > 0) {
     const btn = injectRestoreCartButton(snapshots.length);
     if (btn) {
       btn.addEventListener('click', async () => {
@@ -601,6 +620,12 @@ async function main() {
   }
 
   if (discoItems.length > 0 && discoBtn) {
+    discoBtn.style.display = player.discographyButtonEnabled ? '' : 'none';
+    player.onDiscographyButtonVisibilityChange = (show) => {
+      discoBtn.style.display = show ? '' : 'none';
+    };
+
+
     console.log('[bcp] Discography releases found:');
     console.table(discoItems.map((it) => ({ type: it.type, url: it.url })));
 
