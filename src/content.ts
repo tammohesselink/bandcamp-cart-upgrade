@@ -499,7 +499,7 @@ function probeCart(): CartItem[] {
 // --- Discography DOM probe ---------------------------------------------------
 
 function probeDiscography(): CartItem[] {
-  if (window.location.pathname !== '/music') return [];
+  if (window.location.pathname !== '/music' && window.location.pathname !== '/') return [];
 
   // Try the standard music grid first; fall back to scanning the whole column.
   const grid = document.getElementById('music-grid');
