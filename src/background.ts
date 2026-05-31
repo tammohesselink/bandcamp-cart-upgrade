@@ -1,6 +1,29 @@
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+import type { BcpRequest } from './messages';
+
+// Returns the https origin for a Bandcamp URL, or null if the URL isn't a valid
+// https://*.bandcamp.com address. Used to refuse proxying credentialed requests
+// to arbitrary hosts.
+function bandcampOrigin(rawUrl: string): string | null {
+  try {
+    const u = new URL(rawUrl);
+    if (u.protocol !== 'https:') return null;
+    if (u.hostname !== 'bandcamp.com' && !u.hostname.endsWith('.bandcamp.com')) return null;
+    return u.origin;
+  } catch {
+    return null;
+  }
+}
+
+chrome.runtime.onMessage.addListener((message: BcpRequest, sender, sendResponse) => {
+  // Only act on messages from this extension's own content scripts/pages.
+  if (sender.id !== chrome.runtime.id) return false;
+
   if (message.type === 'fetch') {
-    fetch(message.url as string, { credentials: 'include' })
+    if (!bandcampOrigin(message.url)) {
+      sendResponse({ error: 'Refused: not a bandcamp.com URL' });
+      return false;
+    }
+    fetch(message.url, { credentials: 'include' })
       .then(async (res) => {
         if (!res.ok) {
           sendResponse({ error: `HTTP ${res.status}` });
@@ -17,10 +40,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === 'cart-remove') {
     // Endpoint: POST {artist}.bandcamp.com/cart/cb
     // Body fields captured via DevTools: req=del, id, client_id, sync_num, req_id
-    let origin: string;
-    try {
-      origin = new URL(message.releaseUrl as string).origin;
-    } catch {
+    const origin = bandcampOrigin(message.releaseUrl);
+    if (!origin) {
       sendResponse({ ok: false, error: 'Invalid releaseUrl' });
       return false;
     }
@@ -28,13 +49,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     const body = new URLSearchParams({
       req: 'del',
       id: String(message.tralbumId),
-      fan_id: String(message.fanId ?? ''),
-      client_id: String(message.clientId ?? ''),
-      sync_num: String(message.syncNum ?? 0),
-      req_id: String(Math.random()),
+      fan_id: message.fanId,
+      client_id: message.clientId,
+      sync_num: String(message.syncNum),
+      req_id: crypto.randomUUID(),
     });
 
-    console.log('[bcp] cart-remove POST', `${origin}/cart/cb`, Object.fromEntries(body));
     fetch(`${origin}/cart/cb`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -48,7 +68,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         }
         let json: unknown;
         try { json = await res.json(); } catch { json = null; }
-        console.log('[bcp] cart-remove response', json);
         // Bandcamp returns an error string in the `error` field on failure (HTTP 200).
         if (json && typeof json === 'object' && 'error' in json && (json as Record<string, unknown>).error) {
           sendResponse({ ok: false, error: String((json as Record<string, unknown>).error), body: json });
@@ -66,32 +85,29 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === 'cart-add') {
     // Endpoint: POST {artist}.bandcamp.com/cart/cb
     // Body fields mirror Bandcamp's own add-to-cart request (captured via DevTools).
-    let origin: string;
-    try {
-      origin = new URL(message.releaseUrl as string).origin;
-    } catch {
+    const origin = bandcampOrigin(message.releaseUrl);
+    if (!origin) {
       sendResponse({ ok: false, error: 'Invalid releaseUrl' });
       return false;
     }
 
     const body = new URLSearchParams({
       req: 'add',
-      local_id: String(Math.random()),
-      item_type: String(message.tralbumType ?? 't'),
+      local_id: crypto.randomUUID(),
+      item_type: message.tralbumType,
       item_id: String(message.tralbumId),
       unit_price: String(message.minPrice ?? 0),
       quantity: '1',
       band_id: String(message.bandId ?? ''),
-      ip_country_code: String(message.countryCode ?? ''),
+      ip_country_code: message.countryCode,
       is_cardable: 'true',
-      cart_length: String(message.cartLength ?? 0),
-      fan_id: String(message.fanId ?? ''),
-      client_id: String(message.clientId ?? ''),
-      sync_num: String(message.syncNum ?? 0),
-      req_id: String(Math.random()),
+      cart_length: String(message.cartLength),
+      fan_id: message.fanId,
+      client_id: message.clientId,
+      sync_num: String(message.syncNum),
+      req_id: crypto.randomUUID(),
     });
 
-    console.log('[bcp] cart-add POST', `${origin}/cart/cb`, Object.fromEntries(body));
     fetch(`${origin}/cart/cb`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -105,7 +121,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         }
         let json: unknown;
         try { json = await res.json(); } catch { json = null; }
-        console.log('[bcp] cart-add response', json);
         if (json && typeof json === 'object' && 'error' in json && (json as Record<string, unknown>).error) {
           sendResponse({ ok: false, error: String((json as Record<string, unknown>).error), body: json });
           return;

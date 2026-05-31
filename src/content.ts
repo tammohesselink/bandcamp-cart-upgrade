@@ -1,6 +1,7 @@
 import type { CartItem, PlaylistTrack } from './types';
 import { parseTralbum } from './bandcamp';
 import { Player } from './player';
+import { sendBcpMessage } from './messages';
 
 console.log('[bcp] cart player loaded');
 
@@ -77,9 +78,9 @@ async function main() {
     // Album pages often omit per-track pricing. Fetch the track's own page to get it.
     if (addType === 'track' && minPrice === null) {
       try {
-        const response = await chrome.runtime.sendMessage({ type: 'fetch', url: track.pageUrl });
+        const response = await sendBcpMessage({ type: 'fetch', url: track.pageUrl });
         if (!response.error) {
-          const parsed = parseTralbum(response.html as string, track.pageUrl);
+          const parsed = parseTralbum(response.html ?? '', track.pageUrl);
           if (parsed.length > 0 && parsed[0]!.minPrice !== null) {
             minPrice = parsed[0]!.minPrice;
           }
@@ -92,7 +93,7 @@ async function main() {
     const syncNum = readSyncNum();
     const fanId = readFanId();
     const clientId = readClientId();
-    const result = await chrome.runtime.sendMessage({
+    const result = await sendBcpMessage({
       type: 'cart-add',
       tralbumId,
       tralbumType,
@@ -104,7 +105,7 @@ async function main() {
       fanId,
       countryCode: readCountryCode(),
       cartLength: probeCart().length,
-    }) as { ok: boolean; error?: string; body?: unknown };
+    });
     if (result.ok) {
       updateSyncNum(result.body);
       // Individual track adds use the track page URL in the sidecart;
@@ -152,14 +153,14 @@ async function main() {
       const syncNum = readSyncNum();
       const fanId = readFanId();
       const clientId = readClientId();
-      const result = await chrome.runtime.sendMessage({
+      const result = await sendBcpMessage({
         type: 'cart-remove',
         tralbumId: idToSend,
         releaseUrl: cartItemUrl,
         syncNum,
         clientId,
         fanId,
-      }) as { ok: boolean; error?: string; body?: unknown };
+      });
       if (!result.ok) {
         player.setStatus(`Remove failed: ${result.error ?? 'unknown error'}`, 'error');
         return;
@@ -584,9 +585,9 @@ async function fetchTracksForUrl(url: string): Promise<PlaylistTrack[]> {
   const cached = await readCache(url);
   if (cached) return cached;
   try {
-    const response = await chrome.runtime.sendMessage({ type: 'fetch', url });
+    const response = await sendBcpMessage({ type: 'fetch', url });
     if (!response.error) {
-      const parsed = parseTralbum(response.html as string, url);
+      const parsed = parseTralbum(response.html ?? '', url);
       writeCache(url, parsed);
       return parsed;
     }
@@ -616,11 +617,11 @@ async function resolvePlaylist(
     }
 
     try {
-      const response = await chrome.runtime.sendMessage({ type: 'fetch', url: item.url });
+      const response = await sendBcpMessage({ type: 'fetch', url: item.url });
       if (response.error) {
         console.warn(`[bcp] Fetch error for ${item.url}:`, response.error);
       } else {
-        const parsed = parseTralbum(response.html as string, item.url);
+        const parsed = parseTralbum(response.html ?? '', item.url);
         if (parsed.length === 0) {
           console.warn('[bcp] No tracks parsed from', item.url);
         }

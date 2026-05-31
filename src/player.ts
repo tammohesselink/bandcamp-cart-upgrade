@@ -3,15 +3,6 @@ import { PLAYER_CSS } from './styles';
 
 type CartAddType = 'track' | 'release';
 
-declare const chrome: {
-  storage: {
-    local: {
-      get(keys: string[], callback: (result: Record<string, unknown>) => void): void;
-      set(items: Record<string, unknown>): void;
-    };
-  };
-};
-
 const TEMPO_RANGES = [
   { label: '±6',   min: 0.94, max: 1.06 },
   { label: '±10',  min: 0.90, max: 1.10 },
