@@ -24,7 +24,7 @@ if (watch) {
     entries.map((e) => esbuild.context({ ...sharedOptions, ...e }))
   );
   await Promise.all(ctxs.map((ctx) => ctx.watch()));
-  console.log('[bcp] Watching… load dist/ as unpacked extension in Chrome');
+  console.log('[bcp] Watching… load dist/ as unpacked extension in Chrome or Firefox');
 } else {
   await Promise.all(entries.map((e) => esbuild.build({ ...sharedOptions, ...e })));
   console.log('[bcp] Build complete → dist/');

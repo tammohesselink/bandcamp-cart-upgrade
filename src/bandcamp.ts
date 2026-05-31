@@ -13,16 +13,42 @@ export function parseTralbum(html: string, pageUrl: string): PlaylistTrack[] {
   const artworkUrl = artId ? `https://f4.bcbits.com/img/a${artId}_10.jpg` : '';
   const origin = safeOrigin(pageUrl);
 
-  return (data.trackinfo ?? []).map((t) => ({
-    trackTitle: t.title,
-    albumTitle,
-    artist,
-    streamUrl: t.file?.['mp3-128'] ?? null,
-    pageUrl: t.title_link ? `${origin}${t.title_link}` : pageUrl,
-    artworkUrl,
-    durationSec: t.duration ?? 0,
-    unplayable: !t.file?.['mp3-128'],
-  }));
+  const releaseUrl = data.url ?? pageUrl;
+  const releaseId = data.id ?? null;
+  const releaseType: 'track' | 'album' =
+    data.tralbum_type === 't' || releaseUrl.includes('/track/') ? 'track' : 'album';
+  const bandId = data.band_id ?? data.current?.band_id ?? null;
+  const minPrice = data.current?.minimum_price ?? null;
+
+  return (data.trackinfo ?? []).map((t) => {
+    // Per-track minimum price: prefer minimum_price (PWYW floor) when > 0,
+    // fall back to fixed price field. 0 means "no individual minimum set"
+    // so || correctly skips it to reach price. Null means not individually
+    // purchasable. For standalone single-track releases the release price applies.
+    const trackMinPrice: number | null =
+      releaseType === 'track'
+        ? minPrice
+        : (t.minimum_price || t.price || null);
+
+    return {
+      trackTitle: t.title,
+      albumTitle,
+      artist,
+      streamUrl: t.file?.['mp3-128'] ?? null,
+      pageUrl: t.title_link ? `${origin}${t.title_link}` : pageUrl,
+      artworkUrl,
+      durationSec: t.duration ?? 0,
+      unplayable: !t.file?.['mp3-128'],
+      releaseUrl,
+      releaseId,
+      releaseType,
+      trackId: t.id ?? null,
+      bandId,
+      minPrice,
+      trackMinPrice,
+      currency: null,
+    };
+  });
 }
 
 function extractTralbumData(doc: Document): TralbumData | null {
