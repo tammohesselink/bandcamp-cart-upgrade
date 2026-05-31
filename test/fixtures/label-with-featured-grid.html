@@ -3,14 +3,21 @@
 <head><title>Test Label (Featured Grid)</title></head>
 <body>
   <div class="leftMiddleColumns">
-    <ol class="featured-grid">
-      <li class="music-grid-item">
-        <a href="/album/featured-album">
-          <p class="title">Featured Album</p>
+    <!-- Real Bandcamp: featured items use li.featured-item, NOT li.music-grid-item -->
+    <ol class="featured-grid featured-items featured-music occupied">
+      <li class="featured-item">
+        <a href="https://someartist.bandcamp.com/album/featured-album?label=123&tab=music">
+          <p class="title ready">Featured Album</p>
         </a>
       </li>
     </ol>
     <ol id="music-grid">
+      <!-- Hidden duplicate of the featured item (Bandcamp renders it here too, display:none) -->
+      <li class="music-grid-item featured" style="display:none">
+        <a href="https://someartist.bandcamp.com/album/featured-album?label=123&tab=music">
+          <p class="title">Featured Album</p>
+        </a>
+      </li>
       <li class="music-grid-item">
         <a href="/album/main-album">
           <p class="title">Main Album</p>
