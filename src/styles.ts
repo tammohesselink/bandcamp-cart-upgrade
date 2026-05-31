@@ -3,6 +3,7 @@ export const PLAYER_CSS = `
   position: fixed;
   bottom: 0;
   left: 0;
+  right: 0;
   z-index: 2147483647;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   font-size: 13px;
@@ -18,9 +19,12 @@ export const PLAYER_CSS = `
 #bcp-queue {
   background: #1a1a1a;
   border-top: 1px solid #2e2e2e;
+  border-left: 1px solid #2e2e2e;
   max-height: 300px;
   overflow-y: auto;
   display: none;
+  width: 33.333%;
+  margin-left: auto;
 }
 
 #bcp-queue.bcp-visible {
@@ -221,22 +225,41 @@ input[type=range].bcp-seek {
   flex-grow: 1;
 }
 
-input[type=range].bcp-volume {
-  width: 72px;
+input[type=range].bcp-tempo {
+  width: 96px;
   flex-shrink: 0;
 }
 
-.bcp-volume-area {
+.bcp-tempo-area {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   flex-shrink: 0;
 }
 
-.bcp-vol-icon {
+.bcp-tempo-label {
   color: #777;
-  font-size: 14px;
-  cursor: default;
+  font-size: 11px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.bcp-tempo-btn {
+  font-size: 10px;
+  padding: 2px 5px;
+  border: 1px solid #444;
+  border-radius: 3px;
+  color: #999;
+  white-space: nowrap;
+}
+
+.bcp-tempo-btn:hover:not(:disabled) {
+  border-color: #666;
+}
+
+.bcp-tempo-btn-active {
+  color: #1da0c3;
+  border-color: #1da0c3;
 }
 
 .bcp-status {

@@ -1,6 +1,22 @@
 import type { PlaylistId, PlaylistTrack } from './types';
 import { PLAYER_CSS } from './styles';
 
+declare namespace chrome {
+  namespace storage {
+    const local: {
+      get(keys: string[], callback: (result: Record<string, unknown>) => void): void;
+      set(items: Record<string, unknown>): void;
+    };
+  }
+}
+
+const TEMPO_RANGES = [
+  { label: '±6',   min: 0.94, max: 1.06 },
+  { label: '±10',  min: 0.90, max: 1.10 },
+  { label: '±16',  min: 0.84, max: 1.16 },
+  { label: 'WIDE', min: 0.10, max: 2.00 },
+] as const;
+
 type StatusKind = 'loading' | 'error' | 'warn' | 'info';
 
 interface PlaylistState {
@@ -30,7 +46,13 @@ export class Player {
   private seekBar!: HTMLInputElement;
   private currentTimeEl!: HTMLElement;
   private totalTimeEl!: HTMLElement;
-  private volumeBar!: HTMLInputElement;
+  private tempoSlider!: HTMLInputElement;
+  private tempoResetBtn!: HTMLButtonElement;
+  private tempoRangeBtn!: HTMLButtonElement;
+  private tempoMTBtn!: HTMLButtonElement;
+  private playbackRate = 1;
+  private preservesPitch = true;
+  private tempoRangeIndex = 1;
   private statusEl!: HTMLElement;
   private queueToggleBtn!: HTMLButtonElement;
 
@@ -39,6 +61,7 @@ export class Player {
 
   constructor(initialPlaylist: PlaylistTrack[]) {
     this.audio = new Audio();
+    this.audio.preservesPitch = this.preservesPitch;
 
     injectStyles();
 
@@ -54,8 +77,17 @@ export class Player {
     this.wrapper.appendChild(this.bar);
 
     this.bindAudioEvents();
-    this.alignToPageContent();
-    window.addEventListener('resize', () => this.alignToPageContent());
+
+    chrome.storage.local.get(['tempoRangeIndex', 'preservesPitch'], (result) => {
+      if (typeof result['tempoRangeIndex'] === 'number') {
+        this.tempoRangeIndex = result['tempoRangeIndex'] as number;
+      }
+      if (typeof result['preservesPitch'] === 'boolean') {
+        this.preservesPitch = result['preservesPitch'] as boolean;
+        this.audio.preservesPitch = this.preservesPitch;
+      }
+      this.updateTempoUI();
+    });
 
     if (initialPlaylist.length > 0) {
       this.setPlaylist('cart', 'Cart', initialPlaylist);
@@ -202,20 +234,47 @@ export class Player {
     const seekArea = el('div', 'bcp-seek-area');
     seekArea.append(this.currentTimeEl, this.seekBar, this.totalTimeEl);
 
-    this.volumeBar = el('input', 'bcp-range bcp-volume') as HTMLInputElement;
-    this.volumeBar.type = 'range';
-    this.volumeBar.min = '0';
-    this.volumeBar.max = '100';
-    this.volumeBar.value = '80';
-    this.audio.volume = 0.8;
-    this.volumeBar.addEventListener('input', () => {
-      this.audio.volume = parseFloat(this.volumeBar.value) / 100;
+    this.tempoSlider = el('input', 'bcp-range bcp-tempo') as HTMLInputElement;
+    this.tempoSlider.type = 'range';
+    this.tempoSlider.step = '0.001';
+    this.tempoSlider.addEventListener('input', () => {
+      this.playbackRate = parseFloat(this.tempoSlider.value);
+      this.audio.playbackRate = this.playbackRate;
+      this.updateTempoUI();
     });
 
-    const volIcon = el('span', 'bcp-vol-icon');
-    volIcon.textContent = '🔊';
-    const volArea = el('div', 'bcp-volume-area');
-    volArea.append(volIcon, this.volumeBar);
+    this.tempoResetBtn = btn('+0.0%', 'bcp-btn bcp-tempo-btn');
+    this.tempoResetBtn.title = 'Reset tempo';
+    this.tempoResetBtn.addEventListener('click', () => {
+      this.playbackRate = 1;
+      this.audio.playbackRate = 1;
+      this.updateTempoUI();
+    });
+
+    this.tempoRangeBtn = btn('(±10)', 'bcp-btn bcp-tempo-btn');
+    this.tempoRangeBtn.title = 'Cycle tempo range';
+    this.tempoRangeBtn.addEventListener('click', () => {
+      this.tempoRangeIndex = (this.tempoRangeIndex + 1) % TEMPO_RANGES.length;
+      const range = TEMPO_RANGES[this.tempoRangeIndex]!;
+      this.playbackRate = Math.max(range.min, Math.min(range.max, this.playbackRate));
+      this.audio.playbackRate = this.playbackRate;
+      chrome.storage.local.set({ tempoRangeIndex: this.tempoRangeIndex });
+      this.updateTempoUI();
+    });
+
+    this.tempoMTBtn = btn('MT', 'bcp-btn bcp-tempo-btn');
+    this.tempoMTBtn.title = 'Master Tempo (pitch lock)';
+    this.tempoMTBtn.addEventListener('click', () => {
+      this.preservesPitch = !this.preservesPitch;
+      this.audio.preservesPitch = this.preservesPitch;
+      chrome.storage.local.set({ preservesPitch: this.preservesPitch });
+      this.updateTempoUI();
+    });
+
+    const tempoLabel = el('span', 'bcp-tempo-label');
+    tempoLabel.textContent = 'Tempo adjust';
+    const tempoArea = el('div', 'bcp-tempo-area');
+    tempoArea.append(tempoLabel, this.tempoSlider, this.tempoResetBtn, this.tempoRangeBtn, this.tempoMTBtn);
 
     this.queueToggleBtn = btn('☰', 'bcp-btn');
     this.queueToggleBtn.title = 'Toggle queue';
@@ -228,7 +287,7 @@ export class Player {
       trackInfo,
       controls,
       seekArea,
-      volArea,
+      tempoArea,
       this.queueToggleBtn,
       this.statusEl
     );
@@ -305,6 +364,8 @@ export class Player {
     this.playPauseBtn.disabled = false;
     this.audio.src = track.streamUrl;
     this.audio.load();
+    this.audio.playbackRate = this.playbackRate;
+    this.audio.preservesPitch = this.preservesPitch;
   }
 
   private bindAudioEvents() {
@@ -391,15 +452,18 @@ export class Player {
     this.queueEl.classList.toggle('bcp-visible', this.queueVisible);
   }
 
-  private alignToPageContent() {
-    const container =
-      document.getElementById('pgBd') ??
-      document.querySelector<HTMLElement>('.yui-skin-sam');
-    if (!container) return;
-    const { left, width } = container.getBoundingClientRect();
-    this.wrapper.style.left = `${left}px`;
-    this.wrapper.style.width = `${width}px`;
+  private updateTempoUI() {
+    const range = TEMPO_RANGES[this.tempoRangeIndex]!;
+    this.tempoSlider.min = String(range.min);
+    this.tempoSlider.max = String(range.max);
+    this.tempoSlider.value = String(this.playbackRate);
+    const pct = (this.playbackRate - 1) * 100;
+    const sign = pct >= 0 ? '+' : '';
+    this.tempoResetBtn.textContent = `${sign}${pct.toFixed(1)}%`;
+    this.tempoRangeBtn.textContent = `(${range.label})`;
+    this.tempoMTBtn.classList.toggle('bcp-tempo-btn-active', this.preservesPitch);
   }
+
 }
 
 function injectStyles() {
