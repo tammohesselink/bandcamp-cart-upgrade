@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "Bandcamp Cart Player",
+  "version": "0.1.0",
+  "description": "Embeds a playlist player into your Bandcamp cart",
+  "permissions": ["storage"],
+  "host_permissions": ["https://bandcamp.com/*", "https://*.bandcamp.com/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://*.bandcamp.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
