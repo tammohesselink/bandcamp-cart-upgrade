@@ -107,9 +107,14 @@ export function injectRestoreCartButton(snapshotCount: number): HTMLButtonElemen
 export function probeDiscography(): CartItem[] {
   if (window.location.pathname !== '/music' && window.location.pathname !== '/') return [];
 
-  // Try the standard music grid first; fall back to scanning the whole column.
+  // When a featured grid is present alongside #music-grid, scan the whole
+  // column so both grids are included. Otherwise prefer #music-grid for
+  // precision, falling back to the full column.
+  const featuredGrid = document.querySelector('ol.featured-grid');
   const grid = document.getElementById('music-grid');
-  const container = grid ?? document.querySelector('.leftMiddleColumns');
+  const container = featuredGrid
+    ? document.querySelector('.leftMiddleColumns')
+    : (grid ?? document.querySelector('.leftMiddleColumns'));
   if (!container) return [];
 
   const seen = new Set<string>();
@@ -147,7 +152,8 @@ export function injectDiscographyButton(): HTMLButtonElement {
   button.textContent = 'Loading label discography…';
   button.disabled = true;
 
-  const target = grid ?? container;
+  const featuredGrid = document.querySelector('ol.featured-grid');
+  const target = featuredGrid ?? grid ?? container;
   if (target) {
     target.parentElement?.insertBefore(button, target);
   }

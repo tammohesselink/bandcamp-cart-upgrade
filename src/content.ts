@@ -940,33 +940,55 @@ function injectDiscographyPlayButtons(
   discoItems: CartItem[],
   player: Player
 ): void {
+  // Pre-index all visible grid <li> elements by their link's pathname.
+  // We use the JS .pathname property rather than the href attribute so that
+  // cross-domain absolute hrefs (e.g. https://artist.bandcamp.com/album/foo?label=...)
+  // and same-domain relative hrefs both resolve correctly.
+  // Featured items appear as li.featured-item in ol.featured-grid AND as hidden
+  // li.music-grid-item (style="display:none") in #music-grid — we skip the hidden ones.
+  const lisByPath = new Map<string, HTMLElement[]>();
+  const register = (li: HTMLElement) => {
+    const a = li.querySelector<HTMLAnchorElement>('a[href]');
+    if (!a?.href) return;
+    const path = new URL(a.href).pathname;
+    const arr = lisByPath.get(path) ?? [];
+    arr.push(li);
+    lisByPath.set(path, arr);
+  };
+
+  for (const li of Array.from(document.querySelectorAll<HTMLElement>('ol.featured-grid li.featured-item'))) {
+    register(li);
+  }
+  for (const li of Array.from(document.querySelectorAll<HTMLElement>(SEL_MUSIC_GRID_ITEM))) {
+    if (li.style.display === 'none') continue;
+    register(li);
+  }
+
   for (const item of discoItems) {
     const index = indexMap.get(item.url);
     if (index === undefined) continue;
 
-    // Find the grid <li> whose <a> links to this release URL.
-    // Bandcamp uses relative hrefs so we match by pathname.
     const itemPath = new URL(item.url).pathname;
-    const li = document.querySelector<HTMLElement>(
-      `${SEL_MUSIC_GRID_ITEM} a[href="${CSS.escape(itemPath)}"]`
-    )?.closest<HTMLElement>(SEL_MUSIC_GRID_ITEM);
-    if (!li) continue;
+    const lis = lisByPath.get(itemPath);
+    if (!lis) continue;
 
-    const playBtn = document.createElement('button');
-    playBtn.className = 'bcp-grid-play-btn';
-    playBtn.textContent = '▶';
-    playBtn.title = 'Play in discography player';
-    playBtn.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      player.jumpTo('discography', index);
-    });
+    for (const li of lis) {
+      const playBtn = document.createElement('button');
+      playBtn.className = 'bcp-grid-play-btn';
+      playBtn.textContent = '▶';
+      playBtn.title = 'Play in discography player';
+      playBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        player.jumpTo('discography', index);
+      });
 
-    const titleEl = li.querySelector<HTMLElement>(SEL_GRID_ITEM_TITLE);
-    if (titleEl) {
-      titleEl.insertBefore(playBtn, titleEl.firstChild);
-    } else {
-      li.appendChild(playBtn);
+      const titleEl = li.querySelector<HTMLElement>(SEL_GRID_ITEM_TITLE);
+      if (titleEl) {
+        titleEl.insertBefore(playBtn, titleEl.firstChild);
+      } else {
+        li.appendChild(playBtn);
+      }
     }
   }
 }

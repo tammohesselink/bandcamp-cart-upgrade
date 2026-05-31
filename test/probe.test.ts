@@ -133,6 +133,27 @@ describe('probeDiscography — with #music-grid', () => {
   });
 });
 
+describe('probeDiscography — with featured-grid and #music-grid', () => {
+  beforeEach(() => {
+    loadFixture('label-with-featured-grid.html');
+    setPathname('/music');
+  });
+
+  it('returns 3 unique items (featured-grid item deduped against hidden #music-grid copy)', () => {
+    expect(probeDiscography()).toHaveLength(3);
+  });
+
+  it('includes the featured album', () => {
+    const items = probeDiscography();
+    expect(items.some((i) => i.url.includes('/album/featured-album'))).toBe(true);
+  });
+
+  it('includes items from #music-grid', () => {
+    const items = probeDiscography();
+    expect(items.some((i) => i.url.includes('/album/main-album'))).toBe(true);
+  });
+});
+
 describe('probeDiscography — fallback to .leftMiddleColumns when no #music-grid', () => {
   beforeEach(() => {
     loadFixture('label-no-music-grid.html');
@@ -197,10 +218,10 @@ describe('injectDiscographyButton — with #music-grid', () => {
 describe('injectDiscographyButton — with featured-grid present', () => {
   beforeEach(() => loadFixture('label-with-featured-grid.html'));
 
-  it('inserts button before #music-grid (not .featured-grid) when #music-grid exists', () => {
+  it('inserts button before .featured-grid (above featured releases)', () => {
     const btn = injectDiscographyButton();
-    const grid = document.getElementById('music-grid')!;
-    expect(grid.previousElementSibling).toBe(btn);
+    const featuredGrid = document.querySelector('ol.featured-grid')!;
+    expect(featuredGrid.previousElementSibling).toBe(btn);
   });
 });
 
