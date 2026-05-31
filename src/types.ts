@@ -1,5 +1,16 @@
 export type PlaylistId = 'cart' | 'discography';
 
+export interface SavedCartItem {
+  url: string;
+  title: string;
+  purchaseType?: 'track' | 'album';
+}
+
+export interface CartSnapshot {
+  savedAt: number;
+  items: SavedCartItem[];
+}
+
 export interface CartItem {
   url: string;
   type: 'track' | 'album' | 'unknown';

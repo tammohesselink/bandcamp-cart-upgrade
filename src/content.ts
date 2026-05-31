@@ -1,7 +1,8 @@
-import type { CartItem, PlaylistTrack } from './types';
+import type { CartItem, PlaylistTrack, SavedCartItem, CartSnapshot } from './types';
 import { parseTralbum } from './bandcamp';
 import { Player } from './player';
-import { probeCart, probeDiscography, injectDiscographyButton } from './probe';
+import { probeCart, probeDiscography, injectDiscographyButton, injectRestoreCartButton } from './probe';
+import { addSnapshotIfChanged, diffSnapshot } from './cart-history';
 import { normalizeUrl } from './url';
 import {
   readPageContext,
@@ -50,10 +51,324 @@ function buildCartItemTypes(items: CartItem[]): Map<string, 'track' | 'album'> {
   return map;
 }
 
+// --- Cart history storage ----------------------------------------------------
+
+const CART_HISTORY_KEY = 'bcp_cart_history_v1';
+
+interface CartHistory {
+  snapshots: CartSnapshot[];
+  updatedAt: number;
+}
+
+async function loadSnapshots(): Promise<CartSnapshot[]> {
+  try {
+    const result = await chrome.storage.local.get(CART_HISTORY_KEY);
+    const entry = result[CART_HISTORY_KEY] as CartHistory | undefined;
+    return entry?.snapshots ?? [];
+  } catch {
+    return [];
+  }
+}
+
+function saveSnapshots(snapshots: CartSnapshot[]): void {
+  chrome.storage.local.set({ [CART_HISTORY_KEY]: { snapshots, updatedAt: Date.now() } }).catch(() => {});
+}
+
+// --- Cart history modal ------------------------------------------------------
+
+function formatTimestamp(ts: number): string {
+  const d = new Date(ts);
+  const now = new Date();
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (d.toDateString() === now.toDateString()) return `Today, ${time}`;
+  if (d.toDateString() === yesterday.toDateString()) return `Yesterday, ${time}`;
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + `, ${time}`;
+}
+
+function ensureHistoryStyles(): void {
+  if (document.getElementById('bcp-history-styles')) return;
+  const style = document.createElement('style');
+  style.id = 'bcp-history-styles';
+  style.textContent = `
+    .bcp-hb{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:999999;display:flex;align-items:center;justify-content:center}
+    .bcp-hm{background:#fff;color:#1a1a1a;border-radius:8px;padding:20px 24px;max-width:520px;width:90%;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,.3);font-family:inherit;font-size:14px}
+    .bcp-hm h3{margin:0 0 14px;font-size:15px;font-weight:600}
+    .bcp-hl{list-style:none;margin:0 0 16px;padding:0;overflow-y:auto;flex:1 1 auto}
+    .bcp-hl li{padding:9px 8px;border-radius:4px;border-bottom:1px solid #f0f0f0}
+    .bcp-hl li:last-child{border-bottom:none}
+    .bcp-hl li.bcp-clickable{cursor:pointer}
+    .bcp-hl li.bcp-clickable:hover{background:#f0f9fc}
+    .bcp-snap-hd{display:flex;align-items:center;gap:10px}
+    .bcp-snap-ts{flex:1;font-size:13px}
+    .bcp-snap-count{color:#999;font-size:12px;white-space:nowrap}
+    .bcp-snap-same{color:#ccc;font-size:12px;font-weight:600;white-space:nowrap}
+    .bcp-snap-restore{padding:3px 10px;border-radius:3px;border:1px solid #1da0c3;color:#1da0c3;background:none;cursor:pointer;font-size:12px;font-family:inherit;white-space:nowrap}
+    .bcp-snap-restore:hover{background:#e8f7fb}
+    .bcp-snap-items{list-style:none;margin:5px 0 0;padding:0 0 0 8px;font-size:12px}
+    .bcp-snap-items li{padding:1px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:420px}
+    .bcp-item-add{color:#1da0c3}
+    .bcp-item-extra{color:#bbb}
+    .bcp-ha{display:flex;justify-content:flex-end;flex-shrink:0}
+    .bcp-ha button{padding:7px 16px;border-radius:4px;border:1px solid #ccc;cursor:pointer;font-size:13px;font-family:inherit}
+    .bcp-hcl:hover{background:#f5f5f5}
+  `;
+  document.head.appendChild(style);
+}
+
+function showSnapshotListModal(
+  snapshots: CartSnapshot[],
+  currentItems: SavedCartItem[]
+): Promise<CartSnapshot | null> {
+  ensureHistoryStyles();
+  return new Promise((resolve) => {
+    const backdrop = document.createElement('div');
+    backdrop.className = 'bcp-hb';
+
+    const modal = document.createElement('div');
+    modal.className = 'bcp-hm';
+
+    const title = document.createElement('h3');
+    title.textContent = 'Cart history';
+    modal.appendChild(title);
+
+    const list = document.createElement('ul');
+    list.className = 'bcp-hl';
+
+    for (const snapshot of snapshots) {
+      const { toAdd, extra } = diffSnapshot(snapshot, currentItems);
+      const li = document.createElement('li');
+
+      const header = document.createElement('div');
+      header.className = 'bcp-snap-hd';
+
+      const ts = document.createElement('span');
+      ts.className = 'bcp-snap-ts';
+      ts.textContent = formatTimestamp(snapshot.savedAt);
+
+      const count = document.createElement('span');
+      count.className = 'bcp-snap-count';
+      count.textContent = `${snapshot.items.length} item${snapshot.items.length !== 1 ? 's' : ''}`;
+
+      header.append(ts, count);
+
+      if (toAdd.length === 0 && extra.length === 0) {
+        const same = document.createElement('span');
+        same.className = 'bcp-snap-same';
+        same.textContent = 'current';
+        header.appendChild(same);
+      } else {
+        const parts: string[] = [];
+        if (toAdd.length > 0) parts.push(`+${toAdd.length} item${toAdd.length !== 1 ? 's' : ''}`);
+        if (extra.length > 0) parts.push(`−${extra.length} item${extra.length !== 1 ? 's' : ''}`);
+        const restoreBtn = document.createElement('button');
+        restoreBtn.className = 'bcp-snap-restore';
+        restoreBtn.textContent = `Restore (${parts.join(' ')})`;
+        restoreBtn.addEventListener('click', () => close(snapshot));
+        header.appendChild(restoreBtn);
+        li.classList.add('bcp-clickable');
+        li.addEventListener('click', (e) => {
+          if ((e.target as HTMLElement).closest('button')) return;
+          close(snapshot);
+        });
+      }
+
+      li.appendChild(header);
+
+      if (toAdd.length > 0 || extra.length > 0) {
+        const itemList = document.createElement('ul');
+        itemList.className = 'bcp-snap-items';
+        for (const item of toAdd) {
+          const row = document.createElement('li');
+          row.className = 'bcp-item-add';
+          row.textContent = `+ ${item.title || item.url}`;
+          itemList.appendChild(row);
+        }
+        for (const item of extra) {
+          const row = document.createElement('li');
+          row.className = 'bcp-item-extra';
+          row.textContent = `− ${item.title || item.url}`;
+          itemList.appendChild(row);
+        }
+        li.appendChild(itemList);
+      }
+
+      list.appendChild(li);
+    }
+    modal.appendChild(list);
+
+    const actions = document.createElement('div');
+    actions.className = 'bcp-ha';
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'bcp-hcl';
+    closeBtn.textContent = 'Close';
+    actions.appendChild(closeBtn);
+    modal.appendChild(actions);
+    backdrop.appendChild(modal);
+
+    const close = (result: CartSnapshot | null) => {
+      document.removeEventListener('keydown', onKey);
+      backdrop.remove();
+      resolve(result);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(null); };
+    document.addEventListener('keydown', onKey);
+    backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(null); });
+    closeBtn.addEventListener('click', () => close(null));
+
+    document.body.appendChild(backdrop);
+  });
+}
+
+async function doRestore(button: HTMLButtonElement, toAdd: SavedCartItem[], toRemove: SavedCartItem[]): Promise<void> {
+  button.disabled = true;
+  let changed = 0;
+  const errors: string[] = [];
+  const total = toAdd.length + toRemove.length;
+
+  for (let i = 0; i < toAdd.length; i++) {
+    const item = toAdd[i]!;
+    button.textContent = `Restoring ${i + 1} / ${total}…`;
+
+    const tracks = await fetchTracksForUrl(item.url);
+    if (tracks.length === 0) {
+      console.error('[bcp] restore: could not fetch release page for', item.url);
+      errors.push(`Could not load: ${item.title || item.url}`);
+      continue;
+    }
+
+    const track = tracks[0]!;
+    const isTrackAdd = item.purchaseType === 'track';
+    const tralbumId = isTrackAdd ? (track.trackId ?? track.releaseId) : track.releaseId;
+    const tralbumType = isTrackAdd ? 't' : (track.releaseType === 'track' ? 't' : 'a');
+    const minPrice = isTrackAdd ? (track.trackMinPrice ?? track.minPrice) : track.minPrice;
+
+    if (tralbumId === null) {
+      console.error('[bcp] restore: no tralbum id for', item.url, track);
+      errors.push(`No ID for: ${item.title || item.url}`);
+      continue;
+    }
+
+    const ctx = readPageContext(latestSyncNum);
+    console.log('[bcp] restore cart-add', { url: item.url, tralbumId, tralbumType, minPrice, syncNum: ctx.syncNum });
+
+    const result = await sendBcpMessage({
+      type: 'cart-add',
+      tralbumId,
+      tralbumType,
+      minPrice: minPrice ?? 0,
+      bandId: track.bandId,
+      releaseUrl: item.url,
+      syncNum: ctx.syncNum,
+      clientId: ctx.clientId,
+      fanId: ctx.fanId,
+      countryCode: ctx.countryCode,
+      cartLength: probeCart().length + i,
+    });
+
+    if (result.ok) {
+      updateSyncNum(result.body);
+      changed++;
+    } else {
+      console.error('[bcp] restore cart-add failed for', item.url, { error: result.error, body: result.body });
+      errors.push(`Add failed "${item.title || item.url}": ${result.error ?? 'unknown'}`);
+    }
+  }
+
+  for (let i = 0; i < toRemove.length; i++) {
+    const item = toRemove[i]!;
+    button.textContent = `Restoring ${toAdd.length + i + 1} / ${total}…`;
+
+    const tracks = await fetchTracksForUrl(item.url);
+    if (tracks.length === 0) {
+      errors.push(`Could not load: ${item.title || item.url}`);
+      continue;
+    }
+
+    const track = tracks[0]!;
+    const isTrackItem = item.purchaseType === 'track';
+    const tralbumId = isTrackItem ? (track.trackId ?? track.releaseId) : track.releaseId;
+    if (tralbumId === null) {
+      errors.push(`No ID for: ${item.title || item.url}`);
+      continue;
+    }
+
+    let lineItemId: number | null = cartLineItemIds.get(normalizeUrl(item.url)) ?? null;
+    let removeOk = false;
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const idToSend = lineItemId ?? tralbumId;
+      const ctx = readPageContext(latestSyncNum);
+      console.log('[bcp] restore cart-remove', { url: item.url, idToSend, syncNum: ctx.syncNum });
+
+      const result = await sendBcpMessage({
+        type: 'cart-remove',
+        tralbumId: idToSend,
+        releaseUrl: item.url,
+        syncNum: ctx.syncNum,
+        clientId: ctx.clientId,
+        fanId: ctx.fanId,
+      });
+
+      if (!result.ok) {
+        console.error('[bcp] restore cart-remove failed for', item.url, result.error, result.body);
+        errors.push(`Remove failed "${item.title || item.url}": ${result.error ?? 'unknown'}`);
+        break;
+      }
+
+      updateSyncNum(result.body);
+
+      const responseItems = ((result.body as Record<string, unknown> | null)?.cart_data as Record<string, unknown> | null)?.items;
+      if (Array.isArray(responseItems)) {
+        updateCartLineItemIds(responseItems as Record<string, unknown>[]);
+        if (lineItemId === null) lineItemId = cartLineItemIds.get(normalizeUrl(item.url)) ?? null;
+      }
+
+      const resync = (result.body as Record<string, unknown> | null)?.resync;
+      if ((resync || lineItemId !== idToSend) && attempt === 0 && lineItemId !== null) continue;
+
+      removeOk = true;
+      break;
+    }
+
+    if (removeOk) changed++;
+  }
+
+  if (changed === 0 && total > 0) {
+    button.disabled = false;
+    button.textContent = 'Restore failed';
+    const summary = errors.length > 0
+      ? errors.slice(0, 3).join('\n') + (errors.length > 3 ? `\n…and ${errors.length - 3} more` : '')
+      : 'No changes could be made. Check the DevTools console for details.';
+    alert(`Cart restore failed:\n\n${summary}`);
+    return;
+  }
+
+  location.reload();
+}
+
 main().catch(console.error);
 
 async function main() {
   const cartItems = probeCart();
+
+  const liveItems: SavedCartItem[] = cartItems.map((i) => ({ url: i.url, title: i.title, purchaseType: i.purchaseType }));
+  const snapshots = addSnapshotIfChanged(await loadSnapshots(), liveItems);
+  saveSnapshots(snapshots);
+
+  if (snapshots.length > 0) {
+    const btn = injectRestoreCartButton(snapshots.length);
+    if (btn) {
+      btn.addEventListener('click', async () => {
+        const currentItems: SavedCartItem[] = probeCart().map((i) => ({ url: i.url, title: i.title, purchaseType: i.purchaseType }));
+        const selected = await showSnapshotListModal(snapshots, currentItems);
+        if (!selected) return;
+        const { toAdd, extra } = diffSnapshot(selected, currentItems);
+        if (toAdd.length > 0 || extra.length > 0) await doRestore(btn, toAdd, extra);
+      });
+    }
+  }
 
   console.log('[bcp] Cart items found:');
   console.table(cartItems.map((it) => ({ type: it.type, title: it.title, artist: it.artist, url: it.url })));

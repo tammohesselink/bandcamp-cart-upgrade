@@ -1,7 +1,7 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { describe, it, expect, beforeEach } from 'vitest';
-import { probeCart, probeDiscography, injectDiscographyButton } from '../src/probe';
+import { probeCart, probeDiscography, injectDiscographyButton, readDataCart, injectRestoreCartButton, type DataCartItem } from '../src/probe';
 
 function fixture(name: string): string {
   return readFileSync(join(__dirname, 'fixtures', name), 'utf-8');
@@ -211,5 +211,115 @@ describe('injectDiscographyButton — fallback to .leftMiddleColumns', () => {
     const btn = injectDiscographyButton();
     const col = document.querySelector('.leftMiddleColumns')!;
     expect(col.previousElementSibling).toBe(btn);
+  });
+});
+
+// --- readDataCart ------------------------------------------------------------
+
+describe('readDataCart — with [data-cart] attribute', () => {
+  beforeEach(() => loadFixture('sidecart-with-data-cart.html'));
+
+  it('returns two items from [data-cart]', () => {
+    expect(readDataCart()).toHaveLength(2);
+  });
+
+  it('parses item_id correctly', () => {
+    const items = readDataCart() as DataCartItem[];
+    expect(items[0]!.item_id).toBe(111);
+    expect(items[1]!.item_id).toBe(222);
+  });
+
+  it('parses item_type correctly', () => {
+    const items = readDataCart() as DataCartItem[];
+    expect(items[0]!.item_type).toBe('a');
+    expect(items[1]!.item_type).toBe('t');
+  });
+
+  it('parses item_title and band_name', () => {
+    const items = readDataCart() as DataCartItem[];
+    expect(items[0]!.item_title).toBe('My Album');
+    expect(items[0]!.band_name).toBe('Artist One');
+  });
+
+  it('parses unit_price and currency', () => {
+    const items = readDataCart() as DataCartItem[];
+    expect(items[0]!.unit_price).toBe(7.0);
+    expect(items[0]!.currency).toBe('USD');
+  });
+
+  it('parses url', () => {
+    const items = readDataCart() as DataCartItem[];
+    expect(items[0]!.url).toBe('https://artist.bandcamp.com/album/my-album');
+  });
+});
+
+describe('readDataCart — missing or malformed', () => {
+  it('returns empty array when [data-cart] element is absent', () => {
+    document.documentElement.innerHTML = '<body></body>';
+    expect(readDataCart()).toEqual([]);
+  });
+
+  it('returns empty array when items array is empty', () => {
+    document.documentElement.innerHTML = '<body><div data-cart=\'{"items":[]}\' /></body>';
+    expect(readDataCart()).toEqual([]);
+  });
+
+  it('returns empty array when JSON is malformed', () => {
+    document.documentElement.innerHTML = '<body><div data-cart="not-json" /></body>';
+    expect(readDataCart()).toEqual([]);
+  });
+
+  it('skips items with invalid item_type', () => {
+    document.documentElement.innerHTML = `<body><div data-cart='{"items":[{"item_id":1,"item_type":"x","item_title":"Bad","band_name":"B","unit_price":1,"currency":"USD","url":"https://a.bandcamp.com/album/x"}]}' /></body>`;
+    expect(readDataCart()).toEqual([]);
+  });
+});
+
+// --- injectRestoreCartButton -------------------------------------------------
+
+describe('injectRestoreCartButton — with #sidecart', () => {
+  beforeEach(() => loadFixture('sidecart-with-data-cart.html'));
+
+  it('returns a button element', () => {
+    const btn = injectRestoreCartButton(5);
+    expect(btn?.tagName).toBe('BUTTON');
+  });
+
+  it('button has bcp-restore-btn class', () => {
+    const btn = injectRestoreCartButton(5);
+    expect(btn?.classList.contains('bcp-restore-btn')).toBe(true);
+  });
+
+  it('button has buttonLink class', () => {
+    const btn = injectRestoreCartButton(5);
+    expect(btn?.classList.contains('buttonLink')).toBe(true);
+  });
+
+  it('button text contains the snapshot count', () => {
+    const btn = injectRestoreCartButton(5);
+    expect(btn?.textContent).toContain('5');
+  });
+
+  it('button is inserted after #sidecart', () => {
+    const btn = injectRestoreCartButton(5);
+    const sidecart = document.getElementById('sidecart')!;
+    expect(sidecart.nextElementSibling).toBe(btn);
+  });
+
+  it('does not double-inject', () => {
+    injectRestoreCartButton(5);
+    injectRestoreCartButton(5);
+    const btns = document.querySelectorAll('.bcp-restore-btn');
+    expect(btns).toHaveLength(1);
+  });
+});
+
+describe('injectRestoreCartButton — no sidecart anchor', () => {
+  beforeEach(() => {
+    document.documentElement.innerHTML = '<body></body>';
+  });
+
+  it('returns null when #sidecart, #sidecartReveal and #sidecartBody are absent', () => {
+    expect(injectRestoreCartButton(5)).toBeNull();
   });
 });
