@@ -19,3 +19,5 @@ jobs:
       - run: make typecheck
 
       - run: make lint
+
+      - run: make test
