@@ -60,6 +60,9 @@ export class Player {
 
   onCartAdd?: (track: PlaylistTrack, addType: CartAddType) => Promise<void>;
   onCartRemove?: (track: PlaylistTrack, cartItemUrl: string) => Promise<void>;
+  onPlaybackStart?: () => void;
+  onCurrentPageTrackChange?: (pageUrl: string) => void;
+  onSeek?: (fraction: number) => void;
 
   constructor(initialPlaylist: PlaylistTrack[]) {
     this.audio = new Audio();
@@ -113,24 +116,24 @@ export class Player {
     }
   }
 
-  selectPlaylist(id: PlaylistId) {
+  selectPlaylist(id: PlaylistId, silent = false) {
     const state = this.playlists.get(id);
     if (!state) return;
     this.audio.pause();
     this.activeId = id;
     this.updateHeader();
     this.updateQueueEl();
-    this.loadTrack(state.lastIndex);
+    this.loadTrack(state.lastIndex, silent);
     if (state.statusMsg) {
       this.setStatus(state.statusMsg, state.statusKind);
     }
   }
 
-  jumpTo(id: PlaylistId, index: number) {
+  jumpTo(id: PlaylistId, index: number, silent = false) {
     if (this.activeId !== id) {
-      this.selectPlaylist(id);
+      this.selectPlaylist(id, silent);
     }
-    this.loadTrack(index);
+    this.loadTrack(index, silent);
     this.audio.play().catch(console.warn);
   }
 
@@ -200,6 +203,38 @@ export class Player {
 
   getPlaylistTracks(id: PlaylistId): PlaylistTrack[] {
     return this.playlists.get(id)?.tracks ?? [];
+  }
+
+  pause() {
+    this.audio.pause();
+  }
+
+  play() {
+    this.audio.play().catch(console.warn);
+  }
+
+  getActiveTrack(id: PlaylistId): PlaylistTrack | null {
+    const state = this.playlists.get(id);
+    if (!state) return null;
+    return state.tracks[state.lastIndex] ?? null;
+  }
+
+  seekToFraction(fraction: number) {
+    if (!isFinite(this.audio.duration)) return;
+    this.audio.currentTime = fraction * this.audio.duration;
+    this.seekBar.value = String(fraction * 100);
+  }
+
+  cueTrackByPageUrl(id: PlaylistId, pageUrl: string) {
+    const state = this.playlists.get(id);
+    if (!state) return;
+    const idx = state.tracks.findIndex((t) => normalizeUrl(t.pageUrl) === normalizeUrl(pageUrl));
+    if (idx === -1) return;
+    if (id === this.activeId) {
+      this.loadTrack(idx, true);
+    } else {
+      state.lastIndex = idx;
+    }
   }
 
   /** Stop audio, remove injected UI, and reset the body padding. */
@@ -284,6 +319,7 @@ export class Player {
     tabs.id = 'bcp-tabs';
 
     const entries: [PlaylistId, string][] = [
+      ['currentpage', 'Current page'],
       ['cart', 'Cart'],
       ['discography', 'Label discography'],
     ];
@@ -346,7 +382,11 @@ export class Player {
     this.seekBar.addEventListener('mousedown', () => (this.seeking = true));
     this.seekBar.addEventListener('mouseup', () => {
       this.seeking = false;
-      this.audio.currentTime = (parseFloat(this.seekBar.value) / 100) * this.audio.duration;
+      const fraction = parseFloat(this.seekBar.value) / 100;
+      this.audio.currentTime = fraction * this.audio.duration;
+      if (this.activeId === 'currentpage') {
+        this.onSeek?.(fraction);
+      }
     });
 
     const seekArea = el('div', 'bcp-seek-area');
@@ -466,7 +506,7 @@ export class Player {
     });
   }
 
-  private loadTrack(index: number) {
+  private loadTrack(index: number, silent = false) {
     const state = this.active();
     if (!state) return;
 
@@ -474,15 +514,27 @@ export class Player {
     const track = state.tracks[index];
     if (!track) return;
 
+    // Only reload when the stream URL actually changes. Keeping the same src
+    // preserves the current playback position across pause/resume cycles (e.g.
+    // when the native Bandcamp player triggers a play event for a track the
+    // bottom player already has loaded mid-way through).
+    const needsReload = !track.streamUrl || track.unplayable || track.streamUrl !== this.audio.src;
+
     this.artworkEl.src = track.artworkUrl || '';
     this.titleEl.textContent = track.trackTitle || '(untitled)';
     this.subEl.textContent = [track.artist, track.albumTitle].filter(Boolean).join(' — ');
-    this.currentTimeEl.textContent = '0:00';
+    if (needsReload) {
+      this.currentTimeEl.textContent = '0:00';
+      this.seekBar.value = '0';
+    }
     this.totalTimeEl.textContent = fmtTime(track.durationSec);
-    this.seekBar.value = '0';
     this.updateNavButtons();
     this.updateQueueEl();
     this.updateCartActions(track);
+
+    if (!silent && this.activeId === 'currentpage') {
+      this.onCurrentPageTrackChange?.(track.pageUrl);
+    }
 
     if (track.unplayable || !track.streamUrl) {
       this.playPauseBtn.textContent = '▶';
@@ -491,15 +543,18 @@ export class Player {
     }
 
     this.playPauseBtn.disabled = false;
-    this.audio.src = track.streamUrl;
-    this.audio.load();
-    this.audio.playbackRate = this.playbackRate;
-    this.audio.preservesPitch = this.preservesPitch;
+    if (needsReload) {
+      this.audio.src = track.streamUrl;
+      this.audio.load();
+      this.audio.playbackRate = this.playbackRate;
+      this.audio.preservesPitch = this.preservesPitch;
+    }
   }
 
   private bindAudioEvents() {
     this.audio.addEventListener('play', () => {
       this.playPauseBtn.textContent = '⏸';
+      this.onPlaybackStart?.();
     });
 
     this.audio.addEventListener('pause', () => {

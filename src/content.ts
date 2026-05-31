@@ -6,11 +6,15 @@ import { addSnapshotIfChanged, diffSnapshot } from './cart-history';
 import { normalizeUrl } from './url';
 import {
   readPageContext,
+  isTrackOrAlbumPage,
   SEL_SIDECART_BODY,
   SEL_SIDECART_ITEM_LIST,
   SEL_SIDECART_ITEM_LINK,
   SEL_MUSIC_GRID_ITEM,
   SEL_GRID_ITEM_TITLE,
+  SEL_NATIVE_TRACK_TABLE,
+  SEL_NATIVE_TRACK_ROW,
+  SEL_NATIVE_ROW_PLAY,
 } from './bandcamp-dom';
 import { sendBcpMessage } from './messages';
 
@@ -584,6 +588,17 @@ async function main() {
       discoBtn.textContent = 'No playable discography tracks found';
     }
   }
+
+  if (isTrackOrAlbumPage()) {
+    const pageTracks = parseTralbum(document.documentElement.outerHTML, location.href);
+    if (pageTracks.length > 0) {
+      player.setPlaylist('currentpage', 'Current page', pageTracks);
+      const n = pageTracks.length;
+      player.setPlaylistStatus('currentpage', `${n} track${n !== 1 ? 's' : ''}`, 'info');
+      const teardown = setupNativePlayerSync(player);
+      window.addEventListener('pagehide', teardown, { once: true });
+    }
+  }
 }
 
 function buildCartUrlSet(items: CartItem[]): Set<string> {
@@ -874,4 +889,132 @@ function injectDiscographyPlayButtons(
       li.appendChild(playBtn);
     }
   }
+}
+
+// --- Native player sync (Current page tab) -----------------------------------
+
+// Returns a teardown callback to be registered with the pagehide event.
+function setupNativePlayerSync(player: Player): () => void {
+  // Suppress flags prevent feedback loops when we programmatically change
+  // one player's state and don't want it to echo back, mirroring the
+  // suppressSidecartObserver pattern used for cart mutations.
+  let suppressNative = false;
+  let suppressSeekSync = false;
+
+  // Bandcamp's audio element lives in the DOM; our bottom player's Audio()
+  // is never inserted, so this always finds the native one (or null).
+  const getNativeAudio = (): HTMLAudioElement | null =>
+    document.querySelector<HTMLAudioElement>('audio');
+
+  // --- native → bottom: native started playing ---
+  const onNativePlay = () => {
+    if (suppressNative) return;
+    // Suppress seek sync briefly: the browser fires 'seeked' on the native
+    // audio element when a track starts (seeking to position 0), which would
+    // otherwise call player.seekToFraction(0) and jump the bottom player back
+    // to the beginning on every play event / buffer stall recovery.
+    suppressSeekSync = true;
+    setTimeout(() => { suppressSeekSync = false; }, 500);
+
+    const currentRow = document.querySelector<HTMLElement>(`${SEL_NATIVE_TRACK_ROW}.current_track`);
+    const a = currentRow?.querySelector<HTMLAnchorElement>('a[href*="/track/"]');
+    const pageUrl = a ? new URL(a.href, location.href).href : null;
+    const tracks = player.getPlaylistTracks('currentpage');
+    const idx = pageUrl
+      ? tracks.findIndex((t) => normalizeUrl(t.pageUrl) === normalizeUrl(pageUrl))
+      : -1;
+    // silent=true: native is already on the right track — don't drive it again.
+    player.jumpTo('currentpage', idx === -1 ? 0 : idx, true);
+  };
+
+  // --- native → bottom: native paused ---
+  const onNativePause = () => {
+    if (suppressNative) return;
+    player.pause();
+  };
+
+  // --- native → bottom: seek sync ---
+  const onNativeSeeked = () => {
+    if (suppressSeekSync) return;
+    const nativeAudio = getNativeAudio();
+    if (!nativeAudio || !isFinite(nativeAudio.duration)) return;
+    player.seekToFraction(nativeAudio.currentTime / nativeAudio.duration);
+  };
+
+  // --- bottom → native: seek sync ---
+  player.onSeek = (fraction) => {
+    const nativeAudio = getNativeAudio();
+    if (!nativeAudio || !isFinite(nativeAudio.duration)) return;
+    suppressSeekSync = true;
+    nativeAudio.currentTime = fraction * nativeAudio.duration;
+    queueMicrotask(() => { suppressSeekSync = false; });
+  };
+
+  // --- bottom → native: track selection ---
+  player.onCurrentPageTrackChange = (pageUrl) => {
+    const rows = Array.from(document.querySelectorAll<HTMLElement>(SEL_NATIVE_TRACK_ROW));
+    const row = rows.find((r) => {
+      const a = r.querySelector<HTMLAnchorElement>('a[href*="/track/"]');
+      if (!a) return false;
+      return normalizeUrl(new URL(a.href, location.href).href) === normalizeUrl(pageUrl);
+    });
+    if (!row) return;
+    suppressNative = true;
+    const rowPlay = row.querySelector<HTMLElement>(SEL_NATIVE_ROW_PLAY);
+    (rowPlay ?? row).click();
+    const nativeAudio = getNativeAudio();
+    if (nativeAudio) nativeAudio.pause();
+    queueMicrotask(() => { suppressNative = false; });
+  };
+
+  // Attach play/pause/seeked listeners to the native audio element and mute it
+  // so only the bottom player produces sound. Bandcamp may create the element
+  // lazily (on first play), so we also watch for it appearing in the DOM.
+  let attachedAudio: HTMLAudioElement | null = null;
+  const attach = (audio: HTMLAudioElement) => {
+    audio.muted = true;
+    audio.addEventListener('play', onNativePlay);
+    audio.addEventListener('pause', onNativePause);
+    audio.addEventListener('seeked', onNativeSeeked);
+    attachedAudio = audio;
+  };
+
+  const initialAudio = getNativeAudio();
+  if (initialAudio) {
+    attach(initialAudio);
+  } else {
+    const audioWatcher = new MutationObserver(() => {
+      const found = getNativeAudio();
+      if (found) {
+        audioWatcher.disconnect();
+        attach(found);
+      }
+    });
+    audioWatcher.observe(document.body, { childList: true, subtree: true });
+  }
+
+  // --- native → bottom: track changes (native current_track class change) ---
+  const trackTableObserver = new MutationObserver(() => {
+    if (suppressNative) return;
+    const currentRow = document.querySelector<HTMLElement>(`${SEL_NATIVE_TRACK_ROW}.current_track`);
+    if (!currentRow) return;
+    const a = currentRow.querySelector<HTMLAnchorElement>('a[href*="/track/"]');
+    if (!a) return;
+    player.cueTrackByPageUrl('currentpage', new URL(a.href, location.href).href);
+  });
+
+  const trackTable = document.querySelector<HTMLElement>(SEL_NATIVE_TRACK_TABLE);
+  if (trackTable) {
+    trackTableObserver.observe(trackTable, { attributes: true, subtree: true, attributeFilter: ['class'] });
+  }
+
+  return () => {
+    trackTableObserver.disconnect();
+    if (attachedAudio) {
+      attachedAudio.muted = false;
+      attachedAudio.removeEventListener('play', onNativePlay);
+      attachedAudio.removeEventListener('pause', onNativePause);
+      attachedAudio.removeEventListener('seeked', onNativeSeeked);
+    }
+  };
 }
