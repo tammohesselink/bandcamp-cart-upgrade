@@ -533,15 +533,15 @@ function probeDiscography(): CartItem[] {
 // --- Discography button injection --------------------------------------------
 
 function injectDiscographyButton(): HTMLButtonElement {
+  const featuredGrid = document.querySelector('ol.featured-grid');
   const grid = document.getElementById('music-grid');
-  const container = grid ?? document.querySelector('.leftMiddleColumns');
+  const target = featuredGrid ?? grid ?? document.querySelector('.leftMiddleColumns');
 
   const button = document.createElement('button');
   button.className = 'bcp-discography-btn';
   button.textContent = 'Loading label discography…';
   button.disabled = true;
 
-  const target = grid ?? container;
   if (target) {
     target.parentElement?.insertBefore(button, target);
   }
