@@ -43,6 +43,8 @@ export interface PlaylistTrack {
   minPrice: number | null;
   trackMinPrice: number | null;
   currency: string | null;
+  // False when the track can only be purchased as part of the full release.
+  purchasable: boolean;
 }
 
 // Shape of the TralbumData object embedded in Bandcamp track/album pages.

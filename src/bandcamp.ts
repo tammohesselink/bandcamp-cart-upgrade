@@ -20,6 +20,15 @@ export function parseTralbum(html: string, pageUrl: string): PlaylistTrack[] {
   const bandId = data.band_id ?? data.current?.band_id ?? null;
   const minPrice = data.current?.minimum_price ?? null;
 
+  // Bandcamp exposes no JSON flag for "track sold only as part of the release".
+  // The rendered buy column is the source of truth: an album-only track page
+  // shows "Buy the Full Digital Album" (buyAlbumLink) and no digital-track buy
+  // command (li.buyItem.digital). Only detectable on the track's own page.
+  const albumOnly =
+    releaseType === 'track' &&
+    !!doc.querySelector('#buyAlbumLink, li.buyAlbumLink') &&
+    !doc.querySelector('li.buyItem.digital');
+
   return (data.trackinfo ?? []).map((t) => {
     // Per-track minimum price: prefer minimum_price (PWYW floor) when > 0,
     // fall back to fixed price field. 0 means "no individual minimum set"
@@ -47,6 +56,7 @@ export function parseTralbum(html: string, pageUrl: string): PlaylistTrack[] {
       minPrice,
       trackMinPrice,
       currency: null,
+      purchasable: !albumOnly,
     };
   });
 }

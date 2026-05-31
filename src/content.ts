@@ -423,13 +423,22 @@ async function main() {
     let minPrice = addType === 'track' ? track.trackMinPrice : track.minPrice;
 
     // Album pages often omit per-track pricing. Fetch the track's own page to get it.
+    // We also check purchasability here: album pages always produce purchasable=true since
+    // the signal only exists on a track's own page. If the track page shows it's album-only,
+    // abort — sending the request to Bandcamp can cause unexpected cart state changes.
     if (addType === 'track' && minPrice === null) {
       try {
         const response = await sendBcpMessage({ type: 'fetch', url: track.pageUrl });
         if (!response.error) {
           const parsed = parseTralbum(response.html ?? '', track.pageUrl);
-          if (parsed.length > 0 && parsed[0]!.minPrice !== null) {
-            minPrice = parsed[0]!.minPrice;
+          if (parsed.length > 0) {
+            if (!parsed[0]!.purchasable) {
+              player.showToast('Cannot purchase single track, only full release available', 'error');
+              return false;
+            }
+            if (parsed[0]!.minPrice !== null) {
+              minPrice = parsed[0]!.minPrice;
+            }
           }
         }
       } catch {

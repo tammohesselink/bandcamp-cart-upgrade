@@ -440,6 +440,17 @@ input[type=range].bcp-tempo {
   cursor: default;
 }
 
+.bcp-cart-action-btn.bcp-disabled {
+  color: #555;
+  border-color: #333;
+  cursor: default;
+}
+
+.bcp-cart-action-btn.bcp-disabled:hover {
+  color: #555;
+  border-color: #333;
+}
+
 .bcp-remove-btn {
   color: #e05c5c;
   border-color: #6e2e2e;
@@ -455,6 +466,41 @@ input[type=range].bcp-tempo {
   font-size: 11px;
   flex-shrink: 0;
   margin-left: auto;
+}
+
+.bcp-toast {
+  background: #1a1a1a;
+  border: 1px solid #2e2e2e;
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  color: #ccc;
+  font-family: inherit;
+  font-size: 15px;
+  left: 50%;
+  opacity: 0;
+  padding: 16px 28px;
+  pointer-events: none;
+  position: fixed;
+  top: 50%;
+  transform: translateX(-50%) translateY(calc(-50% + 12px));
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  white-space: nowrap;
+  z-index: 2147483646;
+}
+
+.bcp-toast-visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(-50%);
+}
+
+.bcp-toast-error {
+  border-color: #6e2e2e;
+  color: #e05c5c;
+}
+
+.bcp-toast-warn {
+  border-color: #5a3d0f;
+  color: #e0a040;
 }
 
 .bcp-modal-backdrop {
