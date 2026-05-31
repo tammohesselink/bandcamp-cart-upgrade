@@ -3,7 +3,6 @@ export const PLAYER_CSS = `
   position: fixed;
   bottom: 0;
   left: 0;
-  right: 0;
   z-index: 2147483647;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   font-size: 13px;
@@ -273,6 +272,83 @@ input[type=range].bcp-volume {
 }
 
 .bcp-cart-play-btn:hover {
+  opacity: 1;
+}
+
+.bcp-discography-btn {
+  display: block;
+  margin-bottom: 10px;
+  padding: 7px 14px;
+  background: #1da0c3;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  opacity: 1;
+  transition: opacity 0.15s;
+}
+
+.bcp-discography-btn:hover:not(:disabled) {
+  opacity: 0.85;
+}
+
+.bcp-discography-btn:disabled {
+  background: #333;
+  color: #666;
+  cursor: default;
+}
+
+#bcp-tabs {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-grow: 1;
+}
+
+.bcp-tab {
+  background: none;
+  border: 1px solid #444;
+  color: #999;
+  cursor: pointer;
+  padding: 2px 10px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-family: inherit;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.bcp-tab:hover {
+  color: #ccc;
+  border-color: #666;
+}
+
+.bcp-tab.bcp-tab-active {
+  color: #1da0c3;
+  border-color: #1da0c3;
+}
+
+.bcp-tab:disabled {
+  color: #444;
+  border-color: #333;
+  cursor: default;
+}
+
+.bcp-grid-play-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: #1da0c3;
+  font-size: 11px;
+  padding: 0 4px 0 0;
+  vertical-align: middle;
+  opacity: 0.7;
+  transition: opacity 0.15s;
+  line-height: 1;
+}
+
+.bcp-grid-play-btn:hover {
   opacity: 1;
 }
 `;
