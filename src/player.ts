@@ -62,6 +62,7 @@ export class Player {
   onCartRemove?: (track: PlaylistTrack, cartItemUrl: string) => Promise<void>;
   onPlaybackStart?: () => void;
   onCurrentPageTrackChange?: (pageUrl: string) => void;
+  onTrackChange?: (id: PlaylistId, index: number) => void;
   onSeek?: (fraction: number) => void;
 
   constructor(initialPlaylist: PlaylistTrack[]) {
@@ -513,6 +514,8 @@ export class Player {
     state.lastIndex = index;
     const track = state.tracks[index];
     if (!track) return;
+
+    this.onTrackChange?.(this.activeId!, index);
 
     // Only reload when the stream URL actually changes. Keeping the same src
     // preserves the current playback position across pause/resume cycles (e.g.
