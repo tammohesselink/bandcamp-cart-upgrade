@@ -1,14 +1,25 @@
-import type { PlaylistTrack } from './types';
+import type { PlaylistId, PlaylistTrack } from './types';
 import { PLAYER_CSS } from './styles';
+
+type StatusKind = 'loading' | 'error' | 'warn' | 'info';
+
+interface PlaylistState {
+  label: string;
+  tracks: PlaylistTrack[];
+  lastIndex: number;
+  statusMsg: string;
+  statusKind: StatusKind;
+}
 
 export class Player {
   readonly wrapper: HTMLElement;
   private bar: HTMLElement;
   private queueEl: HTMLElement;
+  private headerEl: HTMLElement;
 
   private audio: HTMLAudioElement;
-  private playlist: PlaylistTrack[];
-  private currentIndex = -1;
+  private playlists = new Map<PlaylistId, PlaylistState>();
+  private activeId: PlaylistId | null = null;
 
   private artworkEl!: HTMLImageElement;
   private titleEl!: HTMLElement;
@@ -26,8 +37,7 @@ export class Player {
   private queueVisible = false;
   private seeking = false;
 
-  constructor(playlist: PlaylistTrack[]) {
-    this.playlist = playlist;
+  constructor(initialPlaylist: PlaylistTrack[]) {
     this.audio = new Audio();
 
     injectStyles();
@@ -36,32 +46,112 @@ export class Player {
     this.wrapper.id = 'bcp-wrapper';
 
     this.queueEl = this.buildQueueEl();
+    this.headerEl = this.buildHeaderEl();
     this.bar = this.buildBarEl();
 
-    const header = document.createElement('div');
-    header.id = 'bcp-header';
-    header.textContent = 'Full cart in a single playlist';
-
     this.wrapper.appendChild(this.queueEl);
-    this.wrapper.appendChild(header);
+    this.wrapper.appendChild(this.headerEl);
     this.wrapper.appendChild(this.bar);
 
     this.bindAudioEvents();
-    this.updateQueueEl();
+    this.alignToPageContent();
+    window.addEventListener('resize', () => this.alignToPageContent());
 
-    if (playlist.length > 0) {
-      this.loadTrack(0);
+    if (initialPlaylist.length > 0) {
+      this.setPlaylist('cart', 'Cart', initialPlaylist);
     }
   }
 
-  jumpTo(index: number) {
+  // --- Public API -----------------------------------------------------------
+
+  setPlaylist(id: PlaylistId, label: string, tracks: PlaylistTrack[]) {
+    const isNew = !this.playlists.has(id);
+    this.playlists.set(id, { label, tracks, lastIndex: 0, statusMsg: '', statusKind: 'info' });
+    this.updateHeader();
+    if (isNew && this.playlists.size === 1) {
+      this.selectPlaylist(id);
+    }
+  }
+
+  selectPlaylist(id: PlaylistId) {
+    const state = this.playlists.get(id);
+    if (!state) return;
+    this.audio.pause();
+    this.activeId = id;
+    this.updateHeader();
+    this.updateQueueEl();
+    this.loadTrack(state.lastIndex);
+    if (state.statusMsg) {
+      this.setStatus(state.statusMsg, state.statusKind);
+    }
+  }
+
+  jumpTo(id: PlaylistId, index: number) {
+    if (this.activeId !== id) {
+      this.selectPlaylist(id);
+    }
     this.loadTrack(index);
     this.audio.play().catch(console.warn);
   }
 
-  setStatus(msg: string, kind: 'loading' | 'error' | 'warn' | 'info' = 'info') {
+  setStatus(msg: string, kind: StatusKind = 'info') {
     this.statusEl.textContent = msg;
     this.statusEl.className = `bcp-status bcp-status-${kind}`;
+    const state = this.active();
+    if (state) {
+      state.statusMsg = msg;
+      state.statusKind = kind;
+    }
+  }
+
+  setPlaylistStatus(id: PlaylistId, msg: string, kind: StatusKind = 'info') {
+    const state = this.playlists.get(id);
+    if (!state) return;
+    state.statusMsg = msg;
+    state.statusKind = kind;
+    if (id === this.activeId) {
+      this.setStatus(msg, kind);
+    }
+  }
+
+  // --- Private helpers -------------------------------------------------------
+
+  private active(): PlaylistState | null {
+    if (this.activeId === null) return null;
+    return this.playlists.get(this.activeId) ?? null;
+  }
+
+  private buildHeaderEl(): HTMLElement {
+    const header = document.createElement('div');
+    header.id = 'bcp-header';
+    return header;
+  }
+
+  private updateHeader() {
+    this.headerEl.innerHTML = '';
+
+    const tabs = document.createElement('div');
+    tabs.id = 'bcp-tabs';
+
+    const entries: [PlaylistId, string][] = [
+      ['cart', 'Cart'],
+      ['discography', 'Label discography'],
+    ];
+
+    for (const [id, label] of entries) {
+      const state = this.playlists.get(id);
+      const tab = document.createElement('button');
+      tab.className = 'bcp-tab' + (id === this.activeId ? ' bcp-tab-active' : '');
+      tab.textContent = state?.label ?? label;
+      if (state) {
+        tab.addEventListener('click', () => this.selectPlaylist(id));
+      } else {
+        tab.disabled = true;
+      }
+      tabs.appendChild(tab);
+    }
+
+    this.headerEl.appendChild(tabs);
   }
 
   private buildBarEl(): HTMLElement {
@@ -153,10 +243,13 @@ export class Player {
   }
 
   private updateQueueEl() {
+    const state = this.active();
     this.queueEl.innerHTML = '';
-    this.playlist.forEach((track, i) => {
+    if (!state) return;
+
+    state.tracks.forEach((track, i) => {
       const item = el('div', 'bcp-queue-item');
-      if (i === this.currentIndex) item.classList.add('bcp-active');
+      if (i === state.lastIndex) item.classList.add('bcp-active');
       if (track.unplayable) item.classList.add('bcp-unplayable');
 
       const num = el('div', 'bcp-queue-num');
@@ -166,8 +259,7 @@ export class Player {
       const title = el('div', 'bcp-queue-title');
       title.textContent = track.trackTitle || '(untitled)';
       const sub = el('div', 'bcp-queue-sub');
-      sub.textContent =
-        [track.artist, track.albumTitle].filter(Boolean).join(' — ');
+      sub.textContent = [track.artist, track.albumTitle].filter(Boolean).join(' — ');
       text.append(title, sub);
 
       item.append(num, text);
@@ -188,14 +280,16 @@ export class Player {
   }
 
   private loadTrack(index: number) {
-    this.currentIndex = index;
-    const track = this.playlist[index];
+    const state = this.active();
+    if (!state) return;
+
+    state.lastIndex = index;
+    const track = state.tracks[index];
     if (!track) return;
 
     this.artworkEl.src = track.artworkUrl || '';
     this.titleEl.textContent = track.trackTitle || '(untitled)';
-    this.subEl.textContent =
-      [track.artist, track.albumTitle].filter(Boolean).join(' — ');
+    this.subEl.textContent = [track.artist, track.albumTitle].filter(Boolean).join(' — ');
     this.currentTimeEl.textContent = '0:00';
     this.totalTimeEl.textContent = fmtTime(track.durationSec);
     this.seekBar.value = '0';
@@ -237,7 +331,7 @@ export class Player {
     });
 
     this.audio.addEventListener('error', () => {
-      console.warn('[bcp] Audio error for track', this.currentIndex, this.audio.error);
+      console.warn('[bcp] Audio error for track', this.active()?.lastIndex, this.audio.error);
       this.next();
     });
   }
@@ -251,7 +345,9 @@ export class Player {
   }
 
   private next() {
-    const nextIndex = this.nextPlayable(this.currentIndex + 1, 1);
+    const state = this.active();
+    if (!state) return;
+    const nextIndex = this.nextPlayable(state.lastIndex + 1, 1);
     if (nextIndex !== -1) {
       this.loadTrack(nextIndex);
       this.audio.play().catch(console.warn);
@@ -259,31 +355,50 @@ export class Player {
   }
 
   private prev() {
-    const prevIndex = this.nextPlayable(this.currentIndex - 1, -1);
+    const state = this.active();
+    if (!state) return;
+    const prevIndex = this.nextPlayable(state.lastIndex - 1, -1);
     if (prevIndex !== -1) {
       this.loadTrack(prevIndex);
       this.audio.play().catch(console.warn);
     }
   }
 
-  // Finds the next playable track starting at `start`, stepping by `dir` (+1 or -1).
   private nextPlayable(start: number, dir: 1 | -1): number {
+    const state = this.active();
+    if (!state) return -1;
     let i = start;
-    while (i >= 0 && i < this.playlist.length) {
-      if (!this.playlist[i]!.unplayable) return i;
+    while (i >= 0 && i < state.tracks.length) {
+      if (!state.tracks[i]!.unplayable) return i;
       i += dir;
     }
     return -1;
   }
 
   private updateNavButtons() {
-    this.prevBtn.disabled = this.nextPlayable(this.currentIndex - 1, -1) === -1;
-    this.nextBtn.disabled = this.nextPlayable(this.currentIndex + 1, 1) === -1;
+    const state = this.active();
+    if (!state) {
+      this.prevBtn.disabled = true;
+      this.nextBtn.disabled = true;
+      return;
+    }
+    this.prevBtn.disabled = this.nextPlayable(state.lastIndex - 1, -1) === -1;
+    this.nextBtn.disabled = this.nextPlayable(state.lastIndex + 1, 1) === -1;
   }
 
   private toggleQueue() {
     this.queueVisible = !this.queueVisible;
     this.queueEl.classList.toggle('bcp-visible', this.queueVisible);
+  }
+
+  private alignToPageContent() {
+    const container =
+      document.getElementById('pgBd') ??
+      document.querySelector<HTMLElement>('.yui-skin-sam');
+    if (!container) return;
+    const { left, width } = container.getBoundingClientRect();
+    this.wrapper.style.left = `${left}px`;
+    this.wrapper.style.width = `${width}px`;
   }
 }
 

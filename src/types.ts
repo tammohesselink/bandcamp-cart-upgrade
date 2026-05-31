@@ -1,3 +1,5 @@
+export type PlaylistId = 'cart' | 'discography';
+
 export interface CartItem {
   url: string;
   type: 'track' | 'album' | 'unknown';
