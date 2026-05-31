@@ -51,6 +51,8 @@ export class Player {
   private queueToggleBtn!: HTMLButtonElement;
 
   private queueVisible = false;
+  private playerVisible = true;
+  private collapseBtn!: HTMLButtonElement;
   private seeking = false;
 
   private cartUrls = new Set<string>();
@@ -68,10 +70,16 @@ export class Player {
     this.wrapper = document.createElement('div');
     this.wrapper.id = 'bcp-wrapper';
 
+    this.collapseBtn = btn('Hide player ▼', '');
+    this.collapseBtn.id = 'bcp-collapse-btn';
+    this.collapseBtn.title = 'Hide player';
+    this.collapseBtn.addEventListener('click', () => this.togglePlayer());
+
     this.queueEl = this.buildQueueEl();
     this.headerEl = this.buildHeaderEl();
     this.bar = this.buildBarEl();
 
+    this.wrapper.appendChild(this.collapseBtn);
     this.wrapper.appendChild(this.queueEl);
     this.wrapper.appendChild(this.headerEl);
     this.wrapper.appendChild(this.bar);
@@ -571,6 +579,14 @@ export class Player {
   private toggleQueue() {
     this.queueVisible = !this.queueVisible;
     this.queueEl.classList.toggle('bcp-visible', this.queueVisible);
+  }
+
+  private togglePlayer() {
+    this.playerVisible = !this.playerVisible;
+    this.wrapper.classList.toggle('bcp-collapsed', !this.playerVisible);
+    this.collapseBtn.textContent = this.playerVisible ? 'Hide player ▼' : 'Show player ▲';
+    this.collapseBtn.title = this.playerVisible ? 'Hide player' : 'Show player';
+    document.body.style.paddingBottom = this.playerVisible ? '90px' : '0';
   }
 
   private updateCartActions(track: PlaylistTrack) {
