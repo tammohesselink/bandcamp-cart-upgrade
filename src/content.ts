@@ -392,7 +392,7 @@ async function removeCartItem(item: SavedCartItem): Promise<boolean> {
 interface ProgressOverlay {
   setTitle(text: string): void;
   setProgress(text: string): void;
-  showDone(onCheckout: () => void, onContinue: () => void): void;
+  showDone(onCheckout: () => void, onContinue: () => void, onLogin: () => void): void;
   remove(): void;
 }
 
@@ -440,13 +440,13 @@ function createProgressOverlay(initialTitle: string, onCancel?: () => void): Pro
   return {
     setTitle: (text) => { titleEl.textContent = text; },
     setProgress: (text) => { progressEl.textContent = text; },
-    showDone: (onCheckout, onContinue) => {
+    showDone: (onCheckout, onContinue, onLogin) => {
       titleEl.textContent = 'Your cart is ready!';
       progressEl.textContent = '';
       noteEl.style.display = 'none';
       cancelBtn?.remove();
       const btnRow = document.createElement('div');
-      Object.assign(btnRow.style, { marginTop: '16px', display: 'flex', gap: '8px', justifyContent: 'center' });
+      Object.assign(btnRow.style, { marginTop: '16px', display: 'flex', gap: '8px', justifyContent: 'center', flexWrap: 'wrap' });
       const goBtn = document.createElement('button');
       Object.assign(goBtn.style, {
         background: '#1da0c3', border: 'none', borderRadius: '4px',
@@ -463,7 +463,15 @@ function createProgressOverlay(initialTitle: string, onCancel?: () => void): Pro
       });
       contBtn.textContent = 'Continue browsing';
       contBtn.addEventListener('click', onContinue);
-      btnRow.append(goBtn, contBtn);
+      const loginBtn = document.createElement('button');
+      Object.assign(loginBtn.style, {
+        background: 'none', border: '1px solid #444', borderRadius: '4px',
+        color: '#ccc', fontSize: '13px', padding: '8px 16px',
+        cursor: 'pointer', fontFamily: ff,
+      });
+      loginBtn.textContent = 'Login';
+      loginBtn.addEventListener('click', onLogin);
+      btnRow.append(goBtn, contBtn, loginBtn);
       card.appendChild(btnRow);
     },
     remove: () => { backdrop.remove(); },
@@ -597,6 +605,7 @@ async function main() {
           overlay.showDone(
             () => { location.assign('https://bandcamp.com/cart#bcp_go_checkout=1'); },
             () => { overlay.remove(); },
+            () => { location.assign('https://bandcamp.com/login'); },
           );
         }
       }
