@@ -63,7 +63,7 @@ export class Player {
 
   onCartAdd?: (track: PlaylistTrack, addType: CartAddType) => Promise<boolean | void>;
   onCartRemove?: (track: PlaylistTrack, cartItemUrl: string) => Promise<void>;
-  onCheckoutSelected?: (selectedRawUrls: string[]) => Promise<void>;
+  onCheckoutSelected?: (selectedRawUrls: string[], onProgress?: (done: number, total: number) => void) => Promise<void>;
   onPlaybackStart?: () => void;
   onCurrentPageTrackChange?: (pageUrl: string) => void;
   onTrackChange?: (id: PlaylistId, index: number) => void;

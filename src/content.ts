@@ -338,21 +338,28 @@ async function addCartItem(item: SavedCartItem, cartLengthHint: number): Promise
 }
 
 async function removeCartItem(item: SavedCartItem): Promise<boolean> {
-  const tracks = await fetchTracksForUrl(item.url);
-  if (tracks.length === 0) {
-    console.error('[bcp] cart-remove: could not fetch release page for', item.url);
-    return false;
-  }
-
-  const track = tracks[0]!;
-  const isTrackItem = item.purchaseType === 'track';
-  const tralbumId = isTrackItem ? (track.trackId ?? track.releaseId) : track.releaseId;
-  if (tralbumId === null) {
-    console.error('[bcp] cart-remove: no tralbum id for', item.url, track);
-    return false;
-  }
-
   let lineItemId: number | null = cartLineItemIds.get(normalizeUrl(item.url)) ?? null;
+  let tralbumId: number | null = null;
+
+  // Only fetch the release page when the cart line-item id is unknown. After the
+  // first removal, Bandcamp's cart_data.items response populates the line-item id
+  // for every remaining item, so bulk removal fetches at most one release page
+  // total instead of one per item.
+  if (lineItemId === null) {
+    const tracks = await fetchTracksForUrl(item.url);
+    if (tracks.length === 0) {
+      console.error('[bcp] cart-remove: could not fetch release page for', item.url);
+      return false;
+    }
+
+    const track = tracks[0]!;
+    const isTrackItem = item.purchaseType === 'track';
+    tralbumId = isTrackItem ? (track.trackId ?? track.releaseId) : track.releaseId;
+    if (tralbumId === null) {
+      console.error('[bcp] cart-remove: no tralbum id for', item.url, track);
+      return false;
+    }
+  }
 
   for (let attempt = 0; attempt < 2; attempt++) {
     const idToSend = lineItemId ?? tralbumId;
@@ -717,7 +724,7 @@ async function main() {
 
   // Partial-checkout: remove unselected items, persist leftovers for restore,
   // then navigate to checkout in the same tab.
-  player.onCheckoutSelected = async (selectedRawUrls) => {
+  player.onCheckoutSelected = async (selectedRawUrls, onProgress) => {
     const current = probeCart();
     const sel = new Set(selectedRawUrls.map(normalizeUrl));
     const leftover = current.filter((i) => !sel.has(normalizeUrl(i.url)));
@@ -742,9 +749,12 @@ async function main() {
     // same end state (cart = selected only at checkout) without ever emptying
     // the cart or re-deriving IDs for items we want to keep.
     const failedRemovals: string[] = [];
-    for (const item of leftover) {
+    onProgress?.(0, leftover.length);
+    for (let i = 0; i < leftover.length; i++) {
+      const item = leftover[i]!;
       const ok = await removeCartItem({ url: item.url, title: item.title, purchaseType: item.purchaseType });
       if (!ok) failedRemovals.push(item.title || item.url);
+      onProgress?.(i + 1, leftover.length);
     }
 
     if (failedRemovals.length > 0) {
@@ -942,7 +952,9 @@ function injectCheckoutSelectedBtn(player: Player): void {
     btn.disabled = true;
     btn.textContent = 'Preparing…';
     try {
-      await player.onCheckoutSelected?.(selectedRawUrls);
+      await player.onCheckoutSelected?.(selectedRawUrls, (done, total) => {
+        btn.textContent = `Removing ${done} / ${total}…`;
+      });
     } finally {
       updateCheckoutSelectedBtn();
     }
