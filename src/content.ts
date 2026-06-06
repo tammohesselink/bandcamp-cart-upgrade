@@ -1,7 +1,7 @@
 import type { CartItem, PlaylistTrack, SavedCartItem, CartSnapshot } from './types';
 import { parseTralbum } from './bandcamp';
 import { Player } from './player';
-import { probeCart, probeDiscography, injectDiscographyButton, injectRestoreCartButton } from './probe';
+import { probeCart, probeDiscography, injectDiscographyButton, injectRestoreCartButton, injectPendingRestoreButton } from './probe';
 import { addSnapshotIfChanged, diffSnapshot } from './cart-history';
 import { normalizeUrl } from './url';
 import {
@@ -111,16 +111,22 @@ function saveSnapshots(snapshots: CartSnapshot[]): void {
 }
 
 // --- Pending-restore storage (partial checkout) -------------------------------
-// Leftovers from a partial checkout are persisted here and re-added
-// automatically on the next non-checkout Bandcamp page load.
+// Leftovers from a partial checkout are persisted here until the user clicks
+// "Restore cart from before purchase" on the next non-checkout Bandcamp page.
 
 const PENDING_RESTORE_KEY = 'bcp_pending_restore_v1';
-const MAX_RESTORE_ATTEMPTS = 3;
+// A restore is considered stale (lock released) if the active tab hasn't
+// updated its heartbeat within this window. Covers the case where a tab is
+// closed mid-restore.
+const STALE_RESTORE_MS = 30_000;
 
 interface PendingRestore {
   items: SavedCartItem[];
   savedAt: number;
-  attempts: number;
+  // 'pending' = waiting for user click; 'restoring' = one tab is actively re-adding.
+  status: 'pending' | 'restoring';
+  heartbeatAt?: number;  // updated after each item while restoring
+  done?: number;         // items re-added so far (for cross-tab progress label)
 }
 
 async function loadPendingRestore(): Promise<PendingRestore | null> {
@@ -133,12 +139,17 @@ async function loadPendingRestore(): Promise<PendingRestore | null> {
 }
 
 function savePendingRestore(items: SavedCartItem[]): Promise<void> {
-  const entry: PendingRestore = { items, savedAt: Date.now(), attempts: 0 };
+  const entry: PendingRestore = { items, savedAt: Date.now(), status: 'pending' };
   return chrome.storage.local.set({ [PENDING_RESTORE_KEY]: entry });
 }
 
-function clearPendingRestore(): void {
-  chrome.storage.local.remove(PENDING_RESTORE_KEY).catch(() => {});
+function clearPendingRestore(): Promise<void> {
+  return chrome.storage.local.remove(PENDING_RESTORE_KEY).catch(() => {});
+}
+
+// Returns true when another tab owns an active (non-stale) restore lock.
+function isRestoreLocked(p: PendingRestore): boolean {
+  return p.status === 'restoring' && p.heartbeatAt != null && (Date.now() - p.heartbeatAt) < STALE_RESTORE_MS;
 }
 
 // --- Cart history modal ------------------------------------------------------
@@ -476,64 +487,101 @@ async function doRestore(button: HTMLButtonElement, toAdd: SavedCartItem[], toRe
   location.reload();
 }
 
+// --- Pending restore: button + state machine ---------------------------------
+
+async function setupPendingRestoreButton(player: Player): Promise<void> {
+  if (isCheckoutPage()) return;
+  const pending = await loadPendingRestore();
+  if (!pending || pending.items.length === 0) return;
+
+  const btn = injectPendingRestoreButton();
+  if (!btn) return;
+
+  const render = (p: PendingRestore) => {
+    const total = p.items.length;
+    if (isRestoreLocked(p)) {
+      btn.disabled = true;
+      btn.textContent = `Restoring cart… ${p.done ?? 0} / ${total}`;
+    } else {
+      btn.disabled = false;
+      btn.textContent = `Restore cart from before purchase (${total})`;
+    }
+  };
+  render(pending);
+
+  let runningHere = false;
+  btn.addEventListener('click', () => {
+    void runPendingRestore(btn, player, () => { runningHere = true; });
+  });
+
+  // Reflect status changes made by other tabs (or our own heartbeats, harmlessly).
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local' || !changes[PENDING_RESTORE_KEY]) return;
+    const next = changes[PENDING_RESTORE_KEY].newValue as PendingRestore | undefined;
+    if (!next) {
+      // Key removed: restore completed or cleared by another tab.
+      if (!runningHere) btn.remove();
+      return;
+    }
+    if (!runningHere) render(next);
+  });
+}
+
+async function runPendingRestore(
+  btn: HTMLButtonElement,
+  player: Player,
+  markRunning: () => void,
+): Promise<void> {
+  const pending = await loadPendingRestore();
+  if (!pending || pending.items.length === 0) { btn.remove(); return; }
+  if (isRestoreLocked(pending)) return;  // another tab holds a live lock
+
+  markRunning();
+  const total = pending.items.length;
+
+  // Claim the restoring lock and refresh the heartbeat after each item.
+  const claim = (done: number) =>
+    chrome.storage.local.set({
+      [PENDING_RESTORE_KEY]: { ...pending, status: 'restoring', heartbeatAt: Date.now(), done },
+    }).catch(() => {});
+  await claim(0);
+  btn.disabled = true;
+
+  const overlay = createProgressOverlay('Restoring cart…');
+  overlay.setProgress(`0 / ${total} items`);
+  const onBeforeUnload = (e: BeforeUnloadEvent) => { e.preventDefault(); };
+  window.addEventListener('beforeunload', onBeforeUnload);
+
+  let allOk = true;
+  for (let i = 0; i < pending.items.length; i++) {
+    const ok = await addCartItem(pending.items[i]!, probeCart().length + i);
+    overlay.setProgress(`${i + 1} / ${total} items`);
+    await claim(i + 1);
+    if (!ok) allOk = false;
+  }
+
+  window.removeEventListener('beforeunload', onBeforeUnload);
+  overlay.remove();
+
+  if (allOk) {
+    await clearPendingRestore();
+    location.reload();
+  } else {
+    // Revert to 'pending' so the user can retry.
+    await chrome.storage.local.set({
+      [PENDING_RESTORE_KEY]: { ...pending, status: 'pending', heartbeatAt: undefined, done: undefined },
+    }).catch(() => {});
+    btn.disabled = false;
+    btn.textContent = `Restore cart from before purchase (${total})`;
+    player.showToast('Some items could not be restored — click to try again', 'error');
+  }
+}
+
+// -----------------------------------------------------------------------------
+
 main().catch(console.error);
 
 async function main() {
-  // --- Auto-restore leftovers from a partial checkout -----------------------
-  // When the user does a partial checkout, the leftover cart items are saved to
-  // storage. On the next non-checkout Bandcamp page we re-add them automatically
-  // so their cart is restored to the pre-checkout state (minus what they bought).
-  let autoRestoreCount = 0;
-  if (!isCheckoutPage()) {
-    const pending = await loadPendingRestore();
-    if (pending && pending.items.length > 0) {
-      if (pending.attempts >= MAX_RESTORE_ATTEMPTS) {
-        console.warn('[bcp] pending restore exceeded max attempts, clearing', pending.items);
-        clearPendingRestore();
-      } else {
-        // Increment the attempt counter before mutating so a crash mid-restore
-        // still advances the counter and eventually clears the key.
-        await chrome.storage.local.set({
-          [PENDING_RESTORE_KEY]: { ...pending, attempts: pending.attempts + 1 },
-        }).catch(() => {});
-
-        // Show a centered modal so the user knows not to close the tab.
-        const total = pending.items.length;
-        const overlay = createProgressOverlay('Restoring cart…');
-        overlay.setProgress(`0 / ${total} items`);
-
-        // Prevent accidental tab close while items are being re-added.
-        const onBeforeUnload = (e: BeforeUnloadEvent) => { e.preventDefault(); };
-        window.addEventListener('beforeunload', onBeforeUnload);
-
-        let allOk = true;
-        for (let i = 0; i < pending.items.length; i++) {
-          const ok = await addCartItem(pending.items[i]!, probeCart().length + i);
-          overlay.setProgress(`${i + 1} / ${total} items`);
-          if (ok) {
-            autoRestoreCount++;
-          } else {
-            allOk = false;
-          }
-        }
-
-        window.removeEventListener('beforeunload', onBeforeUnload);
-        overlay.remove();
-
-        if (allOk) {
-          clearPendingRestore();
-        } else {
-          console.warn(
-            '[bcp] auto-restore: some items failed (attempt',
-            pending.attempts + 1,
-            ') — will retry on next page load'
-          );
-        }
-      }
-    }
-  }
-  // --------------------------------------------------------------------------
-
   const cartItems = probeCart();
 
   const liveItems: SavedCartItem[] = cartItems.map((i) => ({ url: i.url, title: i.title, purchaseType: i.purchaseType }));
@@ -573,9 +621,7 @@ async function main() {
   document.body.appendChild(player.wrapper);
   document.body.style.paddingBottom = '90px';
 
-  if (autoRestoreCount > 0) {
-    player.showToast(`Restored ${autoRestoreCount} item${autoRestoreCount !== 1 ? 's' : ''} to cart`);
-  }
+  await setupPendingRestoreButton(player);
 
   // Build the initial cart URL set and purchase-type map.
   cartItemTypes = buildCartItemTypes(cartItems);
