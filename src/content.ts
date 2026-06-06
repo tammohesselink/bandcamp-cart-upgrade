@@ -397,6 +397,46 @@ async function removeCartItem(item: SavedCartItem): Promise<boolean> {
   return false;
 }
 
+// --- Progress overlay --------------------------------------------------------
+
+interface ProgressOverlay {
+  setTitle(text: string): void;
+  setProgress(text: string): void;
+  remove(): void;
+}
+
+function createProgressOverlay(initialTitle: string): ProgressOverlay {
+  const ff = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+  const backdrop = document.createElement('div');
+  Object.assign(backdrop.style, {
+    position: 'fixed', inset: '0', background: 'rgba(0,0,0,0.65)',
+    zIndex: '2147483647', display: 'flex', alignItems: 'center', justifyContent: 'center',
+    fontFamily: ff,
+  });
+  const card = document.createElement('div');
+  Object.assign(card.style, {
+    background: '#1a1a1a', border: '1px solid #2e2e2e', borderTop: '3px solid #1da0c3',
+    borderRadius: '8px', boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
+    padding: '28px 36px', textAlign: 'center', minWidth: '260px',
+  });
+  const titleEl = document.createElement('div');
+  Object.assign(titleEl.style, { color: '#f0f0f0', fontSize: '15px', fontWeight: '600', marginBottom: '10px' });
+  titleEl.textContent = initialTitle;
+  const progressEl = document.createElement('div');
+  Object.assign(progressEl.style, { color: '#1da0c3', fontSize: '13px' });
+  const noteEl = document.createElement('div');
+  Object.assign(noteEl.style, { color: '#666', fontSize: '11px', marginTop: '10px' });
+  noteEl.textContent = 'Please don\'t close this tab';
+  card.append(titleEl, progressEl, noteEl);
+  backdrop.appendChild(card);
+  document.body.appendChild(backdrop);
+  return {
+    setTitle: (text) => { titleEl.textContent = text; },
+    setProgress: (text) => { progressEl.textContent = text; },
+    remove: () => { backdrop.remove(); },
+  };
+}
+
 async function doRestore(button: HTMLButtonElement, toAdd: SavedCartItem[], toRemove: SavedCartItem[]): Promise<void> {
   button.disabled = true;
   let changed = 0;
@@ -459,37 +499,8 @@ async function main() {
 
         // Show a centered modal so the user knows not to close the tab.
         const total = pending.items.length;
-        const ff = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-
-        const backdrop = document.createElement('div');
-        Object.assign(backdrop.style, {
-          position: 'fixed', inset: '0', background: 'rgba(0,0,0,0.65)',
-          zIndex: '2147483647', display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontFamily: ff,
-        });
-
-        const card = document.createElement('div');
-        Object.assign(card.style, {
-          background: '#1a1a1a', border: '1px solid #2e2e2e', borderTop: '3px solid #1da0c3',
-          borderRadius: '8px', boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
-          padding: '28px 36px', textAlign: 'center', minWidth: '260px',
-        });
-
-        const titleEl = document.createElement('div');
-        Object.assign(titleEl.style, { color: '#f0f0f0', fontSize: '15px', fontWeight: '600', marginBottom: '10px' });
-        titleEl.textContent = 'Restoring cart…';
-
-        const progressEl = document.createElement('div');
-        Object.assign(progressEl.style, { color: '#1da0c3', fontSize: '13px' });
-        progressEl.textContent = `0 / ${total} items`;
-
-        const noteEl = document.createElement('div');
-        Object.assign(noteEl.style, { color: '#666', fontSize: '11px', marginTop: '10px' });
-        noteEl.textContent = 'Please don\'t close this tab';
-
-        card.append(titleEl, progressEl, noteEl);
-        backdrop.appendChild(card);
-        document.body.appendChild(backdrop);
+        const overlay = createProgressOverlay('Restoring cart…');
+        overlay.setProgress(`0 / ${total} items`);
 
         // Prevent accidental tab close while items are being re-added.
         const onBeforeUnload = (e: BeforeUnloadEvent) => { e.preventDefault(); };
@@ -498,7 +509,7 @@ async function main() {
         let allOk = true;
         for (let i = 0; i < pending.items.length; i++) {
           const ok = await addCartItem(pending.items[i]!, probeCart().length + i);
-          progressEl.textContent = `${i + 1} / ${total} items`;
+          overlay.setProgress(`${i + 1} / ${total} items`);
           if (ok) {
             autoRestoreCount++;
           } else {
@@ -507,7 +518,7 @@ async function main() {
         }
 
         window.removeEventListener('beforeunload', onBeforeUnload);
-        backdrop.remove();
+        overlay.remove();
 
         if (allOk) {
           clearPendingRestore();
@@ -722,12 +733,15 @@ async function main() {
     player.setStatus('Remove failed: could not sync cart state', 'error');
   };
 
-  // Partial-checkout: remove unselected items, persist leftovers for restore,
-  // then navigate to checkout in the same tab.
-  player.onCheckoutSelected = async (selectedRawUrls, onProgress) => {
+  // Partial-checkout: flush the entire cart, re-add only the selected items,
+  // then navigate to checkout. Flushing first is faster for large carts because
+  // removeCartItem skips the per-item page fetch after the first removal
+  // (cartLineItemIds is populated from cart_data.items in each response).
+  player.onCheckoutSelected = async (selectedRawUrls) => {
     const current = probeCart();
     const sel = new Set(selectedRawUrls.map(normalizeUrl));
     const leftover = current.filter((i) => !sel.has(normalizeUrl(i.url)));
+    const selected = current.filter((i) => sel.has(normalizeUrl(i.url)));
 
     // Selecting everything is a normal full-cart checkout — no cart mutations.
     if (leftover.length === 0) {
@@ -738,40 +752,67 @@ async function main() {
       return;
     }
 
-    // Persist leftovers before touching the cart so a crash/early-close still
-    // leaves the restore key in place.
-    await savePendingRestore(
-      leftover.map((i) => ({ url: i.url, title: i.title, purchaseType: i.purchaseType }))
-    );
+    const overlay = createProgressOverlay('Preparing checkout…');
+    const onBeforeUnload = (e: BeforeUnloadEvent) => { e.preventDefault(); };
+    window.addEventListener('beforeunload', onBeforeUnload);
 
-    // Remove the leftover items from the cart, leaving only the selected ones.
-    // This is the safe equivalent of "remove everything then re-add selected":
-    // same end state (cart = selected only at checkout) without ever emptying
-    // the cart or re-deriving IDs for items we want to keep.
-    const failedRemovals: string[] = [];
-    onProgress?.(0, leftover.length);
-    for (let i = 0; i < leftover.length; i++) {
-      const item = leftover[i]!;
-      const ok = await removeCartItem({ url: item.url, title: item.title, purchaseType: item.purchaseType });
-      if (!ok) failedRemovals.push(item.title || item.url);
-      onProgress?.(i + 1, leftover.length);
-    }
-
-    if (failedRemovals.length > 0) {
-      // Abort: navigating with unremoved items would charge the user for
-      // things they didn't select. The pending key stays, so leftovers will be
-      // reconciled automatically on the next non-checkout page load.
-      player.showToast(
-        `Could not remove ${failedRemovals.length} item${failedRemovals.length !== 1 ? 's' : ''} — checkout aborted`,
-        'error'
+    try {
+      // Persist leftovers before touching the cart so a crash/early-close still
+      // leaves the restore key in place.
+      await savePendingRestore(
+        leftover.map((i) => ({ url: i.url, title: i.title, purchaseType: i.purchaseType }))
       );
-      console.error('[bcp] partial checkout aborted, remove failures:', failedRemovals);
-      return;
-    }
 
-    if (!clickCheckout()) {
-      player.showToast('Could not find checkout button — opening cart page', 'warn');
-      location.assign('/cart');
+      // Phase 1 — flush the entire cart.
+      overlay.setTitle('Clearing cart…');
+      const failedFlush: string[] = [];
+      for (let i = 0; i < current.length; i++) {
+        overlay.setProgress(`${i + 1} / ${current.length}`);
+        const item = current[i]!;
+        const ok = await removeCartItem({ url: item.url, title: item.title, purchaseType: item.purchaseType });
+        if (!ok) failedFlush.push(item.title || item.url);
+      }
+
+      if (failedFlush.length > 0) {
+        // Abort: navigating with items still in the cart would charge the user
+        // for things they didn't select. The pending key stays for auto-restore.
+        player.showToast(
+          `Could not remove ${failedFlush.length} item${failedFlush.length !== 1 ? 's' : ''} — checkout aborted`,
+          'error'
+        );
+        console.error('[bcp] partial checkout flush aborted, remove failures:', failedFlush);
+        return;
+      }
+
+      // Phase 2 — re-add only the selected items. Cart is now empty so hint = i.
+      overlay.setTitle('Adding selected items…');
+      const failedAdd: string[] = [];
+      for (let i = 0; i < selected.length; i++) {
+        overlay.setProgress(`${i + 1} / ${selected.length}`);
+        const item = selected[i]!;
+        const ok = await addCartItem({ url: item.url, title: item.title, purchaseType: item.purchaseType }, i);
+        if (!ok) failedAdd.push(item.title || item.url);
+      }
+
+      if (failedAdd.length === selected.length && selected.length > 0) {
+        player.showToast('Could not add selected items to cart — checkout aborted', 'error');
+        console.error('[bcp] partial checkout re-add failed for all items:', failedAdd);
+        return;
+      }
+      if (failedAdd.length > 0) {
+        console.warn('[bcp] partial checkout: some selected items failed to add:', failedAdd);
+      }
+
+      // Phase 3 — navigate to checkout.
+      overlay.setTitle('Going to checkout…');
+      overlay.setProgress('');
+      if (!clickCheckout()) {
+        player.showToast('Could not find checkout button — opening cart page', 'warn');
+        location.assign('/cart');
+      }
+    } finally {
+      window.removeEventListener('beforeunload', onBeforeUnload);
+      overlay.remove();
     }
   };
 
@@ -952,9 +993,7 @@ function injectCheckoutSelectedBtn(player: Player): void {
     btn.disabled = true;
     btn.textContent = 'Preparing…';
     try {
-      await player.onCheckoutSelected?.(selectedRawUrls, (done, total) => {
-        btn.textContent = `Removing ${done} / ${total}…`;
-      });
+      await player.onCheckoutSelected?.(selectedRawUrls);
     } finally {
       updateCheckoutSelectedBtn();
     }
