@@ -416,7 +416,7 @@ interface ProgressOverlay {
   remove(): void;
 }
 
-function createProgressOverlay(initialTitle: string): ProgressOverlay {
+function createProgressOverlay(initialTitle: string, onCancel?: () => void): ProgressOverlay {
   const ff = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
   const backdrop = document.createElement('div');
   Object.assign(backdrop.style, {
@@ -439,6 +439,21 @@ function createProgressOverlay(initialTitle: string): ProgressOverlay {
   Object.assign(noteEl.style, { color: '#666', fontSize: '11px', marginTop: '10px' });
   noteEl.textContent = 'Please don\'t close this tab';
   card.append(titleEl, progressEl, noteEl);
+  if (onCancel) {
+    const cancelBtn = document.createElement('button');
+    Object.assign(cancelBtn.style, {
+      background: 'none', border: '1px solid #444', borderRadius: '4px',
+      color: '#999', fontSize: '11px', padding: '4px 12px', marginTop: '14px',
+      cursor: 'pointer', fontFamily: ff,
+    });
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.addEventListener('click', () => {
+      cancelBtn.disabled = true;
+      cancelBtn.textContent = 'Cancelling…';
+      onCancel();
+    });
+    card.appendChild(cancelBtn);
+  }
   backdrop.appendChild(card);
   document.body.appendChild(backdrop);
   return {
@@ -539,6 +554,7 @@ async function runPendingRestore(
   markRunning();
   const total = pending.items.length;
 
+  let cancelled = false;
   // Claim the restoring lock and refresh the heartbeat after each item.
   const claim = (done: number) =>
     chrome.storage.local.set({
@@ -547,27 +563,44 @@ async function runPendingRestore(
   await claim(0);
   btn.disabled = true;
 
-  const overlay = createProgressOverlay('Restoring cart…');
+  const overlay = createProgressOverlay('Restoring cart…', () => { cancelled = true; });
   overlay.setProgress(`0 / ${total} items`);
   const onBeforeUnload = (e: BeforeUnloadEvent) => { e.preventDefault(); };
   window.addEventListener('beforeunload', onBeforeUnload);
 
-  let allOk = true;
+  // Track which item indices were successfully added so we know what's left
+  // if the user cancels partway through.
+  const addedIndices = new Set<number>();
   for (let i = 0; i < pending.items.length; i++) {
-    const ok = await addCartItem(pending.items[i]!, probeCart().length + i);
-    overlay.setProgress(`${i + 1} / ${total} items`);
-    await claim(i + 1);
-    if (!ok) allOk = false;
+    const ok = await addCartItem(pending.items[i]!, probeCart().length + addedIndices.size);
+    if (ok) addedIndices.add(i);
+    overlay.setProgress(`${addedIndices.size} / ${total} items`);
+    await claim(addedIndices.size);
+    if (cancelled) break;
   }
 
   window.removeEventListener('beforeunload', onBeforeUnload);
   overlay.remove();
 
-  if (allOk) {
+  if (cancelled) {
+    // Items not yet successfully added remain in the pending entry so the user
+    // can click the button again to continue.
+    const remaining = pending.items.filter((_, i) => !addedIndices.has(i));
+    if (remaining.length === 0) {
+      await clearPendingRestore();
+      location.reload();
+    } else {
+      await chrome.storage.local.set({
+        [PENDING_RESTORE_KEY]: { ...pending, status: 'pending', items: remaining, heartbeatAt: undefined, done: undefined },
+      }).catch(() => {});
+      btn.disabled = false;
+      btn.textContent = `Restore cart from before purchase (${remaining.length})`;
+    }
+  } else if (addedIndices.size === total) {
     await clearPendingRestore();
     location.reload();
   } else {
-    // Revert to 'pending' so the user can retry.
+    // Some adds failed — revert to 'pending' so the user can retry.
     await chrome.storage.local.set({
       [PENDING_RESTORE_KEY]: { ...pending, status: 'pending', heartbeatAt: undefined, done: undefined },
     }).catch(() => {});
