@@ -32,7 +32,10 @@ export interface CartRemoveRequest {
 
 export interface OpenIncognitoCheckoutRequest {
   type: 'open-incognito-checkout';
-  items: Array<{ u: string; p: 'track' | 'album' | undefined }>;
+  // Pre-resolved track data from the normal window's warm cache.
+  // Short keys to keep the URL hash compact when many items are passed.
+  // u=releaseUrl, id=tralbumId, t=tralbumType, pr=minPrice, b=bandId
+  items: Array<{ u: string; id: number; t: 't' | 'a'; pr: number; b: number | null }>;
 }
 
 export type BcpRequest = FetchRequest | CartAddRequest | CartRemoveRequest | OpenIncognitoCheckoutRequest;

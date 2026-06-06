@@ -473,17 +473,15 @@ async function main() {
     if (hash.startsWith('#bcp_cart=')) {
       history.replaceState(null, '', window.location.pathname);
 
-      type IncognitoItem = { u: string; p: 'track' | 'album' | undefined };
+      type IncognitoItem = { u: string; id: number; t: 't' | 'a'; pr: number; b: number | null };
       const items: IncognitoItem[] = [];
       try {
         const raw = JSON.parse(decodeURIComponent(hash.slice('#bcp_cart='.length))) as unknown[];
         for (const x of raw) {
-          if (x && typeof (x as { u?: unknown }).u === 'string') {
-            const p = (x as { p?: unknown }).p;
-            items.push({
-              u: (x as { u: string }).u,
-              p: p === 'track' ? 'track' : p === 'album' ? 'album' : undefined,
-            });
+          const xi = x as { u?: unknown; id?: unknown; t?: unknown; pr?: unknown; b?: unknown };
+          if (typeof xi.u === 'string' && typeof xi.id === 'number' &&
+              (xi.t === 't' || xi.t === 'a') && typeof xi.pr === 'number') {
+            items.push({ u: xi.u, id: xi.id, t: xi.t, pr: xi.pr, b: typeof xi.b === 'number' ? xi.b : null });
           }
         }
       } catch {
@@ -498,11 +496,29 @@ async function main() {
         const overlay = createProgressOverlay('Building your cart…', () => { cancelled = true; });
         overlay.setProgress(`0 / ${items.length} items`);
 
+        // Track data is pre-resolved — just read page context and POST directly,
+        // no release-page fetches needed.
         let added = 0;
         for (let i = 0; i < items.length; i++) {
           const it = items[i]!;
-          const ok = await addCartItem({ url: it.u, title: '', purchaseType: it.p }, added);
-          if (ok) added++;
+          const ctx = readPageContext(latestSyncNum);
+          const result = await sendBcpMessage({
+            type: 'cart-add',
+            tralbumId: it.id,
+            tralbumType: it.t,
+            minPrice: it.pr,
+            bandId: it.b,
+            releaseUrl: it.u,
+            syncNum: ctx.syncNum,
+            clientId: ctx.clientId,
+            fanId: ctx.fanId,
+            countryCode: ctx.countryCode,
+            cartLength: added,
+          });
+          if (result.ok) {
+            updateSyncNum(result.body);
+            added++;
+          }
           overlay.setProgress(`${added} / ${items.length} items`);
           if (cancelled) break;
         }
@@ -762,7 +778,26 @@ async function main() {
       return;
     }
 
-    const items = selectedItems.map((i) => ({ u: i.url, p: i.purchaseType }));
+    // Resolve track data here in the normal window where the cache is warm
+    // (resolvePlaylist already fetched these). The incognito window's storage
+    // is a separate empty instance, so it can't use the cache.
+    const items: Array<{ u: string; id: number; t: 't' | 'a'; pr: number; b: number | null }> = [];
+    for (const item of selectedItems) {
+      const tracks = await fetchTracksForUrl(item.url);
+      if (tracks.length === 0) continue;
+      const track = tracks[0]!;
+      const isTrackAdd = item.purchaseType === 'track';
+      const tralbumId = isTrackAdd ? (track.trackId ?? track.releaseId) : track.releaseId;
+      if (tralbumId === null) continue;
+      const tralbumType: 't' | 'a' = isTrackAdd ? 't' : (track.releaseType === 'track' ? 't' : 'a');
+      const minPrice = isTrackAdd ? (track.trackMinPrice ?? track.minPrice) : track.minPrice;
+      items.push({ u: item.url, id: tralbumId, t: tralbumType, pr: minPrice ?? 0, b: track.bandId });
+    }
+    if (items.length === 0) {
+      player.showToast('Could not resolve any selected items — check the console', 'error');
+      return;
+    }
+
     const result = await sendBcpMessage({ type: 'open-incognito-checkout', items });
     if (!result.ok) {
       player.showToast(
