@@ -1,7 +1,7 @@
 import type { CartItem, PlaylistTrack, SavedCartItem, CartSnapshot } from './types';
 import { parseTralbum } from './bandcamp';
 import { Player } from './player';
-import { probeCart, probeDiscography, injectDiscographyButton, injectRestoreCartButton } from './probe';
+import { probeCart, probeDiscography, injectDiscographyButton, injectRestoreCartButton, injectRemovePurchasedButton } from './probe';
 import { addSnapshotIfChanged, diffSnapshot } from './cart-history';
 import { normalizeUrl } from './url';
 import {
@@ -108,6 +108,27 @@ async function loadSnapshots(): Promise<CartSnapshot[]> {
 
 function saveSnapshots(snapshots: CartSnapshot[]): void {
   chrome.storage.local.set({ [CART_HISTORY_KEY]: { snapshots, updatedAt: Date.now() } }).catch(() => {});
+}
+
+// --- Pending-purchase storage -------------------------------------------------
+
+const PENDING_PURCHASE_KEY = 'bcp_pending_purchase_v1';
+
+async function loadPendingPurchase(): Promise<SavedCartItem[]> {
+  try {
+    const result = await chrome.storage.local.get(PENDING_PURCHASE_KEY);
+    return (result[PENDING_PURCHASE_KEY] as SavedCartItem[] | undefined) ?? [];
+  } catch {
+    return [];
+  }
+}
+
+function savePendingPurchase(items: SavedCartItem[]): void {
+  chrome.storage.local.set({ [PENDING_PURCHASE_KEY]: items }).catch(() => {});
+}
+
+function clearPendingPurchase(): void {
+  chrome.storage.local.remove(PENDING_PURCHASE_KEY).catch(() => {});
 }
 
 // --- Cart history modal ------------------------------------------------------
@@ -371,6 +392,7 @@ async function removeCartItem(item: SavedCartItem): Promise<boolean> {
 interface ProgressOverlay {
   setTitle(text: string): void;
   setProgress(text: string): void;
+  showDone(onCheckout: () => void, onContinue: () => void): void;
   remove(): void;
 }
 
@@ -397,8 +419,9 @@ function createProgressOverlay(initialTitle: string, onCancel?: () => void): Pro
   Object.assign(noteEl.style, { color: '#666', fontSize: '11px', marginTop: '10px' });
   noteEl.textContent = 'Please don\'t close this tab';
   card.append(titleEl, progressEl, noteEl);
+  let cancelBtn: HTMLButtonElement | undefined;
   if (onCancel) {
-    const cancelBtn = document.createElement('button');
+    cancelBtn = document.createElement('button');
     Object.assign(cancelBtn.style, {
       background: 'none', border: '1px solid #444', borderRadius: '4px',
       color: '#999', fontSize: '11px', padding: '4px 12px', marginTop: '14px',
@@ -406,8 +429,8 @@ function createProgressOverlay(initialTitle: string, onCancel?: () => void): Pro
     });
     cancelBtn.textContent = 'Cancel';
     cancelBtn.addEventListener('click', () => {
-      cancelBtn.disabled = true;
-      cancelBtn.textContent = 'Cancelling…';
+      cancelBtn!.disabled = true;
+      cancelBtn!.textContent = 'Cancelling…';
       onCancel();
     });
     card.appendChild(cancelBtn);
@@ -417,8 +440,49 @@ function createProgressOverlay(initialTitle: string, onCancel?: () => void): Pro
   return {
     setTitle: (text) => { titleEl.textContent = text; },
     setProgress: (text) => { progressEl.textContent = text; },
+    showDone: (onCheckout, onContinue) => {
+      titleEl.textContent = 'Your cart is ready!';
+      progressEl.textContent = '';
+      noteEl.style.display = 'none';
+      cancelBtn?.remove();
+      const btnRow = document.createElement('div');
+      Object.assign(btnRow.style, { marginTop: '16px', display: 'flex', gap: '8px', justifyContent: 'center' });
+      const goBtn = document.createElement('button');
+      Object.assign(goBtn.style, {
+        background: '#1da0c3', border: 'none', borderRadius: '4px',
+        color: '#fff', fontSize: '13px', padding: '8px 16px',
+        cursor: 'pointer', fontFamily: ff, fontWeight: '600',
+      });
+      goBtn.textContent = 'Go to checkout';
+      goBtn.addEventListener('click', onCheckout);
+      const contBtn = document.createElement('button');
+      Object.assign(contBtn.style, {
+        background: 'none', border: '1px solid #444', borderRadius: '4px',
+        color: '#ccc', fontSize: '13px', padding: '8px 16px',
+        cursor: 'pointer', fontFamily: ff,
+      });
+      contBtn.textContent = 'Continue browsing';
+      contBtn.addEventListener('click', onContinue);
+      btnRow.append(goBtn, contBtn);
+      card.appendChild(btnRow);
+    },
     remove: () => { backdrop.remove(); },
   };
+}
+
+function setupRemovePurchasedButton(items: SavedCartItem[]): void {
+  const btn = injectRemovePurchasedButton(items.length);
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    if (!confirm(`Remove ${items.length} track${items.length !== 1 ? 's' : ''} from your cart?`)) return;
+    btn.disabled = true;
+    for (let i = 0; i < items.length; i++) {
+      btn.textContent = `Removing ${i + 1} / ${items.length}…`;
+      await removeCartItem(items[i]!);
+    }
+    clearPendingPurchase();
+    location.reload();
+  });
 }
 
 async function doRestore(button: HTMLButtonElement, toAdd: SavedCartItem[], toRemove: SavedCartItem[]): Promise<void> {
@@ -527,11 +591,13 @@ async function main() {
           overlay.setTitle('Could not add items to cart');
           overlay.setProgress('Try logging into Bandcamp in this window and refreshing.');
           // Leave overlay visible so the message is readable; user closes the tab.
-        } else {
+        } else if (cancelled) {
           overlay.remove();
-          if (!cancelled) {
-            location.assign('https://bandcamp.com/cart#bcp_go_checkout=1');
-          }
+        } else {
+          overlay.showDone(
+            () => { location.assign('https://bandcamp.com/cart#bcp_go_checkout=1'); },
+            () => { overlay.remove(); },
+          );
         }
       }
 
@@ -567,22 +633,52 @@ async function main() {
   // ---------------------------------------------------------------------------
 
   const cartItems = probeCart();
-
-  const liveItems: SavedCartItem[] = cartItems.map((i) => ({ url: i.url, title: i.title, purchaseType: i.purchaseType }));
-  const snapshots = addSnapshotIfChanged(await loadSnapshots(), liveItems);
-  saveSnapshots(snapshots);
-
   const settings = await loadSettings();
-  if (settings.showCartHistoryBtn && snapshots.length > 0) {
-    const btn = injectRestoreCartButton(snapshots.length);
-    if (btn) {
-      btn.addEventListener('click', async () => {
-        const currentItems: SavedCartItem[] = probeCart().map((i) => ({ url: i.url, title: i.title, purchaseType: i.purchaseType }));
-        const selected = await showSnapshotListModal(snapshots, currentItems);
-        if (!selected) return;
-        const { toAdd, extra } = diffSnapshot(selected, currentItems);
-        if (toAdd.length > 0 || extra.length > 0) await doRestore(btn, toAdd, extra);
+
+  if (!chrome.extension.inIncognitoContext) {
+    const liveItems: SavedCartItem[] = cartItems.map((i) => ({ url: i.url, title: i.title, purchaseType: i.purchaseType }));
+    const snapshots = addSnapshotIfChanged(await loadSnapshots(), liveItems);
+    saveSnapshots(snapshots);
+
+    if (settings.showCartHistoryBtn && snapshots.length > 0) {
+      const btn = injectRestoreCartButton(snapshots.length);
+      if (btn) {
+        btn.addEventListener('click', async () => {
+          const currentItems: SavedCartItem[] = probeCart().map((i) => ({ url: i.url, title: i.title, purchaseType: i.purchaseType }));
+          const selected = await showSnapshotListModal(snapshots, currentItems);
+          if (!selected) return;
+          const { toAdd, extra } = diffSnapshot(selected, currentItems);
+          if (toAdd.length > 0 || extra.length > 0) await doRestore(btn, toAdd, extra);
+        });
+      }
+    }
+
+    // Re-show the cleanup button if a pending-purchase list was saved from a previous session.
+    const pending = await loadPendingPurchase();
+    if (pending.length > 0) {
+      const cartUrls = new Set(cartItems.map((i) => normalizeUrl(i.url)));
+      const stillInCart = pending.filter((i) => cartUrls.has(normalizeUrl(i.url)));
+      if (stillInCart.length > 0) {
+        // Trim the stored list if some items were already manually removed from the cart.
+        if (stillInCart.length < pending.length) savePendingPurchase(stillInCart);
+        setupRemovePurchasedButton(stillInCart);
+      } else {
+        // All previously purchased items are already gone — nothing to clean up.
+        clearPendingPurchase();
+      }
+    }
+  } else if (settings.showCartHistoryBtn) {
+    const anchor = document.getElementById('sidecart')
+      ?? document.querySelector('#sidecartReveal')
+      ?? document.getElementById('sidecartBody');
+    if (anchor) {
+      const note = document.createElement('div');
+      Object.assign(note.style, {
+        color: '#666', fontSize: '11px', marginTop: '6px', textAlign: 'center',
+        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
       });
+      note.textContent = 'No history tracked in incognito mode';
+      anchor.insertAdjacentElement('afterend', note);
     }
   }
 
@@ -804,7 +900,15 @@ async function main() {
         'Could not open a private window. Enable "Allow in incognito" for this extension in chrome://extensions, then try again.',
         'error',
       );
+      return;
     }
+
+    // Persist selected items so the cleanup button survives a page reload.
+    const toRemove: SavedCartItem[] = selectedItems.map((i) => ({
+      url: i.url, title: i.title, purchaseType: i.purchaseType,
+    }));
+    savePendingPurchase(toRemove);
+    setupRemovePurchasedButton(toRemove);
   };
 
   // Keep cart state in sync when Bandcamp's own JS updates the sidecart.
@@ -1131,6 +1235,12 @@ async function readCache(url: string): Promise<PlaylistTrack[] | null> {
       chrome.storage.local.remove(key);
       return null;
     }
+    // Treat cached empty arrays as misses so transient parse failures don't
+    // permanently block resolution on subsequent calls.
+    if (entry.tracks.length === 0) {
+      chrome.storage.local.remove(key);
+      return null;
+    }
     return entry.tracks;
   } catch {
     return null;
@@ -1138,6 +1248,7 @@ async function readCache(url: string): Promise<PlaylistTrack[] | null> {
 }
 
 function writeCache(url: string, tracks: PlaylistTrack[]): void {
+  if (tracks.length === 0) return; // Don't cache parse failures — allow retries.
   const entry: CacheEntry = { tracks, cachedAt: Date.now() };
   chrome.storage.local.set({ [CACHE_KEY_PREFIX + url]: entry }).catch(() => {});
 }
@@ -1149,10 +1260,14 @@ async function fetchTracksForUrl(url: string): Promise<PlaylistTrack[]> {
     const response = await sendBcpMessage({ type: 'fetch', url });
     if (!response.error) {
       const parsed = parseTralbum(response.html ?? '', url);
+      if (parsed.length === 0) console.warn('[bcp] fetchTracksForUrl: no tracks parsed from', url);
       writeCache(url, parsed);
       return parsed;
     }
-  } catch {}
+    console.error('[bcp] fetchTracksForUrl: fetch error for', url, response.error);
+  } catch (err) {
+    console.error('[bcp] fetchTracksForUrl: exception for', url, err);
+  }
   return [];
 }
 
