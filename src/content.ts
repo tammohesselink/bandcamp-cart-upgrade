@@ -1,7 +1,7 @@
 import type { CartItem, PlaylistTrack, SavedCartItem, CartSnapshot } from './types';
 import { parseTralbum } from './bandcamp';
 import { Player } from './player';
-import { probeCart, probeDiscography, injectDiscographyButton, injectRestoreCartButton, injectPendingRestoreButton } from './probe';
+import { probeCart, probeDiscography, injectDiscographyButton, injectRestoreCartButton } from './probe';
 import { addSnapshotIfChanged, diffSnapshot } from './cart-history';
 import { normalizeUrl } from './url';
 import {
@@ -108,48 +108,6 @@ async function loadSnapshots(): Promise<CartSnapshot[]> {
 
 function saveSnapshots(snapshots: CartSnapshot[]): void {
   chrome.storage.local.set({ [CART_HISTORY_KEY]: { snapshots, updatedAt: Date.now() } }).catch(() => {});
-}
-
-// --- Pending-restore storage (partial checkout) -------------------------------
-// Leftovers from a partial checkout are persisted here until the user clicks
-// "Restore cart from before purchase" on the next non-checkout Bandcamp page.
-
-const PENDING_RESTORE_KEY = 'bcp_pending_restore_v1';
-// A restore is considered stale (lock released) if the active tab hasn't
-// updated its heartbeat within this window. Covers the case where a tab is
-// closed mid-restore.
-const STALE_RESTORE_MS = 30_000;
-
-interface PendingRestore {
-  items: SavedCartItem[];
-  savedAt: number;
-  // 'pending' = waiting for user click; 'restoring' = one tab is actively re-adding.
-  status: 'pending' | 'restoring';
-  heartbeatAt?: number;  // updated after each item while restoring
-  done?: number;         // items re-added so far (for cross-tab progress label)
-}
-
-async function loadPendingRestore(): Promise<PendingRestore | null> {
-  try {
-    const result = await chrome.storage.local.get(PENDING_RESTORE_KEY);
-    return (result[PENDING_RESTORE_KEY] as PendingRestore | undefined) ?? null;
-  } catch {
-    return null;
-  }
-}
-
-function savePendingRestore(items: SavedCartItem[]): Promise<void> {
-  const entry: PendingRestore = { items, savedAt: Date.now(), status: 'pending' };
-  return chrome.storage.local.set({ [PENDING_RESTORE_KEY]: entry });
-}
-
-function clearPendingRestore(): Promise<void> {
-  return chrome.storage.local.remove(PENDING_RESTORE_KEY).catch(() => {});
-}
-
-// Returns true when another tab owns an active (non-stale) restore lock.
-function isRestoreLocked(p: PendingRestore): boolean {
-  return p.status === 'restoring' && p.heartbeatAt != null && (Date.now() - p.heartbeatAt) < STALE_RESTORE_MS;
 }
 
 // --- Cart history modal ------------------------------------------------------
@@ -300,9 +258,9 @@ function showSnapshotListModal(
 }
 
 // --- Cart mutation primitives -------------------------------------------------
-// Used by doRestore (cart history), onCheckoutSelected (partial checkout), and
-// the auto-restore-on-return path. Keeping the hardened add/remove logic here
-// ensures sync_num handling and line-item-id resolution are always consistent.
+// Used by doRestore (cart history) and the incognito checkout stage A path.
+// Keeping the hardened add/remove logic here ensures sync_num handling and
+// line-item-id resolution are always consistent.
 
 async function addCartItem(item: SavedCartItem, cartLengthHint: number): Promise<boolean> {
   const tracks = await fetchTracksForUrl(item.url);
@@ -502,119 +460,96 @@ async function doRestore(button: HTMLButtonElement, toAdd: SavedCartItem[], toRe
   location.reload();
 }
 
-// --- Pending restore: button + state machine ---------------------------------
-
-async function setupPendingRestoreButton(player: Player): Promise<void> {
-  if (isCheckoutPage()) return;
-  const pending = await loadPendingRestore();
-  if (!pending || pending.items.length === 0) return;
-
-  const btn = injectPendingRestoreButton();
-  if (!btn) return;
-
-  const render = (p: PendingRestore) => {
-    const total = p.items.length;
-    if (isRestoreLocked(p)) {
-      btn.disabled = true;
-      btn.textContent = `Restoring cart… ${p.done ?? 0} / ${total}`;
-    } else {
-      btn.disabled = false;
-      btn.textContent = `Restore cart from before purchase (${total})`;
-    }
-  };
-  render(pending);
-
-  let runningHere = false;
-  btn.addEventListener('click', () => {
-    void runPendingRestore(btn, player, () => { runningHere = true; });
-  });
-
-  // Reflect status changes made by other tabs (or our own heartbeats, harmlessly).
-  chrome.storage.onChanged.addListener((changes, area) => {
-    if (area !== 'local' || !changes[PENDING_RESTORE_KEY]) return;
-    const next = changes[PENDING_RESTORE_KEY].newValue as PendingRestore | undefined;
-    if (!next) {
-      // Key removed: restore completed or cleared by another tab.
-      if (!runningHere) btn.remove();
-      return;
-    }
-    if (!runningHere) render(next);
-  });
-}
-
-async function runPendingRestore(
-  btn: HTMLButtonElement,
-  player: Player,
-  markRunning: () => void,
-): Promise<void> {
-  const pending = await loadPendingRestore();
-  if (!pending || pending.items.length === 0) { btn.remove(); return; }
-  if (isRestoreLocked(pending)) return;  // another tab holds a live lock
-
-  markRunning();
-  const total = pending.items.length;
-
-  let cancelled = false;
-  // Claim the restoring lock and refresh the heartbeat after each item.
-  const claim = (done: number) =>
-    chrome.storage.local.set({
-      [PENDING_RESTORE_KEY]: { ...pending, status: 'restoring', heartbeatAt: Date.now(), done },
-    }).catch(() => {});
-  await claim(0);
-  btn.disabled = true;
-
-  const overlay = createProgressOverlay('Restoring cart…', () => { cancelled = true; });
-  overlay.setProgress(`0 / ${total} items`);
-  const onBeforeUnload = (e: BeforeUnloadEvent) => { e.preventDefault(); };
-  window.addEventListener('beforeunload', onBeforeUnload);
-
-  // Track which item indices were successfully added so we know what's left
-  // if the user cancels partway through.
-  const addedIndices = new Set<number>();
-  for (let i = 0; i < pending.items.length; i++) {
-    const ok = await addCartItem(pending.items[i]!, probeCart().length + addedIndices.size);
-    if (ok) addedIndices.add(i);
-    overlay.setProgress(`${addedIndices.size} / ${total} items`);
-    await claim(addedIndices.size);
-    if (cancelled) break;
-  }
-
-  window.removeEventListener('beforeunload', onBeforeUnload);
-  overlay.remove();
-
-  if (cancelled) {
-    // Items not yet successfully added remain in the pending entry so the user
-    // can click the button again to continue.
-    const remaining = pending.items.filter((_, i) => !addedIndices.has(i));
-    if (remaining.length === 0) {
-      await clearPendingRestore();
-      location.reload();
-    } else {
-      await chrome.storage.local.set({
-        [PENDING_RESTORE_KEY]: { ...pending, status: 'pending', items: remaining, heartbeatAt: undefined, done: undefined },
-      }).catch(() => {});
-      btn.disabled = false;
-      btn.textContent = `Restore cart from before purchase (${remaining.length})`;
-    }
-  } else if (addedIndices.size === total) {
-    await clearPendingRestore();
-    location.reload();
-  } else {
-    // Some adds failed — revert to 'pending' so the user can retry.
-    await chrome.storage.local.set({
-      [PENDING_RESTORE_KEY]: { ...pending, status: 'pending', heartbeatAt: undefined, done: undefined },
-    }).catch(() => {});
-    btn.disabled = false;
-    btn.textContent = `Restore cart from before purchase (${total})`;
-    player.showToast('Some items could not be restored — click to try again', 'error');
-  }
-}
-
-// -----------------------------------------------------------------------------
-
 main().catch(console.error);
 
 async function main() {
+  // --- Incognito checkout: Stage A — add selected items to a fresh cart ------
+  // The normal window opens this URL: bandcamp.com/cart#bcp_cart=<items>.
+  // We parse the payload, add items via the incognito session's cookie jar,
+  // then reload to Stage B.
+  if (chrome.extension.inIncognitoContext) {
+    const hash = window.location.hash;
+
+    if (hash.startsWith('#bcp_cart=')) {
+      history.replaceState(null, '', window.location.pathname);
+
+      type IncognitoItem = { u: string; p: 'track' | 'album' | undefined };
+      const items: IncognitoItem[] = [];
+      try {
+        const raw = JSON.parse(decodeURIComponent(hash.slice('#bcp_cart='.length))) as unknown[];
+        for (const x of raw) {
+          if (x && typeof (x as { u?: unknown }).u === 'string') {
+            const p = (x as { p?: unknown }).p;
+            items.push({
+              u: (x as { u: string }).u,
+              p: p === 'track' ? 'track' : p === 'album' ? 'album' : undefined,
+            });
+          }
+        }
+      } catch {
+        console.error('[bcp] incognito stage A: could not parse payload');
+      }
+
+      if (items.length > 0) {
+        latestSyncNum = null;
+        cartLineItemIds.clear();
+
+        let cancelled = false;
+        const overlay = createProgressOverlay('Building your cart…', () => { cancelled = true; });
+        overlay.setProgress(`0 / ${items.length} items`);
+
+        let added = 0;
+        for (let i = 0; i < items.length; i++) {
+          const it = items[i]!;
+          const ok = await addCartItem({ url: it.u, title: '', purchaseType: it.p }, added);
+          if (ok) added++;
+          overlay.setProgress(`${added} / ${items.length} items`);
+          if (cancelled) break;
+        }
+
+        if (!cancelled && added === 0) {
+          overlay.setTitle('Could not add items to cart');
+          overlay.setProgress('Try logging into Bandcamp in this window and refreshing.');
+          // Leave overlay visible so the message is readable; user closes the tab.
+        } else {
+          overlay.remove();
+          if (!cancelled) {
+            location.assign('https://bandcamp.com/cart#bcp_go_checkout=1');
+          }
+        }
+      }
+
+      return;
+    }
+
+    // --- Stage B — cart is populated, click checkout -------------------------
+    // We arrive here after Stage A reloads bandcamp.com/cart with this hash.
+    if (hash.startsWith('#bcp_go_checkout=')) {
+      history.replaceState(null, '', window.location.pathname);
+
+      // Poll for the checkout button — the cart page may still be rendering.
+      let clicked = false;
+      for (let attempt = 0; attempt < 5 && !clicked; attempt++) {
+        if (attempt > 0) await new Promise<void>((r) => setTimeout(r, 500));
+        // Try the sidecart-aware helper first, then a document-wide text fallback
+        // for the full cart page layout (no sidecart container).
+        clicked = clickCheckout();
+        if (!clicked) {
+          for (const el of Array.from(document.querySelectorAll<HTMLElement>('a, button'))) {
+            if (/check\s?out/i.test(el.textContent ?? '')) {
+              el.click();
+              clicked = true;
+              break;
+            }
+          }
+        }
+      }
+      if (!clicked) location.assign('https://bandcamp.com/cart');
+      return;
+    }
+  }
+  // ---------------------------------------------------------------------------
+
   const cartItems = probeCart();
 
   const liveItems: SavedCartItem[] = cartItems.map((i) => ({ url: i.url, title: i.title, purchaseType: i.purchaseType }));
@@ -653,8 +588,6 @@ async function main() {
   const player = new Player([]);
   document.body.appendChild(player.wrapper);
   document.body.style.paddingBottom = '90px';
-
-  await setupPendingRestoreButton(player);
 
   // Build the initial cart URL set and purchase-type map.
   cartItemTypes = buildCartItemTypes(cartItems);
@@ -812,15 +745,15 @@ async function main() {
     player.setStatus('Remove failed: could not sync cart state', 'error');
   };
 
-  // Partial-checkout: clear the cart instantly via cookie deletion, re-add
-  // only the selected items, then navigate to checkout.
+  // Partial-checkout: open a private window with a fresh cart containing only
+  // the selected items. The main cart is never touched.
   player.onCheckoutSelected = async (selectedRawUrls) => {
     const current = probeCart();
     const sel = new Set(selectedRawUrls.map(normalizeUrl));
     const leftover = current.filter((i) => !sel.has(normalizeUrl(i.url)));
-    const selected = current.filter((i) => sel.has(normalizeUrl(i.url)));
+    const selectedItems = current.filter((i) => sel.has(normalizeUrl(i.url)));
 
-    // Selecting everything is a normal full-cart checkout — no cart mutations.
+    // Selecting everything is a normal full-cart checkout — no private window needed.
     if (leftover.length === 0) {
       if (!clickCheckout()) {
         player.showToast('Could not find checkout button — opening cart page', 'warn');
@@ -829,59 +762,13 @@ async function main() {
       return;
     }
 
-    const overlay = createProgressOverlay('Preparing checkout…');
-    const onBeforeUnload = (e: BeforeUnloadEvent) => { e.preventDefault(); };
-    window.addEventListener('beforeunload', onBeforeUnload);
-
-    try {
-      // Persist leftovers before touching the cart so a crash/early-close still
-      // leaves the restore key in place.
-      await savePendingRestore(
-        leftover.map((i) => ({ url: i.url, title: i.title, purchaseType: i.purchaseType }))
+    const items = selectedItems.map((i) => ({ u: i.url, p: i.purchaseType }));
+    const result = await sendBcpMessage({ type: 'open-incognito-checkout', items });
+    if (!result.ok) {
+      player.showToast(
+        'Could not open a private window. Enable "Allow in incognito" for this extension in chrome://extensions, then try again.',
+        'error',
       );
-
-      // Phase 1 — clear the cart by deleting the cart_client_id cookie.
-      overlay.setTitle('Clearing cart…');
-      overlay.setProgress('');
-      const clearResult = await sendBcpMessage({ type: 'cart-clear' });
-      if (!clearResult.ok) {
-        player.showToast('Could not clear cart — checkout aborted', 'error');
-        console.error('[bcp] cart-clear failed:', clearResult.error);
-        return;
-      }
-      // Reset cached sync state so the re-add loop starts with a fresh session.
-      latestSyncNum = null;
-      cartLineItemIds.clear();
-
-      // Phase 2 — re-add only the selected items. Cart is now empty so hint = i.
-      overlay.setTitle('Adding selected items…');
-      const failedAdd: string[] = [];
-      for (let i = 0; i < selected.length; i++) {
-        overlay.setProgress(`${i + 1} / ${selected.length}`);
-        const item = selected[i]!;
-        const ok = await addCartItem({ url: item.url, title: item.title, purchaseType: item.purchaseType }, i);
-        if (!ok) failedAdd.push(item.title || item.url);
-      }
-
-      if (failedAdd.length === selected.length && selected.length > 0) {
-        player.showToast('Could not add selected items to cart — checkout aborted', 'error');
-        console.error('[bcp] partial checkout re-add failed for all items:', failedAdd);
-        return;
-      }
-      if (failedAdd.length > 0) {
-        console.warn('[bcp] partial checkout: some selected items failed to add:', failedAdd);
-      }
-
-      // Phase 3 — navigate to checkout.
-      overlay.setTitle('Going to checkout…');
-      overlay.setProgress('');
-      if (!clickCheckout()) {
-        player.showToast('Could not find checkout button — opening cart page', 'warn');
-        location.assign('/cart');
-      }
-    } finally {
-      window.removeEventListener('beforeunload', onBeforeUnload);
-      overlay.remove();
     }
   };
 

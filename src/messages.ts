@@ -30,11 +30,12 @@ export interface CartRemoveRequest {
   fanId: string;
 }
 
-export interface CartClearRequest {
-  type: 'cart-clear';
+export interface OpenIncognitoCheckoutRequest {
+  type: 'open-incognito-checkout';
+  items: Array<{ u: string; p: 'track' | 'album' | undefined }>;
 }
 
-export type BcpRequest = FetchRequest | CartAddRequest | CartRemoveRequest | CartClearRequest;
+export type BcpRequest = FetchRequest | CartAddRequest | CartRemoveRequest | OpenIncognitoCheckoutRequest;
 
 export interface FetchResponse {
   html?: string;
@@ -53,7 +54,7 @@ export type BcpResponse = FetchResponse | CartMutationResponse;
 // response type inferred from the request they send.
 export function sendBcpMessage(msg: FetchRequest): Promise<FetchResponse>;
 export function sendBcpMessage(
-  msg: CartAddRequest | CartRemoveRequest | CartClearRequest
+  msg: CartAddRequest | CartRemoveRequest | OpenIncognitoCheckoutRequest
 ): Promise<CartMutationResponse>;
 export function sendBcpMessage(msg: BcpRequest): Promise<BcpResponse> {
   return chrome.runtime.sendMessage(msg);

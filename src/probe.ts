@@ -102,24 +102,6 @@ export function injectRestoreCartButton(snapshotCount: number): HTMLButtonElemen
 }
 
 
-// --- Pending-restore button injection ----------------------------------------
-
-export function injectPendingRestoreButton(): HTMLButtonElement | null {
-  const anchor = document.getElementById('sidecart')
-    ?? document.querySelector('#sidecartReveal')
-    ?? document.getElementById('sidecartBody');
-  if (!anchor) return null;
-
-  const existing = document.querySelector<HTMLButtonElement>('.bcp-pending-restore-btn');
-  if (existing) return existing;
-
-  const button = document.createElement('button');
-  button.className = 'buttonLink bcp-pending-restore-btn';
-  anchor.insertAdjacentElement('afterend', button);
-  return button;
-}
-
-
 // --- Discography DOM probe ---------------------------------------------------
 
 export function probeDiscography(): CartItem[] {

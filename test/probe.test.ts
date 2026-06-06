@@ -1,7 +1,7 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { describe, it, expect, beforeEach } from 'vitest';
-import { probeCart, probeDiscography, injectDiscographyButton, readDataCart, injectRestoreCartButton, injectPendingRestoreButton, type DataCartItem } from '../src/probe';
+import { probeCart, probeDiscography, injectDiscographyButton, readDataCart, injectRestoreCartButton, type DataCartItem } from '../src/probe';
 import { findCheckoutControl, clickCheckout } from '../src/bandcamp-dom';
 
 function fixture(name: string): string {
@@ -343,50 +343,6 @@ describe('injectRestoreCartButton — no sidecart anchor', () => {
 
   it('returns null when #sidecart, #sidecartReveal and #sidecartBody are absent', () => {
     expect(injectRestoreCartButton(5)).toBeNull();
-  });
-});
-
-// --- injectPendingRestoreButton ----------------------------------------------
-
-describe('injectPendingRestoreButton — with #sidecart', () => {
-  beforeEach(() => loadFixture('sidecart-with-data-cart.html'));
-
-  it('returns a button element', () => {
-    const btn = injectPendingRestoreButton();
-    expect(btn?.tagName).toBe('BUTTON');
-  });
-
-  it('button has bcp-pending-restore-btn class', () => {
-    const btn = injectPendingRestoreButton();
-    expect(btn?.classList.contains('bcp-pending-restore-btn')).toBe(true);
-  });
-
-  it('button has buttonLink class', () => {
-    const btn = injectPendingRestoreButton();
-    expect(btn?.classList.contains('buttonLink')).toBe(true);
-  });
-
-  it('button is inserted after #sidecart', () => {
-    const btn = injectPendingRestoreButton();
-    const sidecart = document.getElementById('sidecart')!;
-    expect(sidecart.nextElementSibling).toBe(btn);
-  });
-
-  it('does not double-inject', () => {
-    injectPendingRestoreButton();
-    injectPendingRestoreButton();
-    const btns = document.querySelectorAll('.bcp-pending-restore-btn');
-    expect(btns).toHaveLength(1);
-  });
-});
-
-describe('injectPendingRestoreButton — no sidecart anchor', () => {
-  beforeEach(() => {
-    document.documentElement.innerHTML = '<body></body>';
-  });
-
-  it('returns null when #sidecart, #sidecartReveal and #sidecartBody are absent', () => {
-    expect(injectPendingRestoreButton()).toBeNull();
   });
 });
 
