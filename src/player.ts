@@ -95,6 +95,7 @@ export class Player {
     this.wrapper.appendChild(this.bar);
 
     this.bindAudioEvents();
+    this.setupMediaSession();
 
     chrome.storage.local.get(['tempoRangeIndex', 'preservesPitch', 'showDiscographyButton'], (result) => {
       if (typeof result['tempoRangeIndex'] === 'number') {
@@ -603,6 +604,7 @@ export class Player {
     this.updateNavButtons();
     this.updateQueueEl();
     this.updateCartActions(track);
+    this.updateMediaSessionMetadata(track);
 
     if (!silent && this.activeId === 'currentpage') {
       this.onCurrentPageTrackChange?.(track.pageUrl);
@@ -626,11 +628,13 @@ export class Player {
   private bindAudioEvents() {
     this.audio.addEventListener('play', () => {
       this.playPauseBtn.textContent = '⏸';
+      if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
       this.onPlaybackStart?.();
     });
 
     this.audio.addEventListener('pause', () => {
       this.playPauseBtn.textContent = '▶';
+      if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
     });
 
     this.audio.addEventListener('timeupdate', () => {
@@ -650,6 +654,30 @@ export class Player {
     this.audio.addEventListener('error', () => {
       console.warn('[bcp] Audio error for track', this.active()?.lastIndex, this.audio.error);
       this.next();
+    });
+  }
+
+  private setupMediaSession() {
+    if (!('mediaSession' in navigator)) return;
+    navigator.mediaSession.setActionHandler('play', () => this.play());
+    navigator.mediaSession.setActionHandler('pause', () => this.pause());
+    navigator.mediaSession.setActionHandler('previoustrack', () => this.prev());
+    navigator.mediaSession.setActionHandler('nexttrack', () => this.next());
+    navigator.mediaSession.setActionHandler('seekto', (details) => {
+      if (details.seekTime !== undefined) this.audio.currentTime = details.seekTime;
+    });
+  }
+
+  private updateMediaSessionMetadata(track: PlaylistTrack) {
+    if (!('mediaSession' in navigator)) return;
+    const artwork = track.artworkUrl
+      ? [{ src: track.artworkUrl }]
+      : [];
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: track.trackTitle || '(untitled)',
+      artist: track.artist || '',
+      album: track.albumTitle || '',
+      artwork,
     });
   }
 
