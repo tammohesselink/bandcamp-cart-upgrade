@@ -82,6 +82,19 @@ chrome.runtime.onMessage.addListener((message: BcpRequest, sender, sendResponse)
     return true;
   }
 
+  if (message.type === 'cart-clear') {
+    // Delete the cart_client_id cookie — Bandcamp uses this to tie the browser
+    // session to the server-side cart. Removing it empties the cart instantly.
+    chrome.cookies.remove({ url: 'https://bandcamp.com', name: 'cart_client_id' })
+      .then(() => {
+        sendResponse({ ok: true });
+      })
+      .catch((err: unknown) => {
+        sendResponse({ ok: false, error: String(err) });
+      });
+    return true;
+  }
+
   if (message.type === 'cart-add') {
     // Endpoint: POST {artist}.bandcamp.com/cart/cb
     // Body fields mirror Bandcamp's own add-to-cart request (captured via DevTools).

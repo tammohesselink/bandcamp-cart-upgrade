@@ -779,10 +779,8 @@ async function main() {
     player.setStatus('Remove failed: could not sync cart state', 'error');
   };
 
-  // Partial-checkout: flush the entire cart, re-add only the selected items,
-  // then navigate to checkout. Flushing first is faster for large carts because
-  // removeCartItem skips the per-item page fetch after the first removal
-  // (cartLineItemIds is populated from cart_data.items in each response).
+  // Partial-checkout: clear the cart instantly via cookie deletion, re-add
+  // only the selected items, then navigate to checkout.
   player.onCheckoutSelected = async (selectedRawUrls) => {
     const current = probeCart();
     const sel = new Set(selectedRawUrls.map(normalizeUrl));
@@ -809,26 +807,18 @@ async function main() {
         leftover.map((i) => ({ url: i.url, title: i.title, purchaseType: i.purchaseType }))
       );
 
-      // Phase 1 — flush the entire cart.
+      // Phase 1 — clear the cart by deleting the cart_client_id cookie.
       overlay.setTitle('Clearing cart…');
-      const failedFlush: string[] = [];
-      for (let i = 0; i < current.length; i++) {
-        overlay.setProgress(`${i + 1} / ${current.length}`);
-        const item = current[i]!;
-        const ok = await removeCartItem({ url: item.url, title: item.title, purchaseType: item.purchaseType });
-        if (!ok) failedFlush.push(item.title || item.url);
-      }
-
-      if (failedFlush.length > 0) {
-        // Abort: navigating with items still in the cart would charge the user
-        // for things they didn't select. The pending key stays for auto-restore.
-        player.showToast(
-          `Could not remove ${failedFlush.length} item${failedFlush.length !== 1 ? 's' : ''} — checkout aborted`,
-          'error'
-        );
-        console.error('[bcp] partial checkout flush aborted, remove failures:', failedFlush);
+      overlay.setProgress('');
+      const clearResult = await sendBcpMessage({ type: 'cart-clear' });
+      if (!clearResult.ok) {
+        player.showToast('Could not clear cart — checkout aborted', 'error');
+        console.error('[bcp] cart-clear failed:', clearResult.error);
         return;
       }
+      // Reset cached sync state so the re-add loop starts with a fresh session.
+      latestSyncNum = null;
+      cartLineItemIds.clear();
 
       // Phase 2 — re-add only the selected items. Cart is now empty so hint = i.
       overlay.setTitle('Adding selected items…');

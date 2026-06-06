@@ -7,7 +7,7 @@
     "default_popup": "popup.html",
     "default_title": "Bandcamp Cart Player"
   },
-  "permissions": ["storage"],
+  "permissions": ["storage", "cookies"],
   "host_permissions": ["https://bandcamp.com/*", "https://*.bandcamp.com/*"],
   "background": {
     "service_worker": "background.js",
