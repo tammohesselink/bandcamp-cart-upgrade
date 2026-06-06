@@ -1335,6 +1335,9 @@ function setupNativePlayerSync(player: Player): () => void {
   // --- native → bottom: native paused ---
   const onNativePause = () => {
     if (suppressNative) return;
+    // While the tab is backgrounded, Chrome suspends the muted native <audio>
+    // and fires 'pause'. That is not a user action — don't stop the bottom player.
+    if (document.hidden) return;
     player.pause();
   };
 
