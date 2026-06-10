@@ -637,19 +637,31 @@ async function main() {
         } else if (cancelled) {
           overlay.remove();
         } else {
-          overlay.showDone(
-            () => { location.assign('https://bandcamp.com/cart#bcp_go_checkout=1'); },
-            () => { overlay.remove(); },
-            () => { location.assign('https://bandcamp.com/login'); },
-          );
+          // Reload so the page reflects the cart we just built, then show options.
+          location.assign('https://bandcamp.com/cart#bcp_cart_ready=1');
         }
       }
 
       return;
     }
 
-    // --- Stage B — cart is populated, click checkout -------------------------
-    // We arrive here after Stage A reloads bandcamp.com/cart with this hash.
+    // --- Stage B (ready) — cart built, show options on freshly loaded page ---
+    // Arrives here after Stage A navigates to this hash, giving the page a
+    // chance to reflect the newly populated cart before the user acts.
+    if (hash.startsWith('#bcp_cart_ready=')) {
+      history.replaceState(null, '', window.location.pathname);
+
+      const overlay = createProgressOverlay('Your cart is ready!');
+      overlay.showDone(
+        () => { location.assign('https://bandcamp.com/cart#bcp_go_checkout=1'); },
+        () => { overlay.remove(); },
+        () => { location.assign('https://bandcamp.com/login'); },
+      );
+      return;
+    }
+
+    // --- Stage C — cart is populated, click checkout -------------------------
+    // We arrive here after the user clicks "Go to checkout" in Stage B.
     if (hash.startsWith('#bcp_go_checkout=')) {
       history.replaceState(null, '', window.location.pathname);
 
