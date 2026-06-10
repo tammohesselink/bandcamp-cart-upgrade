@@ -82,6 +82,19 @@ chrome.runtime.onMessage.addListener((message: BcpRequest, sender, sendResponse)
     return true;
   }
 
+  if (message.type === 'open-incognito-checkout') {
+    // Open a private window at the Bandcamp cart page, passing the selected
+    // items in the URL hash so the content script can add them to the fresh
+    // incognito cart and proceed to checkout. chrome.windows.create throws if
+    // the user hasn't enabled "Allow in incognito" for the extension.
+    const payload = encodeURIComponent(JSON.stringify(message.items));
+    const url = `https://bandcamp.com/cart#bcp_cart=${payload}`;
+    chrome.windows.create({ url, incognito: true })
+      .then(() => sendResponse({ ok: true }))
+      .catch((err: unknown) => sendResponse({ ok: false, error: String(err) }));
+    return true;
+  }
+
   if (message.type === 'cart-add') {
     // Endpoint: POST {artist}.bandcamp.com/cart/cb
     // Body fields mirror Bandcamp's own add-to-cart request (captured via DevTools).
