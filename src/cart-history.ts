@@ -1,6 +1,6 @@
 import type { SavedCartItem, CartSnapshot } from './types';
 
-const MAX_SNAPSHOTS = 20;
+const MAX_SNAPSHOTS = 60;
 
 function normalizeUrl(url: string): string {
   return url.toLowerCase().replace(/\/+$/, '');

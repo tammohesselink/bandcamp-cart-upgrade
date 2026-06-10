@@ -7,7 +7,6 @@ import { normalizeUrl } from './url';
 import {
   readPageContext,
   isTrackOrAlbumPage,
-  isCheckoutPage,
   clickCheckout,
   SEL_SIDECART_BODY,
   SEL_SIDECART_ITEM_LIST,
@@ -534,6 +533,42 @@ async function doRestore(button: HTMLButtonElement, toAdd: SavedCartItem[], toRe
 
 main().catch(console.error);
 
+// Loads (or reloads) the cart playlist: resolves track metadata, updates the
+// player's cart playlist, and re-injects sidecart UI elements. Returns false
+// if no playable tracks were found so the caller can decide how to proceed.
+async function loadCartPlaylist(cartItems: CartItem[], player: Player): Promise<boolean> {
+  player.setStatus(`Loading 0 / ${cartItems.length}…`, 'loading');
+
+  const { tracks: cartTracks, indexMap: cartIndexMap } = await resolvePlaylist(cartItems, (done) => {
+    player.setStatus(`Loading ${done} / ${cartItems.length}…`, 'loading');
+  });
+
+  if (cartTracks.length === 0) {
+    player.setStatus('No playable tracks found', 'error');
+    return false;
+  }
+
+  activeCartIndexMap = cartIndexMap;
+  player.setPlaylist('cart', 'Cart', cartTracks);
+  document.body.style.paddingBottom = `${player.wrapper.offsetHeight}px`;
+  injectCartPlayButtons(cartIndexMap, player);
+  cartItems.forEach((item) => injectCheckboxForSidecartItem(item.url));
+  injectCheckoutSelectedBtn(player);
+
+  const unplayable = cartTracks.filter((t) => t.unplayable).length;
+  if (unplayable > 0) {
+    const pct = unplayable / cartTracks.length;
+    if (pct >= 0.5) {
+      player.setStatus('Log in for full streams', 'warn');
+    } else {
+      player.setStatus(`${unplayable} track${unplayable > 1 ? 's' : ''} unavailable`, 'warn');
+    }
+  } else {
+    player.setStatus(`${cartTracks.length} tracks (${cartItems.length} releases)`, 'info');
+  }
+  return true;
+}
+
 async function main() {
   // --- Incognito checkout: Stage A — add selected items to a fresh cart ------
   // The normal window opens this URL: bandcamp.com/cart#bcp_cart=<items>.
@@ -936,40 +971,38 @@ async function main() {
   if (discoItems.length > 0) player.expectDiscography();
 
   if (cartItems.length > 0) {
-    player.setStatus(`Loading 0 / ${cartItems.length}…`, 'loading');
-
-    const { tracks: cartTracks, indexMap: cartIndexMap } = await resolvePlaylist(cartItems, (done) => {
-      player.setStatus(`Loading ${done} / ${cartItems.length}…`, 'loading');
-    });
-
-    if (cartTracks.length === 0) {
-      player.setStatus('No playable tracks found', 'error');
-      return;
-    }
-
-    activeCartIndexMap = cartIndexMap;
-    player.setPlaylist('cart', 'Cart', cartTracks);
-    document.body.style.paddingBottom = `${player.wrapper.offsetHeight}px`;
-    injectCartPlayButtons(cartIndexMap, player);
-    cartItems.forEach((item) => injectCheckboxForSidecartItem(item.url));
-    injectCheckoutSelectedBtn(player);
-
-    const unplayable = cartTracks.filter((t) => t.unplayable).length;
-    if (unplayable > 0) {
-      const pct = unplayable / cartTracks.length;
-      if (pct >= 0.5) {
-        player.setStatus('Log in for full streams', 'warn');
-      } else {
-        player.setStatus(`${unplayable} track${unplayable > 1 ? 's' : ''} unavailable`, 'warn');
-      }
-    } else {
-      player.setStatus(`${cartTracks.length} tracks (${cartItems.length} releases)`, 'info');
-    }
+    const loaded = await loadCartPlaylist(cartItems, player);
+    if (!loaded) return;
   } else {
     // Cart is empty — show player on label page with a placeholder status.
     // Tracks can still be added from the discography below.
     player.setStatus('Cart is empty', 'info');
   }
+
+  player.onReloadPlaylist = async () => {
+    player.setStatus('Reloading playlist info…', 'loading');
+    await clearTrackCache();
+    if (cartItems.length > 0) {
+      await loadCartPlaylist(cartItems, player);
+    }
+    if (discoItems.length > 0 && discoBtn) {
+      discoBtn.textContent = `Loading label discography…`;
+      discoBtn.disabled = true;
+      const { tracks: discoTracks, indexMap: discoIndexMap } = await resolvePlaylist(discoItems, (done) => {
+        discoBtn.textContent = `Loading label discography… ${done} / ${discoItems.length}`;
+      });
+      if (discoTracks.length > 0) {
+        activeDiscoIndexMap = discoIndexMap;
+        player.setPlaylist('discography', 'Label discography', discoTracks);
+        player.setPlaylistStatus('discography', `${discoTracks.length} tracks (${discoItems.length} releases)`, 'info');
+        discoBtn.textContent = `Play label discography (${discoTracks.length} tracks, ${discoItems.length} releases)`;
+        discoBtn.disabled = false;
+        injectDiscographyPlayButtons(discoIndexMap, discoItems, player);
+      } else {
+        discoBtn.textContent = 'No playable discography tracks found';
+      }
+    }
+  };
 
   if (discoItems.length > 0 && discoBtn) {
     discoBtn.style.display = player.discographyButtonEnabled ? '' : 'none';
@@ -1262,6 +1295,14 @@ function writeCache(url: string, tracks: PlaylistTrack[]): void {
   chrome.storage.local.set({ [CACHE_KEY_PREFIX + url]: entry }).catch(() => {});
 }
 
+async function clearTrackCache(): Promise<void> {
+  try {
+    const all = await chrome.storage.local.get(null);
+    const keys = Object.keys(all).filter((k) => k.startsWith(CACHE_KEY_PREFIX));
+    if (keys.length > 0) await chrome.storage.local.remove(keys);
+  } catch {}
+}
+
 async function fetchTracksForUrl(url: string): Promise<PlaylistTrack[]> {
   const cached = await readCache(url);
   if (cached) return cached;
@@ -1390,6 +1431,7 @@ function injectCartPlayButtons(indexMap: Map<string, number>, player: Player): v
   for (const link of Array.from(sidecartBody.querySelectorAll<HTMLAnchorElement>(SEL_SIDECART_ITEM_LINK))) {
     const index = indexMap.get(link.href);
     if (index === undefined) continue;
+    if (link.previousElementSibling?.classList.contains('bcp-cart-play-btn')) continue; // already injected
 
     const playBtn = document.createElement('button');
     playBtn.className = 'bcp-cart-play-btn';
@@ -1442,6 +1484,7 @@ function injectDiscographyPlayButtons(
     if (!lis) continue;
 
     for (const li of lis) {
+      if (li.querySelector('.bcp-grid-play-btn')) continue; // already injected
       const playBtn = document.createElement('button');
       playBtn.className = 'bcp-grid-play-btn';
       playBtn.textContent = '▶';
