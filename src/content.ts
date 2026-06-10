@@ -812,7 +812,6 @@ async function main() {
 
   const player = new Player([]);
   document.body.appendChild(player.wrapper);
-  document.body.style.paddingBottom = '90px';
 
   // Build the initial cart URL set and purchase-type map.
   cartItemTypes = buildCartItemTypes(cartItems);
