@@ -477,14 +477,70 @@ function createProgressOverlay(initialTitle: string, onCancel?: () => void): Pro
   };
 }
 
+function showRemovePurchasedConfirm(items: SavedCartItem[]): Promise<boolean> {
+  ensureHistoryStyles();
+  return new Promise((resolve) => {
+    const backdrop = document.createElement('div');
+    backdrop.className = 'bcp-hb';
+
+    const modal = document.createElement('div');
+    modal.className = 'bcp-hm';
+
+    const title = document.createElement('h3');
+    title.textContent = `Remove ${items.length} item${items.length !== 1 ? 's' : ''} from cart?`;
+    modal.appendChild(title);
+
+    const list = document.createElement('ul');
+    list.className = 'bcp-hl';
+    for (const item of items) {
+      const li = document.createElement('li');
+      li.textContent = item.title || item.url;
+      list.appendChild(li);
+    }
+    modal.appendChild(list);
+
+    const actions = document.createElement('div');
+    Object.assign(actions.style, { display: 'flex', gap: '8px', justifyContent: 'flex-end', flexShrink: '0' });
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'bcp-hcl';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.addEventListener('click', () => close(false));
+
+    const confirmBtn = document.createElement('button');
+    Object.assign(confirmBtn.style, {
+      padding: '7px 16px', borderRadius: '4px', border: 'none',
+      background: '#c0392b', color: '#fff', cursor: 'pointer',
+      fontSize: '13px', fontFamily: 'inherit',
+    });
+    confirmBtn.textContent = `Remove (${items.length})`;
+    confirmBtn.addEventListener('click', () => close(true));
+
+    actions.append(cancelBtn, confirmBtn);
+    modal.appendChild(actions);
+    backdrop.appendChild(modal);
+
+    const close = (result: boolean) => {
+      document.removeEventListener('keydown', onKey);
+      backdrop.remove();
+      resolve(result);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(false); };
+    document.addEventListener('keydown', onKey);
+    backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(false); });
+    document.body.appendChild(backdrop);
+  });
+}
+
 function setupRemovePurchasedButton(items: SavedCartItem[]): void {
   const btn = injectRemovePurchasedButton(items.length);
   if (!btn) return;
   btn.addEventListener('click', async () => {
-    if (!confirm(`Remove ${items.length} track${items.length !== 1 ? 's' : ''} from your cart?`)) return;
+    if (!await showRemovePurchasedConfirm(items)) return;
     btn.disabled = true;
     for (let i = 0; i < items.length; i++) {
-      btn.textContent = `Removing ${i + 1} / ${items.length}…`;
+      const label = items[i]!.title || items[i]!.url;
+      btn.textContent = `Removing "${label}" (${i + 1} / ${items.length})…`;
       await removeCartItem(items[i]!);
     }
     clearPendingPurchase();
