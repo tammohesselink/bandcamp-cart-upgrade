@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Bandcamp Cart Player",
+  "name": "Bandcamp Cart Upgrade",
   "version": "0.4.0",
-  "description": "Embeds a playlist player into your Bandcamp cart",
+  "description": "Quality of life improvements to the bandcamp cart",
   "action": {
     "default_popup": "popup.html",
     "default_title": "Bandcamp Cart Player"
