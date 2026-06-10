@@ -3,6 +3,7 @@ export type PlaylistId = 'currentpage' | 'cart' | 'discography';
 export interface SavedCartItem {
   url: string;
   title: string;
+  artist?: string;
   purchaseType?: 'track' | 'album';
 }
 

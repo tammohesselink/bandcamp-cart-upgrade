@@ -30,7 +30,15 @@ export interface CartRemoveRequest {
   fanId: string;
 }
 
-export type BcpRequest = FetchRequest | CartAddRequest | CartRemoveRequest;
+export interface OpenIncognitoCheckoutRequest {
+  type: 'open-incognito-checkout';
+  // Pre-resolved track data from the normal window's warm cache.
+  // Short keys to keep the URL hash compact when many items are passed.
+  // u=releaseUrl, id=tralbumId, t=tralbumType, pr=minPrice, b=bandId
+  items: Array<{ u: string; id: number; t: 't' | 'a'; pr: number; b: number | null }>;
+}
+
+export type BcpRequest = FetchRequest | CartAddRequest | CartRemoveRequest | OpenIncognitoCheckoutRequest;
 
 export interface FetchResponse {
   html?: string;
@@ -49,7 +57,7 @@ export type BcpResponse = FetchResponse | CartMutationResponse;
 // response type inferred from the request they send.
 export function sendBcpMessage(msg: FetchRequest): Promise<FetchResponse>;
 export function sendBcpMessage(
-  msg: CartAddRequest | CartRemoveRequest
+  msg: CartAddRequest | CartRemoveRequest | OpenIncognitoCheckoutRequest
 ): Promise<CartMutationResponse>;
 export function sendBcpMessage(msg: BcpRequest): Promise<BcpResponse> {
   return chrome.runtime.sendMessage(msg);

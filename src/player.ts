@@ -44,13 +44,13 @@ export class Player {
   private tempoResetBtn!: HTMLButtonElement;
   private tempoRangeBtn!: HTMLButtonElement;
   private tempoMTBtn!: HTMLButtonElement;
-  private discoBtnToggleEl!: HTMLButtonElement;
   private playbackRate = 1;
   private preservesPitch = true;
   private tempoRangeIndex = 1;
   private showDiscographyButton = true;
   private statusEl!: HTMLElement;
   private queueToggleBtn!: HTMLButtonElement;
+  private reloadBtn!: HTMLButtonElement;
 
   private queueVisible = false;
   private playerVisible = true;
@@ -69,6 +69,7 @@ export class Player {
   onTrackChange?: (id: PlaylistId, index: number) => void;
   onSeek?: (fraction: number) => void;
   onDiscographyButtonVisibilityChange?: (show: boolean) => void;
+  onReloadPlaylist?: () => Promise<void>;
 
   constructor(initialPlaylist: PlaylistTrack[]) {
     this.audio = new Audio();
@@ -87,7 +88,6 @@ export class Player {
     this.queueEl = this.buildQueueEl();
     this.headerEl = this.buildHeaderEl();
     this.bar = this.buildBarEl();
-    this.updateDiscoBtnToggleUI();
 
     this.wrapper.appendChild(this.collapseBtn);
     this.wrapper.appendChild(this.queueEl);
@@ -109,7 +109,6 @@ export class Player {
         this.showDiscographyButton = result['showDiscographyButton'] as boolean;
       }
       this.updateTempoUI();
-      this.updateDiscoBtnToggleUI();
       if (!this.showDiscographyButton) {
         this.onDiscographyButtonVisibilityChange?.(false);
       }
@@ -486,18 +485,17 @@ export class Player {
 
     this.cartActionsEl = el('div', 'bcp-cart-actions');
 
-    this.discoBtnToggleEl = btn('Disco', 'bcp-btn bcp-tempo-btn');
-    this.discoBtnToggleEl.title = 'Show play discography button on label page';
-    this.discoBtnToggleEl.addEventListener('click', () => {
-      this.showDiscographyButton = !this.showDiscographyButton;
-      chrome.storage.local.set({ showDiscographyButton: this.showDiscographyButton });
-      this.updateDiscoBtnToggleUI();
-      this.onDiscographyButtonVisibilityChange?.(this.showDiscographyButton);
-    });
-
     this.queueToggleBtn = btn('☰', 'bcp-btn');
     this.queueToggleBtn.title = 'Toggle queue';
     this.queueToggleBtn.addEventListener('click', () => this.toggleQueue());
+
+    this.reloadBtn = btn('⟳', 'bcp-btn');
+    this.reloadBtn.title = 'Reload playlist information (clears track cache)';
+    this.reloadBtn.addEventListener('click', async () => {
+      this.reloadBtn.disabled = true;
+      try { await this.onReloadPlaylist?.(); }
+      finally { this.reloadBtn.disabled = false; }
+    });
 
     this.statusEl = el('div', 'bcp-status');
 
@@ -508,9 +506,9 @@ export class Player {
       controls,
       seekArea,
       tempoArea,
-      this.discoBtnToggleEl,
       this.queueToggleBtn,
-      this.statusEl
+      this.statusEl,
+      this.reloadBtn
     );
 
     return bar;
@@ -877,9 +875,6 @@ export class Player {
     this.tempoMTBtn.classList.toggle('bcp-tempo-btn-active', this.preservesPitch);
   }
 
-  private updateDiscoBtnToggleUI() {
-    this.discoBtnToggleEl.classList.toggle('bcp-tempo-btn-active', this.showDiscographyButton);
-  }
 
 }
 

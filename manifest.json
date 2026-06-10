@@ -8,6 +8,7 @@
     "default_title": "Bandcamp Cart Player"
   },
   "permissions": ["storage"],
+  "incognito": "split",
   "host_permissions": ["https://bandcamp.com/*", "https://*.bandcamp.com/*"],
   "background": {
     "service_worker": "background.js",

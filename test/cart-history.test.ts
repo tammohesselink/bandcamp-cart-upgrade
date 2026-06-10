@@ -50,10 +50,10 @@ describe('addSnapshotIfChanged', () => {
     expect(result[1]!.items[0]!.url).toContain('a');
   });
 
-  it('trims to MAX_SNAPSHOTS (20)', () => {
-    const existing = Array.from({ length: 20 }, (_, i) => snapshot([item(`s${i}`)], i));
+  it('trims to MAX_SNAPSHOTS (60)', () => {
+    const existing = Array.from({ length: 60 }, (_, i) => snapshot([item(`s${i}`)], i));
     const result = addSnapshotIfChanged(existing, [item('new')]);
-    expect(result).toHaveLength(20);
+    expect(result).toHaveLength(60);
     expect(result[0]!.items[0]!.url).toContain('new');
   });
 

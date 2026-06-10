@@ -101,6 +101,32 @@ export function injectRestoreCartButton(snapshotCount: number): HTMLButtonElemen
   return button;
 }
 
+export function injectRemovePurchasedButton(count: number): HTMLButtonElement | null {
+  const anchor = document.getElementById('sidecart')
+    ?? document.querySelector('#sidecartReveal')
+    ?? document.getElementById('sidecartBody');
+  if (!anchor) return null;
+
+  const existing = document.querySelector<HTMLButtonElement>('.bcp-remove-purchased-btn');
+  if (existing) return existing;
+
+  const note = document.createElement('div');
+  Object.assign(note.style, {
+    color: '#888', fontSize: '11px', marginTop: '6px', textAlign: 'center',
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+  });
+  note.textContent = `⚠ ${count} item${count !== 1 ? 's' : ''} sent to private checkout`;
+
+  const button = document.createElement('button');
+  button.className = 'buttonLink bcp-remove-purchased-btn';
+  button.textContent = `Remove purchased tracks from cart (${count})`;
+
+  // Insert note first (becomes next sibling), then button (note shifts it down)
+  anchor.insertAdjacentElement('afterend', button);
+  anchor.insertAdjacentElement('afterend', note);
+  return button;
+}
+
 
 // --- Discography DOM probe ---------------------------------------------------
 
