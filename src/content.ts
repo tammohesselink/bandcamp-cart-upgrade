@@ -494,7 +494,8 @@ function showRemovePurchasedConfirm(items: SavedCartItem[]): Promise<boolean> {
     list.className = 'bcp-hl';
     for (const item of items) {
       const li = document.createElement('li');
-      li.textContent = item.title || item.url;
+      const label = item.title || item.url;
+      li.textContent = item.artist ? `${item.artist} — ${label}` : label;
       list.appendChild(li);
     }
     modal.appendChild(list);
@@ -1017,7 +1018,7 @@ async function main() {
 
     // Persist selected items so the cleanup button survives a page reload.
     const toRemove: SavedCartItem[] = selectedItems.map((i) => ({
-      url: i.url, title: i.title, purchaseType: i.purchaseType,
+      url: i.url, title: i.title, artist: i.artist, purchaseType: i.purchaseType,
     }));
     savePendingPurchase(toRemove);
     setupRemovePurchasedButton(toRemove);
