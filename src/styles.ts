@@ -131,11 +131,13 @@ export const PLAYER_CSS = `
 #bcp-bar {
   background: #111;
   border-top: 2px solid #1da0c3;
-  height: 72px;
+  min-height: 72px;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   padding: 0 16px;
   gap: 14px;
+  row-gap: 8px;
 }
 
 #bcp-artwork {
@@ -632,5 +634,35 @@ a.itemName.bcp-playing {
   background: #ccc;
   color: #666;
   cursor: default;
+}
+
+@media (max-width: 900px) {
+  .bcp-seek-area {
+    flex-basis: 100%;
+    order: 100;
+    padding-bottom: 4px;
+  }
+}
+
+@media (max-width: 720px) {
+  .bcp-tempo-label,
+  .bcp-tempo-reset-btn,
+  .bcp-tempo-range-btn,
+  .bcp-disco-toggle,
+  .bcp-status {
+    display: none;
+  }
+
+  .bcp-track-info {
+    flex: 1 1 120px;
+    width: auto;
+  }
+}
+
+@media (max-width: 520px) {
+  .bcp-tempo-area,
+  .bcp-cart-actions {
+    display: none;
+  }
 }
 `;

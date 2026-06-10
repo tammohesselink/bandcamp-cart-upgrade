@@ -94,6 +94,10 @@ export class Player {
     this.wrapper.appendChild(this.headerEl);
     this.wrapper.appendChild(this.bar);
 
+    new ResizeObserver(() => {
+      document.body.style.paddingBottom = this.wrapper.offsetHeight + 'px';
+    }).observe(this.wrapper);
+
     this.bindAudioEvents();
     this.setupMediaSession();
 
@@ -451,7 +455,7 @@ export class Player {
       this.updateTempoUI();
     });
 
-    this.tempoResetBtn = btn('+0.0%', 'bcp-btn bcp-tempo-btn');
+    this.tempoResetBtn = btn('+0.0%', 'bcp-btn bcp-tempo-btn bcp-tempo-reset-btn');
     this.tempoResetBtn.title = 'Reset tempo';
     this.tempoResetBtn.addEventListener('click', () => {
       this.playbackRate = 1;
@@ -459,7 +463,7 @@ export class Player {
       this.updateTempoUI();
     });
 
-    this.tempoRangeBtn = btn('(±10)', 'bcp-btn bcp-tempo-btn');
+    this.tempoRangeBtn = btn('(±10)', 'bcp-btn bcp-tempo-btn bcp-tempo-range-btn');
     this.tempoRangeBtn.title = 'Cycle tempo range';
     this.tempoRangeBtn.addEventListener('click', () => {
       this.tempoRangeIndex = (this.tempoRangeIndex + 1) % TEMPO_RANGES.length;
@@ -486,7 +490,7 @@ export class Player {
 
     this.cartActionsEl = el('div', 'bcp-cart-actions');
 
-    this.discoBtnToggleEl = btn('Disco', 'bcp-btn bcp-tempo-btn');
+    this.discoBtnToggleEl = btn('Disco', 'bcp-btn bcp-tempo-btn bcp-disco-toggle');
     this.discoBtnToggleEl.title = 'Show play discography button on label page';
     this.discoBtnToggleEl.addEventListener('click', () => {
       this.showDiscographyButton = !this.showDiscographyButton;
@@ -741,7 +745,6 @@ export class Player {
     this.wrapper.classList.toggle('bcp-collapsed', !this.playerVisible);
     this.collapseBtn.textContent = this.playerVisible ? 'Hide player ▼' : 'Show player ▲';
     this.collapseBtn.title = this.playerVisible ? 'Hide player' : 'Show player';
-    document.body.style.paddingBottom = this.playerVisible ? '90px' : '0';
   }
 
   private updateCartActions(track: PlaylistTrack) {

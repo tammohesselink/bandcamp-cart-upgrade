@@ -553,7 +553,6 @@ async function main() {
 
   const player = new Player([]);
   document.body.appendChild(player.wrapper);
-  document.body.style.paddingBottom = '90px';
 
   if (autoRestoreCount > 0) {
     player.showToast(`Restored ${autoRestoreCount} item${autoRestoreCount !== 1 ? 's' : ''} to cart`);
@@ -794,7 +793,6 @@ async function main() {
 
     activeCartIndexMap = cartIndexMap;
     player.setPlaylist('cart', 'Cart', cartTracks);
-    document.body.style.paddingBottom = `${player.wrapper.offsetHeight}px`;
     injectCartPlayButtons(cartIndexMap, player);
     cartItems.forEach((item) => injectCheckboxForSidecartItem(item.url));
     injectCheckoutSelectedBtn(player);
