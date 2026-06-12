@@ -169,6 +169,17 @@ function ensureHistoryStyles(): void {
     .bcp-ha{display:flex;justify-content:flex-end;flex-shrink:0}
     .bcp-ha button{padding:7px 16px;border-radius:4px;border:1px solid #ccc;cursor:pointer;font-size:13px;font-family:inherit}
     .bcp-hcl:hover{background:#f5f5f5}
+    .bcp-cache-hm{max-width:680px}
+    .bcp-cache-url{font-size:12px;color:#1da0c3;word-break:break-all;text-decoration:none}
+    .bcp-cache-url:hover{text-decoration:underline}
+    .bcp-cache-meta{color:#999;font-size:12px;margin-left:6px;white-space:nowrap}
+    .bcp-cache-tracks{list-style:none;margin:5px 0 0;padding:0 0 0 8px}
+    .bcp-cache-tracks li{padding:2px 0;font-size:12px;color:#333;border-bottom:1px solid #f5f5f5}
+    .bcp-cache-tracks li:last-child{border-bottom:none}
+    .bcp-cache-track-title{font-weight:600}
+    .bcp-cache-track-detail{color:#888;margin-left:4px}
+    .bcp-cache-flags{color:#bbb;font-size:11px;margin-left:4px}
+    .bcp-cache-empty{color:#999;font-style:italic;padding:12px 0}
   `;
   document.head.appendChild(style);
 }
@@ -275,6 +286,121 @@ function showSnapshotListModal(
 
     document.body.appendChild(backdrop);
   });
+}
+
+// --- Cache viewer modal -------------------------------------------------------
+
+function formatDuration(secs: number): string {
+  const m = Math.floor(secs / 60);
+  const s = Math.floor(secs % 60);
+  return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+function showCacheModal(entries: CacheDump[]): void {
+  ensureHistoryStyles();
+
+  const backdrop = document.createElement('div');
+  backdrop.className = 'bcp-hb';
+
+  const modal = document.createElement('div');
+  modal.className = 'bcp-hm bcp-cache-hm';
+
+  const title = document.createElement('h3');
+  title.textContent = `Track cache (${entries.length} entr${entries.length !== 1 ? 'ies' : 'y'})`;
+  modal.appendChild(title);
+
+  const list = document.createElement('ul');
+  list.className = 'bcp-hl';
+
+  if (entries.length === 0) {
+    const empty = document.createElement('li');
+    empty.className = 'bcp-cache-empty';
+    empty.textContent = 'Cache is empty';
+    list.appendChild(empty);
+  } else {
+    for (const entry of entries) {
+      const li = document.createElement('li');
+
+      const header = document.createElement('div');
+      header.style.cssText = 'display:flex;align-items:baseline;flex-wrap:wrap;gap:4px;margin-bottom:2px';
+
+      const urlLink = document.createElement('a');
+      urlLink.className = 'bcp-cache-url';
+      urlLink.href = entry.url;
+      urlLink.target = '_blank';
+      urlLink.rel = 'noopener noreferrer';
+      urlLink.textContent = entry.url;
+
+      const meta = document.createElement('span');
+      meta.className = 'bcp-cache-meta';
+      meta.textContent = `${entry.tracks.length} track${entry.tracks.length !== 1 ? 's' : ''} · cached ${formatTimestamp(entry.cachedAt)}`;
+
+      header.append(urlLink, meta);
+      li.appendChild(header);
+
+      const trackList = document.createElement('ul');
+      trackList.className = 'bcp-cache-tracks';
+
+      for (const track of entry.tracks) {
+        const row = document.createElement('li');
+
+        const titleSpan = document.createElement('span');
+        titleSpan.className = 'bcp-cache-track-title';
+        titleSpan.textContent = track.trackTitle || '(untitled)';
+
+        const detail = document.createElement('span');
+        detail.className = 'bcp-cache-track-detail';
+        const parts: string[] = [];
+        if (track.artist) parts.push(track.artist);
+        if (track.albumTitle) parts.push(track.albumTitle);
+        if (track.durationSec) parts.push(formatDuration(track.durationSec));
+        detail.textContent = parts.join(' · ');
+
+        const priceStr: string[] = [];
+        if (track.minPrice != null) priceStr.push(`release: ${track.minPrice} ${track.currency ?? ''}`);
+        if (track.trackMinPrice != null) priceStr.push(`track: ${track.trackMinPrice} ${track.currency ?? ''}`);
+        const flags: string[] = [];
+        if (!track.purchasable) flags.push('not purchasable');
+        if (track.unplayable) flags.push('unplayable');
+
+        row.append(titleSpan, detail);
+
+        if (priceStr.length > 0 || flags.length > 0) {
+          const extra = document.createElement('span');
+          extra.className = 'bcp-cache-flags';
+          extra.textContent = [...priceStr, ...flags].join(' · ');
+          row.appendChild(extra);
+        }
+
+        trackList.appendChild(row);
+      }
+
+      li.appendChild(trackList);
+      list.appendChild(li);
+    }
+  }
+
+  modal.appendChild(list);
+
+  const actions = document.createElement('div');
+  actions.className = 'bcp-ha';
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'bcp-hcl';
+  closeBtn.textContent = 'Close';
+  actions.appendChild(closeBtn);
+  modal.appendChild(actions);
+  backdrop.appendChild(modal);
+
+  const close = () => {
+    document.removeEventListener('keydown', onKey);
+    backdrop.remove();
+  };
+  const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+  document.addEventListener('keydown', onKey);
+  backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
+  closeBtn.addEventListener('click', close);
+
+  document.body.appendChild(backdrop);
 }
 
 // --- Cart mutation primitives -------------------------------------------------
@@ -1072,6 +1198,11 @@ async function main() {
     }
   };
 
+  player.onShowCache = async () => {
+    const entries = await listCacheEntries();
+    showCacheModal(entries);
+  };
+
   if (discoItems.length > 0 && discoBtn) {
     discoBtn.style.display = player.discographyButtonEnabled ? '' : 'none';
     player.onDiscographyButtonVisibilityChange = (show) => {
@@ -1369,6 +1500,27 @@ async function clearTrackCache(): Promise<void> {
     const keys = Object.keys(all).filter((k) => k.startsWith(CACHE_KEY_PREFIX));
     if (keys.length > 0) await chrome.storage.local.remove(keys);
   } catch {}
+}
+
+interface CacheDump {
+  url: string;
+  cachedAt: number;
+  tracks: PlaylistTrack[];
+}
+
+async function listCacheEntries(): Promise<CacheDump[]> {
+  try {
+    const all = await chrome.storage.local.get(null);
+    return Object.keys(all)
+      .filter((k) => k.startsWith(CACHE_KEY_PREFIX))
+      .map((k) => {
+        const entry = all[k] as CacheEntry;
+        return { url: k.slice(CACHE_KEY_PREFIX.length), cachedAt: entry.cachedAt, tracks: entry.tracks };
+      })
+      .sort((a, b) => b.cachedAt - a.cachedAt);
+  } catch {
+    return [];
+  }
 }
 
 async function fetchTracksForUrl(url: string): Promise<PlaylistTrack[]> {

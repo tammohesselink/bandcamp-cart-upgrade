@@ -51,6 +51,7 @@ export class Player {
   private statusEl!: HTMLElement;
   private queueToggleBtn!: HTMLButtonElement;
   private reloadBtn!: HTMLButtonElement;
+  private cacheBtn!: HTMLButtonElement;
 
   private queueVisible = false;
   private playerVisible = true;
@@ -70,6 +71,7 @@ export class Player {
   onSeek?: (fraction: number) => void;
   onDiscographyButtonVisibilityChange?: (show: boolean) => void;
   onReloadPlaylist?: () => Promise<void>;
+  onShowCache?: () => Promise<void> | void;
 
   constructor(initialPlaylist: PlaylistTrack[]) {
     this.audio = new Audio();
@@ -493,6 +495,10 @@ export class Player {
     this.queueToggleBtn.title = 'Toggle queue';
     this.queueToggleBtn.addEventListener('click', () => this.toggleQueue());
 
+    this.cacheBtn = btn('🗄', 'bcp-btn');
+    this.cacheBtn.title = 'Show track cache contents';
+    this.cacheBtn.addEventListener('click', () => this.onShowCache?.());
+
     this.reloadBtn = btn('⟳', 'bcp-btn');
     this.reloadBtn.title = 'Reload playlist information (clears track cache)';
     this.reloadBtn.addEventListener('click', async () => {
@@ -512,6 +518,7 @@ export class Player {
       tempoArea,
       this.queueToggleBtn,
       this.statusEl,
+      this.cacheBtn,
       this.reloadBtn
     );
 
