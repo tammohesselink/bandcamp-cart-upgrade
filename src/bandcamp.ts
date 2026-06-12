@@ -62,7 +62,7 @@ export function parseTralbum(html: string, pageUrl: string): PlaylistTrack[] {
 }
 
 function extractTralbumData(doc: Document): TralbumData | null {
-  // Strategy 1: data-tralbum attribute (some older Bandcamp pages)
+  // Strategy 1: data-tralbum attribute (some Bandcamp pages)
   const el = doc.querySelector('[data-tralbum]');
   if (el) {
     try {
@@ -72,12 +72,26 @@ function extractTralbumData(doc: Document): TralbumData | null {
     }
   }
 
-  // Strategy 2: inline TralbumData variable in <script> tags (modern Bandcamp)
+  // Strategy 2: inline TralbumData variable in <script> tags
   for (const script of Array.from(doc.querySelectorAll('script'))) {
     const text = script.textContent ?? '';
     if (!text.includes('TralbumData')) continue;
     const extracted = extractJsonObject(text, 'TralbumData');
     if (extracted) return extracted as TralbumData;
+  }
+
+  // Strategy 3: any script containing "trackinfo" JSON data, regardless of
+  // variable name. Handles cases where Bandcamp minified TralbumData to a
+  // short identifier. JSON string keys ("trackinfo") survive minification even
+  // when variable names do not.
+  for (const script of Array.from(doc.querySelectorAll('script'))) {
+    const text = script.textContent ?? '';
+    const idx = text.indexOf('"trackinfo"');
+    if (idx === -1) continue;
+    const extracted = extractJsonContaining(text, idx);
+    if (extracted && Array.isArray((extracted as Record<string, unknown>).trackinfo)) {
+      return extracted as TralbumData;
+    }
   }
 
   return null;
@@ -91,6 +105,11 @@ function extractJsonObject(source: string, marker: string): unknown | null {
   const start = source.indexOf('{', markerIdx + marker.length);
   if (start === -1) return null;
 
+  return extractJsonObjectAt(source, start);
+}
+
+// Extracts the JSON object that starts at `start` by counting matched braces.
+function extractJsonObjectAt(source: string, start: number): unknown | null {
   let depth = 0;
   let inStr = false;
   let esc = false;
@@ -123,6 +142,23 @@ function extractJsonObject(source: string, marker: string): unknown | null {
     }
   }
 
+  return null;
+}
+
+// Scans backward from `markerPos` to find the opening `{` of the enclosing
+// JSON object, then parses it. The backward scan is brace-count based and
+// does not fully handle string literals in surrounding JS code, but is
+// reliable for Bandcamp's embedded data patterns.
+function extractJsonContaining(source: string, markerPos: number): unknown | null {
+  let depth = 0;
+  for (let i = markerPos - 1; i >= 0; i--) {
+    const c = source[i];
+    if (c === '}') { depth++; continue; }
+    if (c === '{') {
+      if (depth === 0) return extractJsonObjectAt(source, i);
+      depth--;
+    }
+  }
   return null;
 }
 

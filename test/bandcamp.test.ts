@@ -178,6 +178,31 @@ describe('parseTralbum — purchasable flag', () => {
   });
 });
 
+describe('parseTralbum — minified variable name (Strategy 3)', () => {
+  const pageUrl = 'https://solardrift.bandcamp.com/album/echoes-of-the-void';
+  const tracks = parseTralbum(fixture('album-minified.html'), pageUrl);
+
+  it('finds tracks even when TralbumData is minified to a short identifier', () => {
+    expect(tracks.length).toBeGreaterThan(0);
+  });
+
+  it('extracts the correct number of tracks', () => {
+    expect(tracks).toHaveLength(3);
+  });
+
+  it('extracts artist', () => {
+    expect(tracks[0]!.artist).toBe('Solar Drift');
+  });
+
+  it('extracts stream URL', () => {
+    expect(tracks[0]!.streamUrl).toBe('https://t4.bcbits.com/stream/fake-stream-url-1');
+  });
+
+  it('marks unplayable track correctly', () => {
+    expect(tracks[2]!.unplayable).toBe(true);
+  });
+});
+
 describe('parseTralbum — invalid HTML', () => {
   it('returns empty array for empty string', () => {
     expect(parseTralbum('', 'https://example.com')).toEqual([]);
