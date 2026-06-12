@@ -1164,6 +1164,11 @@ async function main() {
   const discoBtn = discoItems.length > 0 ? injectDiscographyButton() : null;
   if (discoItems.length > 0) player.expectDiscography();
 
+  player.onShowCache = async () => {
+    const entries = await listCacheEntries();
+    showCacheModal(entries);
+  };
+
   if (cartItems.length > 0) {
     const loaded = await loadCartPlaylist(cartItems, player);
     if (!loaded) return;
@@ -1196,11 +1201,6 @@ async function main() {
         discoBtn.textContent = 'No playable discography tracks found';
       }
     }
-  };
-
-  player.onShowCache = async () => {
-    const entries = await listCacheEntries();
-    showCacheModal(entries);
   };
 
   if (discoItems.length > 0 && discoBtn) {
