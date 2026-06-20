@@ -58,6 +58,7 @@ export class Player {
   private discographyExpected = false;
   private collapseBtn!: HTMLButtonElement;
   private seeking = false;
+  private switchingPlaylist = false;
 
   private cartUrls = new Set<string>();
   private cartActionsEl!: HTMLElement;
@@ -159,7 +160,9 @@ export class Player {
     // Skip when silent: silent selects are native-driven (onNativePlay → jumpTo)
     // and pushing paused state back would pause the native audio that just started.
     if (!silent) {
+      this.switchingPlaylist = true;
       this.reflectPlaybackState(false);
+      this.switchingPlaylist = false;
       // Reset playback position to the beginning. audio.load() does this when the
       // stream URL changes, but not when the same track is reloaded — explicit
       // reset covers both cases.
@@ -656,6 +659,10 @@ export class Player {
 
   get currentPlaylistId(): PlaylistId | null {
     return this.activeId;
+  }
+
+  get isPlaylistSwitching(): boolean {
+    return this.switchingPlaylist;
   }
 
   private reflectPlaybackState(playing: boolean) {

@@ -1809,10 +1809,21 @@ function setupNativePlayerSync(player: Player): () => void {
     suppressNative = true;
     if (playing && player.currentPlaylistId === 'currentpage') {
       nativeAudio.play().catch(() => {});
+      setTimeout(() => { suppressNative = false; }, 0);
     } else {
       nativeAudio.pause();
+      if (player.isPlaylistSwitching) {
+        // Reset the native player's position to 0:00. Setting currentTime can
+        // trigger Bandcamp's seek handler asynchronously (which may call play()),
+        // so hold suppressNative for 500ms to cover that window. Also suppress
+        // the resulting seeked echo back to the bottom player.
+        suppressSeekSync = true;
+        nativeAudio.currentTime = 0;
+        setTimeout(() => { suppressNative = false; suppressSeekSync = false; }, 500);
+      } else {
+        setTimeout(() => { suppressNative = false; }, 0);
+      }
     }
-    setTimeout(() => { suppressNative = false; }, 0);
   };
 
   // --- bottom → native: track selection ---
