@@ -1811,6 +1811,9 @@ function setupNativePlayerSync(player: Player): () => void {
       nativeAudio.play().catch(() => {});
     } else {
       nativeAudio.pause();
+      if (player.isPlaylistSwitching) {
+        nativeAudio.currentTime = 0;
+      }
     }
     setTimeout(() => { suppressNative = false; }, 0);
   };
