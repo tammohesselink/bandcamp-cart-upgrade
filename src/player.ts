@@ -158,11 +158,23 @@ export class Player {
     // and onPlayStateChange callbacks aren't silently dropped.
     // Skip when silent: silent selects are native-driven (onNativePlay → jumpTo)
     // and pushing paused state back would pause the native audio that just started.
-    if (!silent) this.reflectPlaybackState(false);
+    if (!silent) {
+      this.reflectPlaybackState(false);
+      // Reset playback position to the beginning. audio.load() does this when the
+      // stream URL changes, but not when the same track is reloaded — explicit
+      // reset covers both cases.
+      this.audio.currentTime = 0;
+      this.currentTimeEl.textContent = '0:00';
+      this.seekBar.value = '0';
+    }
     this.activeId = id;
     this.updateHeader();
     this.updateQueueEl();
-    this.loadTrack(state.lastIndex, silent);
+    // Always load silently: tab switches must not fire onCurrentPageTrackChange,
+    // which clicks the native row and triggers a native 'play' event that echoes
+    // back through onNativePlay and restarts the bottom player. jumpTo() calls
+    // loadTrack() separately with the correct silent value when it needs to play.
+    this.loadTrack(state.lastIndex, true);
     if (state.statusMsg) {
       this.setStatus(state.statusMsg, state.statusKind);
     }
