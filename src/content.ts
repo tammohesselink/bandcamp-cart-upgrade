@@ -1829,7 +1829,11 @@ function setupNativePlayerSync(player: Player): () => void {
     (rowPlay ?? row).click();
     const nativeAudio = getNativeAudio();
     if (nativeAudio) nativeAudio.pause();
-    queueMicrotask(() => { suppressNative = false; });
+    // Use setTimeout(0) rather than queueMicrotask: the row click causes the
+    // native audio to fire a 'play' event as a macrotask, and we must keep
+    // suppressNative set until after it fires so onNativePlay doesn't echo
+    // back and restart the bottom player.
+    setTimeout(() => { suppressNative = false; }, 0);
   };
 
   // Attach play/pause/seeked listeners to the native audio element and mute it
