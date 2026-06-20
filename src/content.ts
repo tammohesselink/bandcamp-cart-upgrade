@@ -1757,8 +1757,12 @@ function setupNativePlayerSync(player: Player): () => void {
     const idx = pageUrl
       ? tracks.findIndex((t) => normalizeUrl(t.pageUrl) === normalizeUrl(pageUrl))
       : -1;
+    // Hold suppressNative across the bottom player's resulting 'play' macrotask
+    // so onPlayStateChange doesn't echo back and double-drive the native audio.
+    suppressNative = true;
     // silent=true: native is already on the right track — don't drive it again.
     player.jumpTo('currentpage', idx === -1 ? 0 : idx, true);
+    setTimeout(() => { suppressNative = false; }, 0);
   };
 
   // --- native → bottom: native paused ---
@@ -1767,7 +1771,11 @@ function setupNativePlayerSync(player: Player): () => void {
     // While the tab is backgrounded, Chrome suspends the muted native <audio>
     // and fires 'pause'. That is not a user action — don't stop the bottom player.
     if (document.hidden) return;
+    // Hold suppressNative across the bottom player's resulting 'pause' macrotask
+    // so onPlayStateChange doesn't echo back and re-pause the native redundantly.
+    suppressNative = true;
     player.pause();
+    setTimeout(() => { suppressNative = false; }, 0);
   };
 
   // --- native → bottom: seek sync ---
@@ -1787,6 +1795,37 @@ function setupNativePlayerSync(player: Player): () => void {
     queueMicrotask(() => { suppressSeekSync = false; });
   };
 
+  // --- bottom → native: play/pause sync ---
+  // When the bottom player plays or pauses, mirror that state on the native
+  // audio element so the native play button glyph stays accurate. We only
+  // resume the native audio when the active playlist is 'currentpage'; for
+  // cart/discography playback the native button should remain in the paused
+  // state. suppressNative is held until the next task so the resulting native
+  // play/pause event doesn't echo back through onNativePlay/onNativePause.
+  player.onPlayStateChange = (playing) => {
+    if (suppressNative) return;
+    const nativeAudio = getNativeAudio();
+    if (!nativeAudio) return;
+    suppressNative = true;
+    if (playing && player.currentPlaylistId === 'currentpage') {
+      nativeAudio.play().catch(() => {});
+      setTimeout(() => { suppressNative = false; }, 0);
+    } else {
+      nativeAudio.pause();
+      if (player.isPlaylistSwitching) {
+        // Reset the native player's position to 0:00. Setting currentTime can
+        // trigger Bandcamp's seek handler asynchronously (which may call play()),
+        // so hold suppressNative for 500ms to cover that window. Also suppress
+        // the resulting seeked echo back to the bottom player.
+        suppressSeekSync = true;
+        nativeAudio.currentTime = 0;
+        setTimeout(() => { suppressNative = false; suppressSeekSync = false; }, 500);
+      } else {
+        setTimeout(() => { suppressNative = false; }, 0);
+      }
+    }
+  };
+
   // --- bottom → native: track selection ---
   player.onCurrentPageTrackChange = (pageUrl) => {
     const rows = Array.from(document.querySelectorAll<HTMLElement>(SEL_NATIVE_TRACK_ROW));
@@ -1801,7 +1840,11 @@ function setupNativePlayerSync(player: Player): () => void {
     (rowPlay ?? row).click();
     const nativeAudio = getNativeAudio();
     if (nativeAudio) nativeAudio.pause();
-    queueMicrotask(() => { suppressNative = false; });
+    // Use setTimeout(0) rather than queueMicrotask: the row click causes the
+    // native audio to fire a 'play' event as a macrotask, and we must keep
+    // suppressNative set until after it fires so onNativePlay doesn't echo
+    // back and restart the bottom player.
+    setTimeout(() => { suppressNative = false; }, 0);
   };
 
   // Attach play/pause/seeked listeners to the native audio element and mute it
