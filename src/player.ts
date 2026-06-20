@@ -66,6 +66,7 @@ export class Player {
   onCartRemove?: (track: PlaylistTrack, cartItemUrl: string) => Promise<void>;
   onCheckoutSelected?: (selectedRawUrls: string[]) => Promise<void>;
   onPlaybackStart?: () => void;
+  onPlayStateChange?: (playing: boolean) => void;
   onCurrentPageTrackChange?: (pageUrl: string) => void;
   onTrackChange?: (id: PlaylistId, index: number) => void;
   onSeek?: (fraction: number) => void;
@@ -634,16 +635,22 @@ export class Player {
     }
   }
 
+  get currentPlaylistId(): PlaylistId | null {
+    return this.activeId;
+  }
+
   private bindAudioEvents() {
     this.audio.addEventListener('play', () => {
       this.playPauseBtn.textContent = '⏸';
       if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
       this.onPlaybackStart?.();
+      this.onPlayStateChange?.(true);
     });
 
     this.audio.addEventListener('pause', () => {
       this.playPauseBtn.textContent = '▶';
       if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
+      this.onPlayStateChange?.(false);
     });
 
     this.audio.addEventListener('timeupdate', () => {

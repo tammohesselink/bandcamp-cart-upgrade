@@ -1787,6 +1787,25 @@ function setupNativePlayerSync(player: Player): () => void {
     queueMicrotask(() => { suppressSeekSync = false; });
   };
 
+  // --- bottom → native: play/pause sync ---
+  // When the bottom player plays or pauses, mirror that state on the native
+  // audio element so the native play button glyph stays accurate. We only
+  // resume the native audio when the active playlist is 'currentpage'; for
+  // cart/discography playback the native button should remain in the paused
+  // state. suppressNative is held until the next task so the resulting native
+  // play/pause event doesn't echo back through onNativePlay/onNativePause.
+  player.onPlayStateChange = (playing) => {
+    const nativeAudio = getNativeAudio();
+    if (!nativeAudio) return;
+    suppressNative = true;
+    if (playing && player.currentPlaylistId === 'currentpage') {
+      nativeAudio.play().catch(() => {});
+    } else {
+      nativeAudio.pause();
+    }
+    setTimeout(() => { suppressNative = false; }, 0);
+  };
+
   // --- bottom → native: track selection ---
   player.onCurrentPageTrackChange = (pageUrl) => {
     const rows = Array.from(document.querySelectorAll<HTMLElement>(SEL_NATIVE_TRACK_ROW));
