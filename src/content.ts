@@ -1458,7 +1458,7 @@ function updateSyncNum(responseBody: unknown): void {
 
 // --- Fetch + parse -----------------------------------------------------------
 
-const CACHE_KEY_PREFIX = 'bcp_tracks_v6_';
+const CACHE_KEY_PREFIX = 'bcp_tracks_v7_';
 const CACHE_TTL_MS = 60 * 60 * 1000;
 
 interface CacheEntry {
@@ -1468,7 +1468,7 @@ interface CacheEntry {
 
 async function readCache(url: string): Promise<PlaylistTrack[] | null> {
   try {
-    const key = CACHE_KEY_PREFIX + url;
+    const key = CACHE_KEY_PREFIX + normalizeUrl(url);
     const result = await chrome.storage.local.get(key);
     const entry = result[key] as CacheEntry | undefined;
     if (!entry) return null;
@@ -1491,7 +1491,7 @@ async function readCache(url: string): Promise<PlaylistTrack[] | null> {
 function writeCache(url: string, tracks: PlaylistTrack[]): void {
   if (tracks.length === 0) return; // Don't cache parse failures — allow retries.
   const entry: CacheEntry = { tracks, cachedAt: Date.now() };
-  chrome.storage.local.set({ [CACHE_KEY_PREFIX + url]: entry }).catch(() => {});
+  chrome.storage.local.set({ [CACHE_KEY_PREFIX + normalizeUrl(url)]: entry }).catch(() => {});
 }
 
 async function clearTrackCache(): Promise<void> {
