@@ -1757,8 +1757,12 @@ function setupNativePlayerSync(player: Player): () => void {
     const idx = pageUrl
       ? tracks.findIndex((t) => normalizeUrl(t.pageUrl) === normalizeUrl(pageUrl))
       : -1;
+    // Hold suppressNative across the bottom player's resulting 'play' macrotask
+    // so onPlayStateChange doesn't echo back and double-drive the native audio.
+    suppressNative = true;
     // silent=true: native is already on the right track — don't drive it again.
     player.jumpTo('currentpage', idx === -1 ? 0 : idx, true);
+    setTimeout(() => { suppressNative = false; }, 0);
   };
 
   // --- native → bottom: native paused ---
@@ -1767,7 +1771,11 @@ function setupNativePlayerSync(player: Player): () => void {
     // While the tab is backgrounded, Chrome suspends the muted native <audio>
     // and fires 'pause'. That is not a user action — don't stop the bottom player.
     if (document.hidden) return;
+    // Hold suppressNative across the bottom player's resulting 'pause' macrotask
+    // so onPlayStateChange doesn't echo back and re-pause the native redundantly.
+    suppressNative = true;
     player.pause();
+    setTimeout(() => { suppressNative = false; }, 0);
   };
 
   // --- native → bottom: seek sync ---
@@ -1795,6 +1803,7 @@ function setupNativePlayerSync(player: Player): () => void {
   // state. suppressNative is held until the next task so the resulting native
   // play/pause event doesn't echo back through onNativePlay/onNativePause.
   player.onPlayStateChange = (playing) => {
+    if (suppressNative) return;
     const nativeAudio = getNativeAudio();
     if (!nativeAudio) return;
     suppressNative = true;

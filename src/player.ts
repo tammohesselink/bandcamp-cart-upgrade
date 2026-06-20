@@ -152,6 +152,13 @@ export class Player {
     const state = this.playlists.get(id);
     if (!state) return;
     this.audio.pause();
+    // loadTrack() calls audio.load() when the stream URL changes, which removes
+    // pending tasks from the media element's event queue — including the 'pause'
+    // event dispatched above. Reflect the paused state explicitly so the glyph
+    // and onPlayStateChange callbacks aren't silently dropped.
+    // Skip when silent: silent selects are native-driven (onNativePlay → jumpTo)
+    // and pushing paused state back would pause the native audio that just started.
+    if (!silent) this.reflectPlaybackState(false);
     this.activeId = id;
     this.updateHeader();
     this.updateQueueEl();
@@ -639,18 +646,22 @@ export class Player {
     return this.activeId;
   }
 
+  private reflectPlaybackState(playing: boolean) {
+    this.playPauseBtn.textContent = playing ? '⏸' : '▶';
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
+    }
+    this.onPlayStateChange?.(playing);
+  }
+
   private bindAudioEvents() {
     this.audio.addEventListener('play', () => {
-      this.playPauseBtn.textContent = '⏸';
-      if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
+      this.reflectPlaybackState(true);
       this.onPlaybackStart?.();
-      this.onPlayStateChange?.(true);
     });
 
     this.audio.addEventListener('pause', () => {
-      this.playPauseBtn.textContent = '▶';
-      if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
-      this.onPlayStateChange?.(false);
+      this.reflectPlaybackState(false);
     });
 
     this.audio.addEventListener('timeupdate', () => {
