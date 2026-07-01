@@ -1494,6 +1494,32 @@ function writeCache(url: string, tracks: PlaylistTrack[]): void {
   chrome.storage.local.set({ [CACHE_KEY_PREFIX + normalizeUrl(url)]: entry }).catch(() => {});
 }
 
+// Bulk cache lookup for playlist resolution — one chrome.storage.local.get() round trip
+// for the whole cart/discography instead of one per item, since per-call IPC overhead
+// otherwise dominates wall time even when every item is a hit.
+async function readCacheBatch(urls: string[]): Promise<Map<string, PlaylistTrack[]>> {
+  const hits = new Map<string, PlaylistTrack[]>();
+  const keyToUrl = new Map<string, string>();
+  for (const url of urls) {
+    keyToUrl.set(CACHE_KEY_PREFIX + normalizeUrl(url), url);
+  }
+  try {
+    const all = await chrome.storage.local.get([...keyToUrl.keys()]);
+    const staleKeys: string[] = [];
+    for (const [key, url] of keyToUrl) {
+      const entry = all[key] as CacheEntry | undefined;
+      if (!entry) continue;
+      if (Date.now() - entry.cachedAt > CACHE_TTL_MS || entry.tracks.length === 0) {
+        staleKeys.push(key);
+        continue;
+      }
+      hits.set(url, entry.tracks);
+    }
+    if (staleKeys.length > 0) chrome.storage.local.remove(staleKeys).catch(() => {});
+  } catch {}
+  return hits;
+}
+
 async function clearTrackCache(): Promise<void> {
   try {
     const all = await chrome.storage.local.get(null);
@@ -1549,10 +1575,12 @@ async function resolvePlaylist(
   const indexMap = new Map<string, number>();
   let done = 0;
 
+  const cacheBatch = await readCacheBatch(items.map((item) => item.url));
+
   for (const item of items) {
     const firstIndex = tracks.length;
 
-    const cached = await readCache(item.url);
+    const cached = cacheBatch.get(item.url);
     if (cached) {
       console.log('[bcp] Cache hit:', item.url);
       indexMap.set(item.url, firstIndex);
