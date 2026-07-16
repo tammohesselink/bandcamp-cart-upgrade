@@ -11,7 +11,7 @@ const TEMPO_RANGES = [
   { label: 'WIDE', min: 0.10, max: 2.00 },
 ] as const;
 
-type StatusKind = 'loading' | 'error' | 'warn' | 'info';
+export type StatusKind = 'loading' | 'error' | 'warn' | 'info';
 
 interface PlaylistState {
   label: string;
@@ -71,7 +71,7 @@ export class Player {
   onSeek?: (fraction: number) => void;
   onDiscographyButtonVisibilityChange?: (show: boolean) => void;
   onShowCache?: () => Promise<void> | void;
-  onTogglePauseLoading?: () => boolean;
+  onTogglePauseLoading?: () => boolean | Promise<boolean>;
 
   constructor(initialPlaylist: PlaylistTrack[]) {
     this.audio = new Audio();
@@ -255,7 +255,12 @@ export class Player {
     if (toAdd.length === 0) return null;
     const startIndex = state.tracks.length;
     state.tracks.push(...toAdd);
-    if (this.activeId === id) this.updateQueueEl();
+    // If this playlist was just lazily created above (or was otherwise selected
+    // while still empty), selectPlaylist's loadTrack call ran against an empty
+    // tracks array and no-opped — the bar never picked up the track at
+    // lastIndex. Re-run loadTrack now that it exists; it's a no-op re-render
+    // when a track was already showing (same streamUrl skips the reload).
+    if (this.activeId === id) this.loadTrack(state.lastIndex, true);
     return startIndex;
   }
 
@@ -516,9 +521,13 @@ export class Player {
     this.pauseLoadBtn = btn('⏸', 'bcp-btn');
     this.pauseLoadBtn.title = 'Pause loading';
     this.pauseLoadBtn.style.display = 'none';
-    this.pauseLoadBtn.addEventListener('click', () => {
-      const paused = this.onTogglePauseLoading?.();
-      if (paused === undefined) return;
+    this.pauseLoadBtn.addEventListener('click', async () => {
+      // The pause flag lives in chrome.storage.local (shared with the
+      // background loader), so flipping it is async — await it before
+      // touching the glyph so it isn't clobbered by the pre-flip state.
+      const result = this.onTogglePauseLoading?.();
+      if (result === undefined) return;
+      const paused = await result;
       this.pauseLoadBtn.textContent = paused ? '▶' : '⏸';
       this.pauseLoadBtn.title = paused ? 'Resume loading' : 'Pause loading';
     });
