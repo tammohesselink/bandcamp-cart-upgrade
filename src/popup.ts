@@ -45,10 +45,17 @@ function addToggle(container: HTMLElement, label: string, checked: boolean, onCh
   container.appendChild(row);
 }
 
+async function loadDebugMode(): Promise<boolean> {
+  const result = await chrome.storage.local.get('bcpDebug');
+  const v = result['bcpDebug'];
+  return typeof v === 'boolean' ? v : false;
+}
+
 async function init(): Promise<void> {
-  const [settings, showDisco] = await Promise.all([
+  const [settings, showDisco, debugMode] = await Promise.all([
     loadSettings(),
     loadShowDiscographyButton(),
+    loadDebugMode(),
   ]);
 
   const container = document.getElementById('settings')!;
@@ -59,6 +66,10 @@ async function init(): Promise<void> {
 
   addToggle(container, 'Show play button on top of label pages', showDisco, (v) => {
     chrome.storage.local.set({ showDiscographyButton: v });
+  });
+
+  addToggle(container, 'Run debug mode', debugMode, (v) => {
+    chrome.storage.local.set({ bcpDebug: v });
   });
 }
 
