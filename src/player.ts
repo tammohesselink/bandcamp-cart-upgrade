@@ -50,8 +50,8 @@ export class Player {
   private showDiscographyButton = true;
   private statusEl!: HTMLElement;
   private queueToggleBtn!: HTMLButtonElement;
-  private reloadBtn!: HTMLButtonElement;
   private cacheBtn!: HTMLButtonElement;
+  private pauseLoadBtn!: HTMLButtonElement;
 
   private queueVisible = false;
   private playerVisible = true;
@@ -70,8 +70,8 @@ export class Player {
   onTrackChange?: (id: PlaylistId, index: number) => void;
   onSeek?: (fraction: number) => void;
   onDiscographyButtonVisibilityChange?: (show: boolean) => void;
-  onReloadPlaylist?: () => Promise<void>;
   onShowCache?: () => Promise<void> | void;
+  onTogglePauseLoading?: () => boolean;
 
   constructor(initialPlaylist: PlaylistTrack[]) {
     this.audio = new Audio();
@@ -198,6 +198,20 @@ export class Player {
     state.statusKind = kind;
     if (id === this.activeId) {
       this.setStatus(msg, kind);
+    }
+  }
+
+  // Reveal the debug pause/load button (requires bcpDebug storage flag to be set).
+  showPauseLoadButton() {
+    this.pauseLoadBtn.style.display = '';
+  }
+
+  // Repaint the active playlist's stored status — used after a transient loading
+  // message (e.g. discography progress) to restore the correct per-playlist text.
+  refreshStatus() {
+    const state = this.active();
+    if (state?.statusMsg) {
+      this.setStatus(state.statusMsg, state.statusKind);
     }
   }
 
@@ -499,12 +513,14 @@ export class Player {
     this.cacheBtn.title = 'Show track cache contents';
     this.cacheBtn.addEventListener('click', () => this.onShowCache?.());
 
-    this.reloadBtn = btn('⟳', 'bcp-btn');
-    this.reloadBtn.title = 'Reload playlist information (clears track cache)';
-    this.reloadBtn.addEventListener('click', async () => {
-      this.reloadBtn.disabled = true;
-      try { await this.onReloadPlaylist?.(); }
-      finally { this.reloadBtn.disabled = false; }
+    this.pauseLoadBtn = btn('⏸', 'bcp-btn');
+    this.pauseLoadBtn.title = 'Pause loading';
+    this.pauseLoadBtn.style.display = 'none';
+    this.pauseLoadBtn.addEventListener('click', () => {
+      const paused = this.onTogglePauseLoading?.();
+      if (paused === undefined) return;
+      this.pauseLoadBtn.textContent = paused ? '▶' : '⏸';
+      this.pauseLoadBtn.title = paused ? 'Resume loading' : 'Pause loading';
     });
 
     this.statusEl = el('div', 'bcp-status');
@@ -519,7 +535,7 @@ export class Player {
       this.queueToggleBtn,
       this.statusEl,
       this.cacheBtn,
-      this.reloadBtn
+      this.pauseLoadBtn
     );
 
     return bar;

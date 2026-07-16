@@ -44,6 +44,29 @@ let checkoutSelectedBtn: HTMLButtonElement | null = null;
 let activeCartIndexMap: Map<string, number> = new Map();
 let activeDiscoIndexMap: Map<string, number> = new Map();
 
+// Releases that failed to resolve metadata during the most recent resolvePlaylist run.
+// Cleared and re-populated on each run so the cache viewer always reflects the current state.
+interface FetchFailure { url: string; title: string; artist: string; reason: 'error' | 'empty'; }
+let fetchFailures: FetchFailure[] = [];
+
+// Debug pause/resume gate for the sequential metadata loader.
+let loadingPaused = false;
+let resumeWaiters: Array<() => void> = [];
+let activeLoadProgress: { label: string; done: number; total: number; currentUrl: string } | null = null;
+
+function waitWhilePaused(): Promise<void> {
+  if (!loadingPaused) return Promise.resolve();
+  return new Promise((resolve) => resumeWaiters.push(resolve));
+}
+
+function setLoadingPaused(paused: boolean): void {
+  loadingPaused = paused;
+  if (!paused) {
+    resumeWaiters.forEach((fn) => fn());
+    resumeWaiters = [];
+  }
+}
+
 // Maps normalised cart item URL → Bandcamp cart line-item id.
 // req=del needs this id (assigned when the item entered the cart), not the tralbum id.
 // Populated from cart_data.items in cart operation responses.
@@ -166,9 +189,11 @@ function ensureHistoryStyles(): void {
     .bcp-snap-items li{padding:1px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:420px}
     .bcp-item-add{color:#1da0c3}
     .bcp-item-extra{color:#bbb}
-    .bcp-ha{display:flex;justify-content:flex-end;flex-shrink:0}
+    .bcp-ha{display:flex;justify-content:flex-end;flex-shrink:0;gap:8px}
     .bcp-ha button{padding:7px 16px;border-radius:4px;border:1px solid #ccc;cursor:pointer;font-size:13px;font-family:inherit}
     .bcp-hcl:hover{background:#f5f5f5}
+    .bcp-hclear{background:#e05c5c;border-color:#e05c5c !important;color:#fff}
+    .bcp-hclear:hover{background:#c94c4c;border-color:#c94c4c !important}
     .bcp-cache-hm{max-width:680px}
     .bcp-cache-url{font-size:12px;color:#1da0c3;word-break:break-all;text-decoration:none}
     .bcp-cache-url:hover{text-decoration:underline}
@@ -180,6 +205,10 @@ function ensureHistoryStyles(): void {
     .bcp-cache-track-detail{color:#888;margin-left:4px}
     .bcp-cache-flags{color:#bbb;font-size:11px;margin-left:4px}
     .bcp-cache-empty{color:#999;font-style:italic;padding:12px 0}
+    .bcp-cache-fail-hd{color:#e05c5c;font-weight:600;font-size:13px;margin:0 0 6px}
+    .bcp-cache-fail-reason{color:#e05c5c;font-size:11px;margin-left:6px;opacity:.8}
+    .bcp-cache-fail-title{font-weight:600;font-size:12px}
+    .bcp-cache-fail-artist{color:#888;font-size:12px;margin-left:4px}
   `;
   document.head.appendChild(style);
 }
@@ -296,7 +325,7 @@ function formatDuration(secs: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-function showCacheModal(entries: CacheDump[]): void {
+function showCacheModal(entries: CacheDump[], failures: FetchFailure[] = []): void {
   ensureHistoryStyles();
 
   const backdrop = document.createElement('div');
@@ -308,6 +337,48 @@ function showCacheModal(entries: CacheDump[]): void {
   const title = document.createElement('h3');
   title.textContent = `Track cache (${entries.length} entr${entries.length !== 1 ? 'ies' : 'y'})`;
   modal.appendChild(title);
+
+  if (failures.length > 0) {
+    const failHd = document.createElement('p');
+    failHd.className = 'bcp-cache-fail-hd';
+    failHd.textContent = `Failed to resolve (${failures.length})`;
+    modal.appendChild(failHd);
+
+    const failList = document.createElement('ul');
+    failList.className = 'bcp-hl';
+    for (const f of failures) {
+      const li = document.createElement('li');
+
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:baseline;flex-wrap:wrap;gap:4px;margin-bottom:2px';
+
+      const urlLink = document.createElement('a');
+      urlLink.className = 'bcp-cache-url';
+      urlLink.href = f.url;
+      urlLink.target = '_blank';
+      urlLink.rel = 'noopener noreferrer';
+      urlLink.textContent = f.url;
+
+      const reasonBadge = document.createElement('span');
+      reasonBadge.className = 'bcp-cache-fail-reason';
+      reasonBadge.textContent = f.reason === 'error' ? 'fetch error' : 'no tracks found';
+
+      row.append(urlLink, reasonBadge);
+
+      const meta = document.createElement('div');
+      const titleSpan = document.createElement('span');
+      titleSpan.className = 'bcp-cache-fail-title';
+      titleSpan.textContent = f.title || '(untitled)';
+      const artistSpan = document.createElement('span');
+      artistSpan.className = 'bcp-cache-fail-artist';
+      artistSpan.textContent = f.artist;
+      meta.append(titleSpan, artistSpan);
+
+      li.append(row, meta);
+      failList.appendChild(li);
+    }
+    modal.appendChild(failList);
+  }
 
   const list = document.createElement('ul');
   list.className = 'bcp-hl';
@@ -384,6 +455,19 @@ function showCacheModal(entries: CacheDump[]): void {
 
   const actions = document.createElement('div');
   actions.className = 'bcp-ha';
+
+  if (entries.length > 0) {
+    const clearBtn = document.createElement('button');
+    clearBtn.className = 'bcp-hclear';
+    clearBtn.textContent = 'Clear cache';
+    clearBtn.addEventListener('click', async () => {
+      if (!window.confirm('Clear the track cache? This only clears cached track metadata (not cart history) and will reload the page.')) return;
+      await clearTrackCache();
+      location.reload();
+    });
+    actions.appendChild(clearBtn);
+  }
+
   const closeBtn = document.createElement('button');
   closeBtn.className = 'bcp-hcl';
   closeBtn.textContent = 'Close';
@@ -720,10 +804,10 @@ main().catch(console.error);
 // player's cart playlist, and re-injects sidecart UI elements. Returns false
 // if no playable tracks were found so the caller can decide how to proceed.
 async function loadCartPlaylist(cartItems: CartItem[], player: Player): Promise<boolean> {
-  player.setStatus(`Loading 0 / ${cartItems.length}…`, 'loading');
+  player.setStatus(`Loading cart 0 / ${cartItems.length}…`, 'loading');
 
-  const { tracks: cartTracks, indexMap: cartIndexMap } = await resolvePlaylist(cartItems, (done) => {
-    player.setStatus(`Loading ${done} / ${cartItems.length}…`, 'loading');
+  const { tracks: cartTracks, indexMap: cartIndexMap } = await resolvePlaylist(cartItems, 'cart', (done, url) => {
+    player.setStatus(`Loading cart ${done} / ${cartItems.length} — ${url}`, 'loading');
   });
 
   if (cartTracks.length === 0) {
@@ -1166,8 +1250,22 @@ async function main() {
 
   player.onShowCache = async () => {
     const entries = await listCacheEntries();
-    showCacheModal(entries);
+    showCacheModal(entries, fetchFailures);
   };
+
+  player.onTogglePauseLoading = () => {
+    const paused = !loadingPaused;
+    setLoadingPaused(paused);
+    const p = activeLoadProgress;
+    if (p) {
+      if (paused) player.setStatus(`Paused at ${p.done} / ${p.total} — ${p.currentUrl}`, 'warn');
+      else player.setStatus(`Loading ${p.label} ${p.done} / ${p.total} — ${p.currentUrl}`, 'loading');
+    }
+    return paused;
+  };
+
+  const { bcpDebug } = await chrome.storage.local.get('bcpDebug') as { bcpDebug?: boolean };
+  if (bcpDebug) player.showPauseLoadButton();
 
   if (cartItems.length > 0) {
     const loaded = await loadCartPlaylist(cartItems, player);
@@ -1177,31 +1275,6 @@ async function main() {
     // Tracks can still be added from the discography below.
     player.setStatus('Cart is empty', 'info');
   }
-
-  player.onReloadPlaylist = async () => {
-    player.setStatus('Reloading playlist info…', 'loading');
-    await clearTrackCache();
-    if (cartItems.length > 0) {
-      await loadCartPlaylist(cartItems, player);
-    }
-    if (discoItems.length > 0 && discoBtn) {
-      discoBtn.textContent = `Loading label discography…`;
-      discoBtn.disabled = true;
-      const { tracks: discoTracks, indexMap: discoIndexMap } = await resolvePlaylist(discoItems, (done) => {
-        discoBtn.textContent = `Loading label discography… ${done} / ${discoItems.length}`;
-      });
-      if (discoTracks.length > 0) {
-        activeDiscoIndexMap = discoIndexMap;
-        player.setPlaylist('discography', 'Label discography', discoTracks);
-        player.setPlaylistStatus('discography', `${discoTracks.length} tracks (${discoItems.length} releases)`, 'info');
-        discoBtn.textContent = `Play label discography (${discoTracks.length} tracks, ${discoItems.length} releases)`;
-        discoBtn.disabled = false;
-        injectDiscographyPlayButtons(discoIndexMap, discoItems, player);
-      } else {
-        discoBtn.textContent = 'No playable discography tracks found';
-      }
-    }
-  };
 
   if (discoItems.length > 0 && discoBtn) {
     discoBtn.style.display = player.discographyButtonEnabled ? '' : 'none';
@@ -1213,8 +1286,9 @@ async function main() {
     console.log('[bcp] Discography releases found:');
     console.table(discoItems.map((it) => ({ type: it.type, url: it.url })));
 
-    const { tracks: discoTracks, indexMap: discoIndexMap } = await resolvePlaylist(discoItems, (done) => {
+    const { tracks: discoTracks, indexMap: discoIndexMap } = await resolvePlaylist(discoItems, 'discography', (done, url) => {
       discoBtn.textContent = `Loading label discography… ${done} / ${discoItems.length}`;
+      player.setStatus(`Loading discography ${done} / ${discoItems.length} — ${url}`, 'loading');
     });
 
     if (discoTracks.length > 0) {
@@ -1230,6 +1304,7 @@ async function main() {
     } else {
       discoBtn.textContent = 'No playable discography tracks found';
     }
+    player.refreshStatus();
   }
 
   if (isTrackOrAlbumPage()) {
@@ -1569,15 +1644,20 @@ async function fetchTracksForUrl(url: string): Promise<PlaylistTrack[]> {
 
 async function resolvePlaylist(
   items: CartItem[],
-  onProgress: (done: number) => void
+  label: string,
+  onProgress: (done: number, url: string) => void
 ): Promise<{ tracks: PlaylistTrack[]; indexMap: Map<string, number> }> {
   const tracks: PlaylistTrack[] = [];
   const indexMap = new Map<string, number>();
   let done = 0;
+  const total = items.length;
 
   const cacheBatch = await readCacheBatch(items.map((item) => item.url));
 
   for (const item of items) {
+    await waitWhilePaused();
+    activeLoadProgress = { label, done, total, currentUrl: item.url };
+
     const firstIndex = tracks.length;
 
     const cached = cacheBatch.get(item.url);
@@ -1586,7 +1666,8 @@ async function resolvePlaylist(
       indexMap.set(item.url, firstIndex);
       tracks.push(...cached);
       done++;
-      onProgress(done);
+      activeLoadProgress = { label, done, total, currentUrl: item.url };
+      onProgress(done, item.url);
       continue;
     }
 
@@ -1594,10 +1675,17 @@ async function resolvePlaylist(
       const response = await sendBcpMessage({ type: 'fetch', url: item.url });
       if (response.error) {
         console.warn(`[bcp] Fetch error for ${item.url}:`, response.error);
+        fetchFailures = fetchFailures.filter((f) => f.url !== item.url);
+        fetchFailures.push({ url: item.url, title: item.title, artist: item.artist, reason: 'error' });
       } else {
         const parsed = parseTralbum(response.html ?? '', item.url);
         if (parsed.length === 0) {
           console.warn('[bcp] No tracks parsed from', item.url);
+          fetchFailures = fetchFailures.filter((f) => f.url !== item.url);
+          fetchFailures.push({ url: item.url, title: item.title, artist: item.artist, reason: 'empty' });
+        } else {
+          // Successfully resolved — remove any prior failure record for this url.
+          fetchFailures = fetchFailures.filter((f) => f.url !== item.url);
         }
         writeCache(item.url, parsed);
         indexMap.set(item.url, firstIndex);
@@ -1605,11 +1693,15 @@ async function resolvePlaylist(
       }
     } catch (err) {
       console.warn('[bcp] Failed to fetch', item.url, err);
+      fetchFailures = fetchFailures.filter((f) => f.url !== item.url);
+      fetchFailures.push({ url: item.url, title: item.title, artist: item.artist, reason: 'error' });
     }
     done++;
-    onProgress(done);
+    activeLoadProgress = { label, done, total, currentUrl: item.url };
+    onProgress(done, item.url);
   }
 
+  activeLoadProgress = null;
   return { tracks, indexMap };
 }
 
