@@ -1,6 +1,6 @@
 import type { CartItem, PlaylistTrack, SavedCartItem, CartSnapshot } from './types';
 import { parseTralbum } from './bandcamp';
-import { Player } from './player';
+import { Player, type StatusKind } from './player';
 import { probeCart, probeDiscography, injectDiscographyButton, injectRestoreCartButton, injectRemovePurchasedButton } from './probe';
 import { addSnapshotIfChanged, diffSnapshot } from './cart-history';
 import { normalizeUrl } from './url';
@@ -18,6 +18,10 @@ import {
   SEL_NATIVE_ROW_PLAY,
 } from './bandcamp-dom';
 import { sendBcpMessage } from './messages';
+import type { LoadItem, LoadLabel } from './messages';
+import { readCache, writeCache, readCacheBatch, clearTrackCache, listCacheEntries, type CacheDump } from './cache';
+import { computeJobKey } from './jobkey';
+import { PAUSE_FLAG_KEY, progressKey, readProgress, type JobFailure, type JobProgress } from './progress';
 
 console.log('[bcp] cart player loaded');
 
@@ -44,28 +48,14 @@ let checkoutSelectedBtn: HTMLButtonElement | null = null;
 let activeCartIndexMap: Map<string, number> = new Map();
 let activeDiscoIndexMap: Map<string, number> = new Map();
 
-// Releases that failed to resolve metadata during the most recent resolvePlaylist run.
-// Cleared and re-populated on each run so the cache viewer always reflects the current state.
-interface FetchFailure { url: string; title: string; artist: string; reason: 'error' | 'empty'; }
-let fetchFailures: FetchFailure[] = [];
+// Per-label set of release URLs already materialized into the player's
+// playlist, so re-applying the same progress snapshot (the initial read can
+// race the first onChanged event) doesn't re-add tracks.
+const consumedLoadUrls = new Map<LoadLabel, Set<string>>();
 
-// Debug pause/resume gate for the sequential metadata loader.
-let loadingPaused = false;
-let resumeWaiters: Array<() => void> = [];
-let activeLoadProgress: { label: string; done: number; total: number; currentUrl: string } | null = null;
-
-function waitWhilePaused(): Promise<void> {
-  if (!loadingPaused) return Promise.resolve();
-  return new Promise((resolve) => resumeWaiters.push(resolve));
-}
-
-function setLoadingPaused(paused: boolean): void {
-  loadingPaused = paused;
-  if (!paused) {
-    resumeWaiters.forEach((fn) => fn());
-    resumeWaiters = [];
-  }
-}
+// chrome.storage.onChanged listeners registered by startLoadConsumer, removed
+// on pagehide so a stale callback can't fire after the page has navigated away.
+const progressListeners = new Map<LoadLabel, (changes: Record<string, chrome.storage.StorageChange>, area: string) => void>();
 
 // Maps normalised cart item URL → Bandcamp cart line-item id.
 // req=del needs this id (assigned when the item entered the cart), not the tralbum id.
@@ -325,7 +315,7 @@ function formatDuration(secs: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-function showCacheModal(entries: CacheDump[], failures: FetchFailure[] = []): void {
+function showCacheModal(entries: CacheDump[], failures: JobFailure[] = []): void {
   ensureHistoryStyles();
 
   const backdrop = document.createElement('div');
@@ -800,40 +790,118 @@ async function doRestore(button: HTMLButtonElement, toAdd: SavedCartItem[], toRe
 
 main().catch(console.error);
 
-// Loads (or reloads) the cart playlist: resolves track metadata, updates the
-// player's cart playlist, and re-injects sidecart UI elements. Returns false
-// if no playable tracks were found so the caller can decide how to proceed.
-async function loadCartPlaylist(cartItems: CartItem[], player: Player): Promise<boolean> {
-  player.setStatus(`Loading cart 0 / ${cartItems.length}…`, 'loading');
-
-  const { tracks: cartTracks, indexMap: cartIndexMap } = await resolvePlaylist(cartItems, 'cart', (done, url) => {
-    player.setStatus(`Loading cart ${done} / ${cartItems.length} — ${url}`, 'loading');
-  });
-
-  if (cartTracks.length === 0) {
-    player.setStatus('No playable tracks found', 'error');
-    return false;
+// Progress messages are scoped to their own playlist via setPlaylistStatus
+// rather than the shared setStatus, because cart and discography now load
+// concurrently as independent background jobs — an unscoped setStatus call
+// from one could overwrite (and mis-persist onto) the other's visible status.
+// setPlaylistStatus no-ops until the label's playlist has at least one track,
+// so fall back to setStatus for that brief window.
+function setLoadStatus(player: Player, label: LoadLabel, msg: string, kind: StatusKind): void {
+  player.setPlaylistStatus(label, msg, kind);
+  if (player.getPlaylistTracks(label).length === 0) {
+    player.setStatus(msg, kind);
   }
+}
 
-  activeCartIndexMap = cartIndexMap;
-  player.setPlaylist('cart', 'Cart', cartTracks);
-  document.body.style.paddingBottom = `${player.wrapper.offsetHeight}px`;
-  injectCartPlayButtons(cartIndexMap, player);
+// Subscribes to the background loader's progress for `label` (see
+// src/background.ts's ensure-load handler) and incrementally builds the
+// player playlist from the shared track cache as releases resolve. The job
+// itself runs in the background service worker, independent of this page, so
+// it keeps making progress across navigation — this function just reflects
+// whatever the job has already done (possibly all of it, from a previous
+// page) and stays subscribed for live updates until pagehide.
+async function startLoadConsumer(
+  label: LoadLabel,
+  items: CartItem[],
+  player: Player,
+  onItemAdded: (url: string, startIndex: number) => void,
+  onProgress: (progress: JobProgress) => void
+): Promise<void> {
+  if (items.length === 0) return;
+
+  const jobKey = computeJobKey(items.map((i) => i.url));
+  consumedLoadUrls.set(label, new Set());
+
+  const applyProgress = async (progress: JobProgress | null | undefined) => {
+    if (!progress || progress.jobKey !== jobKey) return;
+
+    const consumed = consumedLoadUrls.get(label)!;
+    const freshUrls = progress.doneUrls.filter((url) => !consumed.has(url));
+    if (freshUrls.length > 0) {
+      const freshSet = new Set(freshUrls);
+      const batch = await readCacheBatch(freshUrls);
+      for (const item of items) {
+        if (!freshSet.has(item.url)) continue;
+        consumed.add(item.url);
+        const tracks = batch.get(item.url);
+        if (!tracks || tracks.length === 0) continue;
+        const startIndex = player.addTracksToPlaylist(label, tracks);
+        if (startIndex !== null) onItemAdded(item.url, startIndex);
+      }
+    }
+
+    onProgress(progress);
+  };
+
+  const key = progressKey(label);
+  const listener = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
+    if (area !== 'local') return;
+    const change = changes[key];
+    if (!change) return;
+    applyProgress(change.newValue as JobProgress | undefined).catch((err: unknown) => {
+      console.error('[bcp] Failed to apply load progress:', label, err);
+    });
+  };
+  chrome.storage.onChanged.addListener(listener);
+  progressListeners.set(label, listener);
+
+  // Apply whatever's already known — a job that fully finished, or made
+  // partial progress, while this page was elsewhere — before the round trip
+  // below. This is what makes loading continue across navigation instead of
+  // restarting at item 0.
+  await applyProgress(await readProgress(label));
+
+  const loadItems: LoadItem[] = items.map((i) => ({ url: i.url, title: i.title, artist: i.artist }));
+  await sendBcpMessage({ type: 'ensure-load', label, jobKey, items: loadItems });
+
+  // The response above only reflects state at send-time; re-read in case the
+  // job (e.g. one already 'done' from a previous page) resolved between the
+  // initial read and now.
+  await applyProgress(await readProgress(label));
+}
+
+// Loads (or reloads) the cart playlist: subscribes to the background loader's
+// progress and incrementally builds the cart playlist and sidecart UI as
+// releases resolve.
+async function loadCartPlaylist(cartItems: CartItem[], player: Player): Promise<void> {
+  setLoadStatus(player, 'cart', `Loading cart 0 / ${cartItems.length}…`, 'loading');
+
   cartItems.forEach((item) => injectCheckboxForSidecartItem(item.url));
   injectCheckoutSelectedBtn(player);
 
-  const unplayable = cartTracks.filter((t) => t.unplayable).length;
-  if (unplayable > 0) {
-    const pct = unplayable / cartTracks.length;
-    if (pct >= 0.5) {
-      player.setStatus('Log in for full streams', 'warn');
-    } else {
-      player.setStatus(`${unplayable} track${unplayable > 1 ? 's' : ''} unavailable`, 'warn');
+  await startLoadConsumer(
+    'cart',
+    cartItems,
+    player,
+    (url, startIndex) => {
+      activeCartIndexMap.set(normalizeUrl(url), startIndex);
+      injectPlayButtonForSidecartItem(url, startIndex, player);
+      injectCheckboxForSidecartItem(url);
+      document.body.style.paddingBottom = `${player.wrapper.offsetHeight}px`;
+    },
+    (progress) => {
+      if (progress.status === 'done') {
+        if (player.getPlaylistTracks('cart').length === 0) {
+          player.setStatus('No playable tracks found', 'error');
+        } else {
+          refreshCartStatus(player);
+        }
+        player.refreshStatus();
+      } else {
+        setLoadStatus(player, 'cart', `Loading cart ${progress.processed} / ${progress.total} — ${progress.currentUrl ?? ''}`, 'loading');
+      }
     }
-  } else {
-    player.setStatus(`${cartTracks.length} tracks (${cartItems.length} releases)`, 'info');
-  }
-  return true;
+  );
 }
 
 async function main() {
@@ -1197,8 +1265,8 @@ async function main() {
     }
 
     // Resolve track data here in the normal window where the cache is warm
-    // (resolvePlaylist already fetched these). The incognito window's storage
-    // is a separate empty instance, so it can't use the cache.
+    // (the background loader already fetched these). The incognito window's
+    // storage is a separate empty instance, so it can't use the cache.
     const items: Array<{ u: string; id: number; t: 't' | 'a'; pr: number; b: number | null }> = [];
     for (const item of selectedItems) {
       const tracks = await fetchTracksForUrl(item.url);
@@ -1236,11 +1304,15 @@ async function main() {
   // Keep cart state in sync when Bandcamp's own JS updates the sidecart.
   const sidecartObserver = watchSidecart(player);
 
-  // Tear down on navigation away: disconnect the observer, stop audio, and
-  // remove the injected UI so subsequent pages start clean.
+  // Tear down on navigation away: disconnect the observer, stop audio, drop
+  // the progress subscriptions (the background jobs themselves keep running —
+  // this only stops this page's listeners), and remove the injected UI so
+  // subsequent pages start clean.
   window.addEventListener('pagehide', () => {
     sidecartObserver?.disconnect();
     player.destroy();
+    for (const listener of progressListeners.values()) chrome.storage.onChanged.removeListener(listener);
+    progressListeners.clear();
   }, { once: true });
 
   // Inject the discography button up front (in its disabled "Loading…" state) so it's
@@ -1249,27 +1321,38 @@ async function main() {
   if (discoItems.length > 0) player.expectDiscography();
 
   player.onShowCache = async () => {
-    const entries = await listCacheEntries();
-    showCacheModal(entries, fetchFailures);
+    const [entries, cartProgress, discoProgress] = await Promise.all([
+      listCacheEntries(),
+      readProgress('cart'),
+      readProgress('discography'),
+    ]);
+    showCacheModal(entries, [...(cartProgress?.failures ?? []), ...(discoProgress?.failures ?? [])]);
   };
 
-  player.onTogglePauseLoading = () => {
-    const paused = !loadingPaused;
-    setLoadingPaused(paused);
-    const p = activeLoadProgress;
-    if (p) {
-      if (paused) player.setStatus(`Paused at ${p.done} / ${p.total} — ${p.currentUrl}`, 'warn');
-      else player.setStatus(`Loading ${p.label} ${p.done} / ${p.total} — ${p.currentUrl}`, 'loading');
+  player.onTogglePauseLoading = async () => {
+    const current = await chrome.storage.local.get(PAUSE_FLAG_KEY);
+    const nowPaused = current[PAUSE_FLAG_KEY] !== true;
+    await chrome.storage.local.set({ [PAUSE_FLAG_KEY]: nowPaused });
+
+    // Reflect the pause on whichever load is still running (cart and
+    // discography are independent background jobs; show the first one that
+    // hasn't finished rather than picking one arbitrarily).
+    const [cartProgress, discoProgress] = await Promise.all([readProgress('cart'), readProgress('discography')]);
+    const running = [cartProgress, discoProgress].find((p): p is JobProgress => p?.status === 'running');
+    if (running) {
+      const msg = nowPaused
+        ? `Paused at ${running.processed} / ${running.total} — ${running.currentUrl ?? ''}`
+        : `Loading ${running.label} ${running.processed} / ${running.total} — ${running.currentUrl ?? ''}`;
+      setLoadStatus(player, running.label, msg, nowPaused ? 'warn' : 'loading');
     }
-    return paused;
+    return nowPaused;
   };
 
   const { bcpDebug } = await chrome.storage.local.get('bcpDebug') as { bcpDebug?: boolean };
   if (bcpDebug) player.showPauseLoadButton();
 
   if (cartItems.length > 0) {
-    const loaded = await loadCartPlaylist(cartItems, player);
-    if (!loaded) return;
+    await loadCartPlaylist(cartItems, player);
   } else {
     // Cart is empty — show player on label page with a placeholder status.
     // Tracks can still be added from the discography below.
@@ -1282,29 +1365,40 @@ async function main() {
       discoBtn.style.display = show ? '' : 'none';
     };
 
-
     console.log('[bcp] Discography releases found:');
     console.table(discoItems.map((it) => ({ type: it.type, url: it.url })));
 
-    const { tracks: discoTracks, indexMap: discoIndexMap } = await resolvePlaylist(discoItems, 'discography', (done, url) => {
-      discoBtn.textContent = `Loading label discography… ${done} / ${discoItems.length}`;
-      player.setStatus(`Loading discography ${done} / ${discoItems.length} — ${url}`, 'loading');
+    discoBtn.addEventListener('click', () => {
+      player.jumpTo('discography', 0);
     });
 
-    if (discoTracks.length > 0) {
-      activeDiscoIndexMap = discoIndexMap;
-      player.setPlaylist('discography', 'Label discography', discoTracks);
-      player.setPlaylistStatus('discography', `${discoTracks.length} tracks (${discoItems.length} releases)`, 'info');
-      discoBtn.textContent = `Play label discography (${discoTracks.length} tracks, ${discoItems.length} releases)`;
-      discoBtn.disabled = false;
-      discoBtn.addEventListener('click', () => {
-        player.jumpTo('discography', 0);
-      });
-      injectDiscographyPlayButtons(discoIndexMap, discoItems, player);
-    } else {
-      discoBtn.textContent = 'No playable discography tracks found';
-    }
-    player.refreshStatus();
+    await startLoadConsumer(
+      'discography',
+      discoItems,
+      player,
+      (url, startIndex) => {
+        activeDiscoIndexMap.set(normalizeUrl(url), startIndex);
+      },
+      (progress) => {
+        const discoTracks = player.getPlaylistTracks('discography');
+        if (discoTracks.length > 0) {
+          injectDiscographyPlayButtons(activeDiscoIndexMap, discoItems, player);
+        }
+        if (progress.status === 'done') {
+          if (discoTracks.length > 0) {
+            discoBtn.textContent = `Play label discography (${discoTracks.length} tracks, ${discoItems.length} releases)`;
+            discoBtn.disabled = false;
+            player.setPlaylistStatus('discography', `${discoTracks.length} tracks (${discoItems.length} releases)`, 'info');
+          } else {
+            discoBtn.textContent = 'No playable discography tracks found';
+          }
+          player.refreshStatus();
+        } else {
+          discoBtn.textContent = `Loading label discography… ${progress.processed} / ${progress.total}`;
+          setLoadStatus(player, 'discography', `Loading discography ${progress.processed} / ${progress.total} — ${progress.currentUrl ?? ''}`, 'loading');
+        }
+      }
+    );
   }
 
   if (isTrackOrAlbumPage()) {
@@ -1533,97 +1627,6 @@ function updateSyncNum(responseBody: unknown): void {
 
 // --- Fetch + parse -----------------------------------------------------------
 
-const CACHE_KEY_PREFIX = 'bcp_tracks_v7_';
-const CACHE_TTL_MS = 60 * 60 * 1000;
-
-interface CacheEntry {
-  tracks: PlaylistTrack[];
-  cachedAt: number;
-}
-
-async function readCache(url: string): Promise<PlaylistTrack[] | null> {
-  try {
-    const key = CACHE_KEY_PREFIX + normalizeUrl(url);
-    const result = await chrome.storage.local.get(key);
-    const entry = result[key] as CacheEntry | undefined;
-    if (!entry) return null;
-    if (Date.now() - entry.cachedAt > CACHE_TTL_MS) {
-      chrome.storage.local.remove(key);
-      return null;
-    }
-    // Treat cached empty arrays as misses so transient parse failures don't
-    // permanently block resolution on subsequent calls.
-    if (entry.tracks.length === 0) {
-      chrome.storage.local.remove(key);
-      return null;
-    }
-    return entry.tracks;
-  } catch {
-    return null;
-  }
-}
-
-function writeCache(url: string, tracks: PlaylistTrack[]): void {
-  if (tracks.length === 0) return; // Don't cache parse failures — allow retries.
-  const entry: CacheEntry = { tracks, cachedAt: Date.now() };
-  chrome.storage.local.set({ [CACHE_KEY_PREFIX + normalizeUrl(url)]: entry }).catch(() => {});
-}
-
-// Bulk cache lookup for playlist resolution — one chrome.storage.local.get() round trip
-// for the whole cart/discography instead of one per item, since per-call IPC overhead
-// otherwise dominates wall time even when every item is a hit.
-async function readCacheBatch(urls: string[]): Promise<Map<string, PlaylistTrack[]>> {
-  const hits = new Map<string, PlaylistTrack[]>();
-  const keyToUrl = new Map<string, string>();
-  for (const url of urls) {
-    keyToUrl.set(CACHE_KEY_PREFIX + normalizeUrl(url), url);
-  }
-  try {
-    const all = await chrome.storage.local.get([...keyToUrl.keys()]);
-    const staleKeys: string[] = [];
-    for (const [key, url] of keyToUrl) {
-      const entry = all[key] as CacheEntry | undefined;
-      if (!entry) continue;
-      if (Date.now() - entry.cachedAt > CACHE_TTL_MS || entry.tracks.length === 0) {
-        staleKeys.push(key);
-        continue;
-      }
-      hits.set(url, entry.tracks);
-    }
-    if (staleKeys.length > 0) chrome.storage.local.remove(staleKeys).catch(() => {});
-  } catch {}
-  return hits;
-}
-
-async function clearTrackCache(): Promise<void> {
-  try {
-    const all = await chrome.storage.local.get(null);
-    const keys = Object.keys(all).filter((k) => k.startsWith(CACHE_KEY_PREFIX));
-    if (keys.length > 0) await chrome.storage.local.remove(keys);
-  } catch {}
-}
-
-interface CacheDump {
-  url: string;
-  cachedAt: number;
-  tracks: PlaylistTrack[];
-}
-
-async function listCacheEntries(): Promise<CacheDump[]> {
-  try {
-    const all = await chrome.storage.local.get(null);
-    return Object.keys(all)
-      .filter((k) => k.startsWith(CACHE_KEY_PREFIX))
-      .map((k) => {
-        const entry = all[k] as CacheEntry;
-        return { url: k.slice(CACHE_KEY_PREFIX.length), cachedAt: entry.cachedAt, tracks: entry.tracks };
-      })
-      .sort((a, b) => b.cachedAt - a.cachedAt);
-  } catch {
-    return [];
-  }
-}
-
 async function fetchTracksForUrl(url: string): Promise<PlaylistTrack[]> {
   const cached = await readCache(url);
   if (cached) return cached;
@@ -1640,69 +1643,6 @@ async function fetchTracksForUrl(url: string): Promise<PlaylistTrack[]> {
     console.error('[bcp] fetchTracksForUrl: exception for', url, err);
   }
   return [];
-}
-
-async function resolvePlaylist(
-  items: CartItem[],
-  label: string,
-  onProgress: (done: number, url: string) => void
-): Promise<{ tracks: PlaylistTrack[]; indexMap: Map<string, number> }> {
-  const tracks: PlaylistTrack[] = [];
-  const indexMap = new Map<string, number>();
-  let done = 0;
-  const total = items.length;
-
-  const cacheBatch = await readCacheBatch(items.map((item) => item.url));
-
-  for (const item of items) {
-    await waitWhilePaused();
-    activeLoadProgress = { label, done, total, currentUrl: item.url };
-
-    const firstIndex = tracks.length;
-
-    const cached = cacheBatch.get(item.url);
-    if (cached) {
-      console.log('[bcp] Cache hit:', item.url);
-      indexMap.set(item.url, firstIndex);
-      tracks.push(...cached);
-      done++;
-      activeLoadProgress = { label, done, total, currentUrl: item.url };
-      onProgress(done, item.url);
-      continue;
-    }
-
-    try {
-      const response = await sendBcpMessage({ type: 'fetch', url: item.url });
-      if (response.error) {
-        console.warn(`[bcp] Fetch error for ${item.url}:`, response.error);
-        fetchFailures = fetchFailures.filter((f) => f.url !== item.url);
-        fetchFailures.push({ url: item.url, title: item.title, artist: item.artist, reason: 'error' });
-      } else {
-        const parsed = parseTralbum(response.html ?? '', item.url);
-        if (parsed.length === 0) {
-          console.warn('[bcp] No tracks parsed from', item.url);
-          fetchFailures = fetchFailures.filter((f) => f.url !== item.url);
-          fetchFailures.push({ url: item.url, title: item.title, artist: item.artist, reason: 'empty' });
-        } else {
-          // Successfully resolved — remove any prior failure record for this url.
-          fetchFailures = fetchFailures.filter((f) => f.url !== item.url);
-        }
-        writeCache(item.url, parsed);
-        indexMap.set(item.url, firstIndex);
-        tracks.push(...parsed);
-      }
-    } catch (err) {
-      console.warn('[bcp] Failed to fetch', item.url, err);
-      fetchFailures = fetchFailures.filter((f) => f.url !== item.url);
-      fetchFailures.push({ url: item.url, title: item.title, artist: item.artist, reason: 'error' });
-    }
-    done++;
-    activeLoadProgress = { label, done, total, currentUrl: item.url };
-    onProgress(done, item.url);
-  }
-
-  activeLoadProgress = null;
-  return { tracks, indexMap };
 }
 
 function findReleaseUrlForIndex(indexMap: Map<string, number>, activeIndex: number): string | null {
@@ -1761,28 +1701,6 @@ function highlightDiscoItem(index: number): void {
 function clearDiscoHighlight(): void {
   for (const li of Array.from(document.querySelectorAll<HTMLElement>(`${SEL_MUSIC_GRID_ITEM}.bcp-playing`))) {
     li.classList.remove('bcp-playing');
-  }
-}
-
-function injectCartPlayButtons(indexMap: Map<string, number>, player: Player): void {
-  const sidecartBody = document.querySelector<HTMLElement>(SEL_SIDECART_BODY);
-  if (!sidecartBody) return;
-
-  for (const link of Array.from(sidecartBody.querySelectorAll<HTMLAnchorElement>(SEL_SIDECART_ITEM_LINK))) {
-    const index = indexMap.get(link.href);
-    if (index === undefined) continue;
-    if (link.previousElementSibling?.classList.contains('bcp-cart-play-btn')) continue; // already injected
-
-    const playBtn = document.createElement('button');
-    playBtn.className = 'bcp-cart-play-btn';
-    playBtn.textContent = '▶';
-    playBtn.title = 'Play in cart player';
-    playBtn.addEventListener('click', (e) => {
-      e.preventDefault();
-      player.jumpTo('cart', index);
-    });
-
-    link.parentElement?.insertBefore(playBtn, link);
   }
 }
 
