@@ -38,7 +38,34 @@ export interface OpenIncognitoCheckoutRequest {
   items: Array<{ u: string; id: number; t: 't' | 'a'; pr: number; b: number | null }>;
 }
 
-export type BcpRequest = FetchRequest | CartAddRequest | CartRemoveRequest | OpenIncognitoCheckoutRequest;
+// A cart/discography release, trimmed to the fields the background loader
+// needs (title/artist are only used for cache-viewer failure display).
+export interface LoadItem {
+  url: string;
+  title: string;
+  artist: string;
+}
+
+export type LoadLabel = 'cart' | 'discography';
+export type JobStatus = 'running' | 'done' | 'empty';
+
+export interface EnsureLoadRequest {
+  type: 'ensure-load';
+  label: LoadLabel;
+  // Hash of the ordered, normalized item URLs — identifies this exact
+  // cart/discography content so the background loader can tell whether a
+  // running or persisted job still applies, or whether the content changed
+  // and loading needs to restart (re-using cache for unchanged releases).
+  jobKey: string;
+  items: LoadItem[];
+}
+
+export type BcpRequest =
+  | FetchRequest
+  | CartAddRequest
+  | CartRemoveRequest
+  | OpenIncognitoCheckoutRequest
+  | EnsureLoadRequest;
 
 export interface FetchResponse {
   html?: string;
@@ -51,7 +78,12 @@ export interface CartMutationResponse {
   body?: unknown;
 }
 
-export type BcpResponse = FetchResponse | CartMutationResponse;
+export interface EnsureLoadResponse {
+  ok: boolean;
+  status: JobStatus;
+}
+
+export type BcpResponse = FetchResponse | CartMutationResponse | EnsureLoadResponse;
 
 // Typed wrapper around chrome.runtime.sendMessage so callers get the right
 // response type inferred from the request they send.
@@ -59,6 +91,7 @@ export function sendBcpMessage(msg: FetchRequest): Promise<FetchResponse>;
 export function sendBcpMessage(
   msg: CartAddRequest | CartRemoveRequest | OpenIncognitoCheckoutRequest
 ): Promise<CartMutationResponse>;
+export function sendBcpMessage(msg: EnsureLoadRequest): Promise<EnsureLoadResponse>;
 export function sendBcpMessage(msg: BcpRequest): Promise<BcpResponse> {
   return chrome.runtime.sendMessage(msg);
 }
