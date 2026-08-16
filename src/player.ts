@@ -665,6 +665,10 @@ export class Player {
     return this.switchingPlaylist;
   }
 
+  get isPlaying(): boolean {
+    return !this.audio.paused;
+  }
+
   private reflectPlaybackState(playing: boolean) {
     this.playPauseBtn.textContent = playing ? '⏸' : '▶';
     if ('mediaSession' in navigator) {

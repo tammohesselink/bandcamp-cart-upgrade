@@ -1769,12 +1769,35 @@ function setupNativePlayerSync(player: Player): () => void {
   const onNativePause = () => {
     if (suppressNative) return;
     // While the tab is backgrounded, Chrome suspends the muted native <audio>
-    // and fires 'pause'. That is not a user action — don't stop the bottom player.
-    if (document.hidden) return;
+    // and fires 'pause'. That is not a user action, so don't stop the bottom
+    // player — but the native play button reacts to this same event on its
+    // own (outside our control) and flips to its paused glyph. If the bottom
+    // player is still actively playing this track, immediately resume the
+    // muted native audio (muted autoplay is allowed regardless of tab
+    // visibility) so the native button reflects "playing" again.
+    if (document.hidden) {
+      if (player.currentPlaylistId === 'currentpage' && player.isPlaying) {
+        getNativeAudio()?.play().catch(() => {});
+      }
+      return;
+    }
     // Hold suppressNative across the bottom player's resulting 'pause' macrotask
     // so onPlayStateChange doesn't echo back and re-pause the native redundantly.
     suppressNative = true;
     player.pause();
+    setTimeout(() => { suppressNative = false; }, 0);
+  };
+
+  // --- tab regains visibility: re-sync the native button as a fallback -----
+  // Covers cases where the background resume above didn't stick (e.g. the
+  // browser re-suspended the native audio again while still hidden).
+  const onVisibilityChange = () => {
+    if (document.hidden) return;
+    if (player.currentPlaylistId !== 'currentpage' || !player.isPlaying) return;
+    const nativeAudio = getNativeAudio();
+    if (!nativeAudio || !nativeAudio.paused) return;
+    suppressNative = true;
+    nativeAudio.play().catch(() => {});
     setTimeout(() => { suppressNative = false; }, 0);
   };
 
@@ -1859,6 +1882,8 @@ function setupNativePlayerSync(player: Player): () => void {
     attachedAudio = audio;
   };
 
+  document.addEventListener('visibilitychange', onVisibilityChange);
+
   const initialAudio = getNativeAudio();
   if (initialAudio) {
     attach(initialAudio);
@@ -1890,6 +1915,7 @@ function setupNativePlayerSync(player: Player): () => void {
 
   return () => {
     trackTableObserver.disconnect();
+    document.removeEventListener('visibilitychange', onVisibilityChange);
     if (attachedAudio) {
       attachedAudio.muted = false;
       attachedAudio.removeEventListener('play', onNativePlay);
