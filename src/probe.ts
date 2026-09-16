@@ -101,16 +101,51 @@ export function injectRestoreCartButton(snapshotCount: number): HTMLButtonElemen
   return button;
 }
 
+// Inserted directly below the "Checkout selected" partial-checkout button when
+// present (both use insertAdjacentElement('afterend') on the same anchor chain,
+// and this one runs after, so it lands below); falls back to the sidecart
+// anchor chain so it still appears when the cart is empty.
+export function injectCheckoutCartButton(namedCartCount: number): HTMLButtonElement | null {
+  const anchor = document.querySelector<HTMLElement>('.bcp-checkout-selected-btn')
+    ?? document.getElementById('sidecart')
+    ?? document.querySelector('#sidecartReveal')
+    ?? document.getElementById('sidecartBody');
+  if (!anchor) return null;
+
+  const existing = document.querySelector<HTMLButtonElement>('.bcp-checkout-cart-btn');
+  if (existing) {
+    existing.textContent = `Checkout a cart (${namedCartCount})`;
+    existing.disabled = namedCartCount === 0;
+    return existing;
+  }
+
+  const button = document.createElement('button');
+  button.className = 'bcp-checkout-cart-btn';
+  button.textContent = `Checkout a cart (${namedCartCount})`;
+  button.disabled = namedCartCount === 0;
+  anchor.insertAdjacentElement('afterend', button);
+  return button;
+}
+
 export function injectRemovePurchasedButton(count: number): HTMLButtonElement | null {
   const anchor = document.getElementById('sidecart')
     ?? document.querySelector('#sidecartReveal')
     ?? document.getElementById('sidecartBody');
   if (!anchor) return null;
 
+  // A second private-window checkout in the same page life reuses this button
+  // with an updated count; the caller (setupRemovePurchasedButton) is
+  // responsible for re-binding its click handler to the current item list.
   const existing = document.querySelector<HTMLButtonElement>('.bcp-remove-purchased-btn');
-  if (existing) return existing;
+  if (existing) {
+    existing.textContent = `Remove purchased tracks from cart (${count})`;
+    const existingNote = document.querySelector<HTMLElement>('.bcp-remove-purchased-note');
+    if (existingNote) existingNote.textContent = `⚠ ${count} item${count !== 1 ? 's' : ''} sent to private checkout`;
+    return existing;
+  }
 
   const note = document.createElement('div');
+  note.className = 'bcp-remove-purchased-note';
   Object.assign(note.style, {
     color: '#888', fontSize: '11px', marginTop: '6px', textAlign: 'center',
     fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',

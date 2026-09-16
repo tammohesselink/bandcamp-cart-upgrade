@@ -1,4 +1,5 @@
-import type { PlaylistId, PlaylistTrack } from './types';
+import type { NamedCart, PlaylistId, PlaylistTrack } from './types';
+import { namedCartMembership } from './named-carts';
 import { PLAYER_CSS } from './styles';
 import { normalizeUrl } from './url';
 import { isStreamFresh } from './cache';
@@ -103,9 +104,13 @@ export class Player {
   private cartUrls = new Set<string>();
   private cartActionsEl!: HTMLElement;
 
+  private namedCarts: NamedCart[] = [];
+  private namedCartMembership = new Map<string, string[]>();
+
   onCartAdd?: (track: PlaylistTrack, addType: CartAddType) => Promise<boolean | void>;
   onCartRemove?: (track: PlaylistTrack, cartItemUrl: string) => Promise<void>;
   onCheckoutSelected?: (selectedRawUrls: string[]) => Promise<void>;
+  onTagTrack?: (track: PlaylistTrack, cartItemUrl: string) => void;
   onPlaybackStart?: () => void;
   onPlayStateChange?: (playing: boolean) => void;
   onCurrentPageTrackChange?: (pageUrl: string) => void;
@@ -338,6 +343,17 @@ export class Player {
     this.setCartUrls(updated);
   }
 
+  setNamedCarts(carts: NamedCart[]) {
+    this.namedCarts = carts;
+    this.namedCartMembership = namedCartMembership(carts);
+    this.updateQueueEl();
+    const state = this.active();
+    if (state) {
+      const track = state.tracks[state.lastIndex];
+      if (track) this.updateCartActions(track);
+    }
+  }
+
   addCartUrl(url: string) {
     const normalized = normalizeUrl(url);
     if (this.cartUrls.has(normalized)) return;
@@ -510,6 +526,11 @@ export class Player {
   // A track is "in cart" if its cart-item key appears in cartUrls.
   private isInCart(track: PlaylistTrack): boolean {
     return this.cartUrls.has(normalizeUrl(this.cartItemKeyFor(track)));
+  }
+
+  // Ids of the named carts a track's cart-item key has been tagged into.
+  private namedCartIdsFor(track: PlaylistTrack): string[] {
+    return this.namedCartMembership.get(normalizeUrl(this.cartItemKeyFor(track))) ?? [];
   }
 
   private active(): PlaylistState | null {
@@ -747,6 +768,20 @@ export class Player {
         marker.textContent = '✓';
         marker.title = 'In cart';
         item.append(marker);
+      }
+
+      if (this.activeId === 'cart') {
+        const tagIds = this.namedCartIdsFor(track);
+        const tagBtn = btn('🏷', 'bcp-queue-tag-btn');
+        tagBtn.title = tagIds.length > 0
+          ? `In: ${tagIds.map((id) => this.namedCarts.find((c) => c.id === id)?.name).filter(Boolean).join(', ')}`
+          : 'Add to a named cart';
+        if (tagIds.length > 0) tagBtn.classList.add('bcp-queue-tag-btn-active');
+        tagBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.onTagTrack?.(track, this.cartItemKeyFor(track));
+        });
+        item.append(tagBtn);
       }
 
       if (track.unplayable) {
@@ -1295,6 +1330,25 @@ export class Player {
 
       this.cartActionsEl.append(addTrackBtn, addReleaseBtn);
     }
+
+    // Named-cart tagging only makes sense for items in the real Bandcamp cart.
+    if (this.activeId === 'cart') {
+      this.cartActionsEl.appendChild(this.buildTagButton(track));
+    }
+  }
+
+  private buildTagButton(track: PlaylistTrack): HTMLButtonElement {
+    const ids = this.namedCartIdsFor(track);
+    const tagBtn = btn(ids.length > 0 ? `🏷 ${ids.length}` : '🏷', 'bcp-cart-action-btn bcp-tag-btn');
+    if (ids.length > 0) {
+      const names = ids.map((id) => this.namedCarts.find((c) => c.id === id)?.name).filter(Boolean);
+      tagBtn.title = `In: ${names.join(', ')}`;
+      tagBtn.classList.add('bcp-tag-btn-active');
+    } else {
+      tagBtn.title = 'Add to a named cart';
+    }
+    tagBtn.addEventListener('click', () => this.onTagTrack?.(track, this.cartItemKeyFor(track)));
+    return tagBtn;
   }
 
   private showConfirm(title: string, body: string): Promise<boolean> {
