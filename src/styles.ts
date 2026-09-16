@@ -488,6 +488,63 @@ input[type=range].bcp-tempo {
   margin-left: auto;
 }
 
+.bcp-tag-btn.bcp-tag-btn-active {
+  color: #e6b400;
+  border-color: #6e5c2e;
+}
+
+.bcp-tag-btn.bcp-tag-btn-active:hover:not(:disabled) {
+  color: #ffcc33;
+  border-color: #e6b400;
+}
+
+.bcp-queue-tag-btn {
+  background: none;
+  border: none;
+  color: #555;
+  cursor: pointer;
+  flex-shrink: 0;
+  font-size: 11px;
+  padding: 0 2px;
+  transition: color 0.15s;
+}
+
+.bcp-queue-tag-btn:hover {
+  color: #999;
+}
+
+.bcp-queue-tag-btn.bcp-queue-tag-btn-active {
+  color: #e6b400;
+}
+
+.bcp-queue-tag-btn.bcp-queue-tag-btn-active:hover {
+  color: #ffcc33;
+}
+
+.bcp-checkout-cart-btn {
+  display: block;
+  margin: 4px 0 0;
+  padding: 5px 10px;
+  background: none;
+  color: #1da0c3;
+  border: 1px solid #1da0c3;
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.bcp-checkout-cart-btn:hover:not(:disabled) {
+  opacity: 0.85;
+}
+
+.bcp-checkout-cart-btn:disabled {
+  border-color: #ccc;
+  color: #999;
+  cursor: default;
+}
+
 .bcp-toast {
   background: #1a1a1a;
   border: 1px solid #2e2e2e;

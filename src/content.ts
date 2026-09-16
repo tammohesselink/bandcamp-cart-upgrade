@@ -1,8 +1,16 @@
-import type { CartItem, PlaylistTrack, SavedCartItem, CartSnapshot } from './types';
+import type { CartItem, PlaylistTrack, SavedCartItem, CartSnapshot, NamedCart } from './types';
 import { parseTralbum } from './bandcamp';
 import { Player } from './player';
-import { probeCart, probeDiscography, injectDiscographyButton, injectRestoreCartButton, injectRemovePurchasedButton } from './probe';
+import {
+  probeCart,
+  probeDiscography,
+  injectDiscographyButton,
+  injectRestoreCartButton,
+  injectRemovePurchasedButton,
+  injectCheckoutCartButton,
+} from './probe';
 import { addSnapshotIfChanged, diffSnapshot } from './cart-history';
+import { createNamedCart, deleteNamedCart, toggleItemInNamedCart, partitionByCart } from './named-carts';
 import { normalizeUrl } from './url';
 import {
   readPageContext,
@@ -38,6 +46,13 @@ let cartSelection = new Set<string>();
 // The injected "Checkout selected (N)" button, kept as a reference so it can
 // be updated without re-injecting.
 let checkoutSelectedBtn: HTMLButtonElement | null = null;
+
+// The live named-cart list and the Player instance for the current page, if any
+// (main() can return before creating a Player when there's nothing to play).
+// Kept at module scope so the "Checkout a cart" button — injected independently
+// of the Player — can read the current values from its click handler.
+let namedCarts: NamedCart[] = [];
+let activePlayer: Player | null = null;
 
 // Index maps for the active cart and discography playlists, used to resolve
 // which page element to highlight when the playing track changes.
@@ -130,6 +145,40 @@ function clearPendingPurchase(): void {
   chrome.storage.local.remove(PENDING_PURCHASE_KEY).catch(() => {});
 }
 
+// Merges newly-purchased items into the stored pending-purchase list (deduped by
+// normalised URL) so a second private-window checkout doesn't drop the first
+// one's cleanup entries.
+async function addPendingPurchase(items: SavedCartItem[]): Promise<SavedCartItem[]> {
+  const existing = await loadPendingPurchase();
+  const seen = new Set(existing.map((i) => normalizeUrl(i.url)));
+  const merged = [...existing, ...items.filter((i) => !seen.has(normalizeUrl(i.url)))];
+  savePendingPurchase(merged);
+  return merged;
+}
+
+// --- Named-cart storage --------------------------------------------------------
+
+const NAMED_CARTS_KEY = 'bcp_named_carts_v1';
+
+interface NamedCartsStorage {
+  carts: NamedCart[];
+  updatedAt: number;
+}
+
+async function loadNamedCarts(): Promise<NamedCart[]> {
+  try {
+    const result = await chrome.storage.local.get(NAMED_CARTS_KEY);
+    const entry = result[NAMED_CARTS_KEY] as NamedCartsStorage | undefined;
+    return entry?.carts ?? [];
+  } catch {
+    return [];
+  }
+}
+
+function saveNamedCarts(carts: NamedCart[]): void {
+  chrome.storage.local.set({ [NAMED_CARTS_KEY]: { carts, updatedAt: Date.now() } }).catch(() => {});
+}
+
 // --- Cart history modal ------------------------------------------------------
 
 function formatTimestamp(ts: number): string {
@@ -180,6 +229,18 @@ function ensureHistoryStyles(): void {
     .bcp-cache-track-detail{color:#888;margin-left:4px}
     .bcp-cache-flags{color:#bbb;font-size:11px;margin-left:4px}
     .bcp-cache-empty{color:#999;font-style:italic;padding:12px 0}
+    .bcp-nc-row{display:flex;align-items:center;gap:8px}
+    .bcp-nc-row input[type=checkbox]{accent-color:#1da0c3;cursor:pointer}
+    .bcp-nc-name{flex:1;font-size:13px}
+    .bcp-nc-meta{color:#999;font-size:12px;white-space:nowrap}
+    .bcp-nc-meta.bcp-nc-stale{color:#c98a00}
+    .bcp-nc-new{display:flex;gap:6px;margin-top:4px;padding:8px;border-top:1px solid #f0f0f0}
+    .bcp-nc-new input[type=text]{flex:1;padding:5px 8px;border:1px solid #ccc;border-radius:4px;font-size:13px;font-family:inherit}
+    .bcp-nc-new button{padding:5px 12px;border-radius:4px;border:1px solid #1da0c3;color:#1da0c3;background:none;cursor:pointer;font-size:12px;font-family:inherit}
+    .bcp-nc-empty{color:#999;font-style:italic;padding:8px 0}
+    .bcp-nc-checkout-btn{padding:4px 10px;border-radius:3px;border:1px solid #1da0c3;color:#1da0c3;background:none;cursor:pointer;font-size:12px;font-family:inherit;white-space:nowrap}
+    .bcp-nc-checkout-btn:disabled{border-color:#ccc;color:#999;cursor:default}
+    .bcp-nc-delete-btn{padding:4px 8px;border-radius:3px;border:1px solid #c0392b;color:#c0392b;background:none;cursor:pointer;font-size:11px;font-family:inherit;white-space:nowrap}
   `;
   document.head.appendChild(style);
 }
@@ -286,6 +347,298 @@ function showSnapshotListModal(
 
     document.body.appendChild(backdrop);
   });
+}
+
+// --- Named carts --------------------------------------------------------------
+// Named carts are pure metadata: tagging a track never touches the real
+// Bandcamp cart or makes a network request. Checkout resolves each entry's
+// release page on demand (like the partial-checkout flow below) and opens a
+// private window, exactly as "Checkout selected" does.
+
+// Builds the SavedCartItem stored on tag. Prefers the live sidecart entry
+// (its title already has the ", digital track/album" suffix stripped by
+// probeCart()); falls back to the track's own metadata for an item that has
+// since left the real cart.
+function toSavedCartItem(track: PlaylistTrack, cartItemUrl: string): SavedCartItem {
+  const cartMatch = probeCart().find((i) => normalizeUrl(i.url) === normalizeUrl(cartItemUrl));
+  if (cartMatch) {
+    return { url: cartMatch.url, title: cartMatch.title, artist: cartMatch.artist, purchaseType: cartMatch.purchaseType };
+  }
+  const title = (cartItemUrl === track.releaseUrl ? track.albumTitle : track.trackTitle) || track.trackTitle;
+  return {
+    url: cartItemUrl,
+    title,
+    artist: track.artist,
+    purchaseType: cartItemTypes.get(normalizeUrl(cartItemUrl)),
+  };
+}
+
+function showDeleteNamedCartConfirm(cart: NamedCart): Promise<boolean> {
+  ensureHistoryStyles();
+  return new Promise((resolve) => {
+    const backdrop = document.createElement('div');
+    backdrop.className = 'bcp-hb';
+
+    const modal = document.createElement('div');
+    modal.className = 'bcp-hm';
+
+    const title = document.createElement('h3');
+    title.textContent = `Delete "${cart.name}"?`;
+    modal.appendChild(title);
+
+    const body = document.createElement('div');
+    body.style.cssText = 'font-size:13px;color:#444;margin-bottom:12px';
+    body.textContent = `This removes the named cart and its ${cart.items.length} item${cart.items.length !== 1 ? 's' : ''}. Your Bandcamp cart is not affected.`;
+    modal.appendChild(body);
+
+    const actions = document.createElement('div');
+    actions.className = 'bcp-ha';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'bcp-hcl';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.addEventListener('click', () => close(false));
+
+    const confirmBtn = document.createElement('button');
+    Object.assign(confirmBtn.style, {
+      padding: '7px 16px', borderRadius: '4px', border: 'none',
+      background: '#c0392b', color: '#fff', cursor: 'pointer',
+      fontSize: '13px', fontFamily: 'inherit',
+    });
+    confirmBtn.textContent = 'Delete';
+    confirmBtn.addEventListener('click', () => close(true));
+
+    actions.append(cancelBtn, confirmBtn);
+    modal.appendChild(actions);
+    backdrop.appendChild(modal);
+
+    const close = (result: boolean) => {
+      document.removeEventListener('keydown', onKey);
+      backdrop.remove();
+      resolve(result);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(false); };
+    document.addEventListener('keydown', onKey);
+    backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(false); });
+    document.body.appendChild(backdrop);
+  });
+}
+
+// Opened from the player's tag button. Lets the user toggle the current track
+// into any named cart, or create a new one, without closing the modal.
+function showNamedCartPicker(player: Player, track: PlaylistTrack, cartItemUrl: string): void {
+  ensureHistoryStyles();
+
+  const backdrop = document.createElement('div');
+  backdrop.className = 'bcp-hb';
+
+  const modal = document.createElement('div');
+  modal.className = 'bcp-hm';
+
+  const title = document.createElement('h3');
+  title.textContent = 'Add to named cart';
+  modal.appendChild(title);
+
+  const list = document.createElement('ul');
+  list.className = 'bcp-hl';
+  modal.appendChild(list);
+
+  const renderList = () => {
+    list.innerHTML = '';
+    if (namedCarts.length === 0) {
+      const empty = document.createElement('li');
+      empty.className = 'bcp-nc-empty';
+      empty.textContent = 'No named carts yet — create one below';
+      list.appendChild(empty);
+      return;
+    }
+    for (const cart of namedCarts) {
+      const li = document.createElement('li');
+      const row = document.createElement('div');
+      row.className = 'bcp-nc-row';
+
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.checked = cart.items.some((i) => normalizeUrl(i.url) === normalizeUrl(cartItemUrl));
+      checkbox.addEventListener('change', () => {
+        namedCarts = toggleItemInNamedCart(namedCarts, cart.id, toSavedCartItem(track, cartItemUrl));
+        saveNamedCarts(namedCarts);
+        player.setNamedCarts(namedCarts);
+        renderList();
+      });
+
+      const name = document.createElement('span');
+      name.className = 'bcp-nc-name';
+      name.textContent = cart.name;
+
+      const meta = document.createElement('span');
+      meta.className = 'bcp-nc-meta';
+      meta.textContent = `${cart.items.length} item${cart.items.length !== 1 ? 's' : ''}`;
+
+      row.append(checkbox, name, meta);
+      li.appendChild(row);
+      list.appendChild(li);
+    }
+  };
+  renderList();
+
+  const newRow = document.createElement('div');
+  newRow.className = 'bcp-nc-new';
+  const nameInput = document.createElement('input');
+  nameInput.type = 'text';
+  nameInput.placeholder = 'New cart name';
+  const addBtn = document.createElement('button');
+  addBtn.textContent = 'Create + add';
+  const createAndAdd = () => {
+    if (!nameInput.value.trim()) return;
+    namedCarts = createNamedCart(namedCarts, nameInput.value);
+    const created = namedCarts[0]!;
+    namedCarts = toggleItemInNamedCart(namedCarts, created.id, toSavedCartItem(track, cartItemUrl));
+    saveNamedCarts(namedCarts);
+    player.setNamedCarts(namedCarts);
+    nameInput.value = '';
+    renderList();
+  };
+  addBtn.addEventListener('click', createAndAdd);
+  nameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') createAndAdd(); });
+  newRow.append(nameInput, addBtn);
+  modal.appendChild(newRow);
+
+  const actions = document.createElement('div');
+  actions.className = 'bcp-ha';
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'bcp-hcl';
+  closeBtn.textContent = 'Done';
+  actions.appendChild(closeBtn);
+  modal.appendChild(actions);
+  backdrop.appendChild(modal);
+
+  const close = () => {
+    document.removeEventListener('keydown', onKey);
+    backdrop.remove();
+  };
+  const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+  document.addEventListener('keydown', onKey);
+  backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
+  closeBtn.addEventListener('click', close);
+
+  document.body.appendChild(backdrop);
+}
+
+// Opened from the sidecart's "Checkout a cart" button. Lists every named cart
+// with a per-cart checkout button, reusing the same private-window flow as
+// "Checkout selected".
+function showNamedCartCheckoutModal(player: Player | null): void {
+  ensureHistoryStyles();
+
+  const backdrop = document.createElement('div');
+  backdrop.className = 'bcp-hb';
+
+  const modal = document.createElement('div');
+  modal.className = 'bcp-hm';
+
+  const title = document.createElement('h3');
+  title.textContent = 'Checkout a cart';
+  modal.appendChild(title);
+
+  const list = document.createElement('ul');
+  list.className = 'bcp-hl';
+
+  if (namedCarts.length === 0) {
+    const empty = document.createElement('li');
+    empty.className = 'bcp-nc-empty';
+    empty.textContent = 'No named carts yet — tag tracks from the Cart tab in the player';
+    list.appendChild(empty);
+  } else {
+    const current = probeCart();
+    for (const cart of namedCarts) {
+      const li = document.createElement('li');
+      const { stale } = partitionByCart(cart, current);
+
+      const header = document.createElement('div');
+      header.className = 'bcp-nc-row';
+
+      const name = document.createElement('span');
+      name.className = 'bcp-nc-name';
+      name.textContent = cart.name;
+
+      const meta = document.createElement('span');
+      meta.className = 'bcp-nc-meta' + (stale.length > 0 ? ' bcp-nc-stale' : '');
+      meta.textContent = `${cart.items.length} item${cart.items.length !== 1 ? 's' : ''}` +
+        (stale.length > 0 ? ` (${stale.length} no longer in cart)` : '');
+
+      const checkoutBtn = document.createElement('button');
+      checkoutBtn.className = 'bcp-nc-checkout-btn';
+      checkoutBtn.textContent = `Checkout (${cart.items.length})`;
+      checkoutBtn.disabled = cart.items.length === 0;
+      checkoutBtn.addEventListener('click', async () => {
+        checkoutBtn.disabled = true;
+        checkoutBtn.textContent = 'Opening…';
+        const ok = await checkoutNamedCart(cart, player);
+        if (ok) {
+          close();
+        } else {
+          checkoutBtn.disabled = false;
+          checkoutBtn.textContent = `Checkout (${cart.items.length})`;
+        }
+      });
+
+      const deleteBtn = document.createElement('button');
+      deleteBtn.className = 'bcp-nc-delete-btn';
+      deleteBtn.textContent = 'Delete';
+      deleteBtn.addEventListener('click', async () => {
+        if (!await showDeleteNamedCartConfirm(cart)) return;
+        namedCarts = deleteNamedCart(namedCarts, cart.id);
+        saveNamedCarts(namedCarts);
+        player?.setNamedCarts(namedCarts);
+        li.remove();
+      });
+
+      header.append(name, meta, checkoutBtn, deleteBtn);
+      li.appendChild(header);
+
+      if (cart.items.length > 0) {
+        const itemList = document.createElement('ul');
+        itemList.className = 'bcp-snap-items';
+        for (const it of cart.items) {
+          const row = document.createElement('li');
+          row.textContent = it.title || it.url;
+          itemList.appendChild(row);
+        }
+        li.appendChild(itemList);
+      }
+
+      list.appendChild(li);
+    }
+  }
+  modal.appendChild(list);
+
+  const actions = document.createElement('div');
+  actions.className = 'bcp-ha';
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'bcp-hcl';
+  closeBtn.textContent = 'Close';
+  actions.appendChild(closeBtn);
+  modal.appendChild(actions);
+  backdrop.appendChild(modal);
+
+  const close = () => {
+    document.removeEventListener('keydown', onKey);
+    backdrop.remove();
+  };
+  const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+  document.addEventListener('keydown', onKey);
+  backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
+  closeBtn.addEventListener('click', close);
+
+  document.body.appendChild(backdrop);
+}
+
+// Resolves and opens a private-window checkout for a named cart's items. Stale
+// items (no longer in the real cart) are still purchased — `present` (the
+// subset still in the live cart) is what gets offered for removal afterwards.
+async function checkoutNamedCart(cart: NamedCart, player: Player | null): Promise<boolean> {
+  const { present } = partitionByCart(cart, probeCart());
+  return checkoutInPrivateWindow(player, cart.items, present);
 }
 
 // --- Cache viewer modal -------------------------------------------------------
@@ -660,8 +1013,13 @@ function showRemovePurchasedConfirm(items: SavedCartItem[]): Promise<boolean> {
 }
 
 function setupRemovePurchasedButton(items: SavedCartItem[]): void {
-  const btn = injectRemovePurchasedButton(items.length);
-  if (!btn) return;
+  const injected = injectRemovePurchasedButton(items.length);
+  if (!injected) return;
+  // injectRemovePurchasedButton reuses an existing button across calls (e.g. two
+  // private-window checkouts in one page life); clone it to drop any listener
+  // bound to a previous, now-stale item list before attaching the current one.
+  const btn = injected.cloneNode(true) as HTMLButtonElement;
+  injected.replaceWith(btn);
   btn.addEventListener('click', async () => {
     if (!await showRemovePurchasedConfirm(items)) return;
     btn.disabled = true;
@@ -673,6 +1031,49 @@ function setupRemovePurchasedButton(items: SavedCartItem[]): void {
     clearPendingPurchase();
     location.reload();
   });
+}
+
+// Resolves each item's release page, opens a private-window checkout containing
+// exactly `items`, and — on success — merges `toRemove` into the pending-purchase
+// cleanup list. `toRemove` may be a subset of `items` when some entries are no
+// longer in the real Bandcamp cart and so shouldn't be offered for removal.
+async function checkoutInPrivateWindow(
+  player: Player | null,
+  items: SavedCartItem[],
+  toRemove: SavedCartItem[]
+): Promise<boolean> {
+  // Resolve track data here in the normal window where the cache is warm
+  // (resolvePlaylist already fetched these). The incognito window's storage
+  // is a separate empty instance, so it can't use the cache.
+  const resolved: Array<{ u: string; id: number; t: 't' | 'a'; pr: number; b: number | null }> = [];
+  for (const item of items) {
+    const tracks = await fetchTracksForUrl(item.url);
+    if (tracks.length === 0) continue;
+    const track = tracks[0]!;
+    const isTrackAdd = item.purchaseType === 'track';
+    const tralbumId = isTrackAdd ? (track.trackId ?? track.releaseId) : track.releaseId;
+    if (tralbumId === null) continue;
+    const tralbumType: 't' | 'a' = isTrackAdd ? 't' : (track.releaseType === 'track' ? 't' : 'a');
+    const minPrice = isTrackAdd ? (track.trackMinPrice ?? track.minPrice) : track.minPrice;
+    resolved.push({ u: item.url, id: tralbumId, t: tralbumType, pr: minPrice ?? 0, b: track.bandId });
+  }
+  if (resolved.length === 0) {
+    const msg = 'Could not resolve any selected items — check the console';
+    if (player) player.showToast(msg, 'error'); else alert(msg);
+    return false;
+  }
+
+  const result = await sendBcpMessage({ type: 'open-incognito-checkout', items: resolved });
+  if (!result.ok) {
+    const msg = 'Could not open a private window. Enable "Allow in incognito" for this extension in chrome://extensions, then try again.';
+    if (player) player.showToast(msg, 'error'); else alert(msg);
+    return false;
+  }
+
+  // Persist purchased items so the cleanup button survives a page reload.
+  const merged = await addPendingPurchase(toRemove);
+  setupRemovePurchasedButton(merged);
+  return true;
 }
 
 async function doRestore(button: HTMLButtonElement, toAdd: SavedCartItem[], toRemove: SavedCartItem[]): Promise<void> {
@@ -906,6 +1307,16 @@ async function main() {
         clearPendingPurchase();
       }
     }
+
+    // "Checkout a cart" doesn't need the Player instance (it opens a private
+    // window directly), so it's injected here rather than gated behind the
+    // player-creation check below — it still appears when the real cart is
+    // empty. The click handler reads `activePlayer`, which may still be null
+    // at this point; it's read lazily so it reflects whichever value is set
+    // (or not) by the time the user actually clicks.
+    namedCarts = await loadNamedCarts();
+    const checkoutCartBtn = injectCheckoutCartButton(namedCarts.length);
+    checkoutCartBtn?.addEventListener('click', () => showNamedCartCheckoutModal(activePlayer));
   } else if (settings.showCartHistoryBtn) {
     const anchor = document.getElementById('sidecart')
       ?? document.querySelector('#sidecartReveal')
@@ -938,10 +1349,17 @@ async function main() {
 
   const player = new Player([]);
   document.body.appendChild(player.wrapper);
+  activePlayer = player;
 
   // Build the initial cart URL set and purchase-type map.
   cartItemTypes = buildCartItemTypes(cartItems);
   player.setCartUrls(buildCartUrlSet(cartItems));
+  // Named carts are skipped entirely in incognito: its storage is a separate,
+  // throwaway instance (same reason cart history is skipped, see below).
+  if (!chrome.extension.inIncognitoContext) {
+    player.setNamedCarts(namedCarts);
+    player.onTagTrack = (track, cartItemUrl) => showNamedCartPicker(player, track, cartItemUrl);
+  }
 
   player.onTrackChange = (id, index) => {
     if (id === 'cart') {
@@ -1112,41 +1530,10 @@ async function main() {
       return;
     }
 
-    // Resolve track data here in the normal window where the cache is warm
-    // (resolvePlaylist already fetched these). The incognito window's storage
-    // is a separate empty instance, so it can't use the cache.
-    const items: Array<{ u: string; id: number; t: 't' | 'a'; pr: number; b: number | null }> = [];
-    for (const item of selectedItems) {
-      const tracks = await fetchTracksForUrl(item.url);
-      if (tracks.length === 0) continue;
-      const track = tracks[0]!;
-      const isTrackAdd = item.purchaseType === 'track';
-      const tralbumId = isTrackAdd ? (track.trackId ?? track.releaseId) : track.releaseId;
-      if (tralbumId === null) continue;
-      const tralbumType: 't' | 'a' = isTrackAdd ? 't' : (track.releaseType === 'track' ? 't' : 'a');
-      const minPrice = isTrackAdd ? (track.trackMinPrice ?? track.minPrice) : track.minPrice;
-      items.push({ u: item.url, id: tralbumId, t: tralbumType, pr: minPrice ?? 0, b: track.bandId });
-    }
-    if (items.length === 0) {
-      player.showToast('Could not resolve any selected items — check the console', 'error');
-      return;
-    }
-
-    const result = await sendBcpMessage({ type: 'open-incognito-checkout', items });
-    if (!result.ok) {
-      player.showToast(
-        'Could not open a private window. Enable "Allow in incognito" for this extension in chrome://extensions, then try again.',
-        'error',
-      );
-      return;
-    }
-
-    // Persist selected items so the cleanup button survives a page reload.
     const toRemove: SavedCartItem[] = selectedItems.map((i) => ({
       url: i.url, title: i.title, artist: i.artist, purchaseType: i.purchaseType,
     }));
-    savePendingPurchase(toRemove);
-    setupRemovePurchasedButton(toRemove);
+    await checkoutInPrivateWindow(player, toRemove, toRemove);
   };
 
   // Keep cart state in sync when Bandcamp's own JS updates the sidecart.
