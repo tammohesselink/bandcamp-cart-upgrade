@@ -1,7 +1,7 @@
 import type { CartItem, PlaylistTrack, SavedCartItem, CartSnapshot } from './types';
-import { parseTralbum } from './bandcamp';
+import { parseTralbum, isReleaseOwned } from './bandcamp';
 import { Player } from './player';
-import { probeCart, probeDiscography, injectDiscographyButton, injectRestoreCartButton, injectRemovePurchasedButton } from './probe';
+import { probeCart, probeDiscography, injectDiscographyButton, injectRestoreCartButton, injectRemovePurchasedButton, injectRemoveAlreadyOwnedButton } from './probe';
 import { addSnapshotIfChanged, diffSnapshot } from './cart-history';
 import { normalizeUrl } from './url';
 import {
@@ -675,6 +675,47 @@ function setupRemovePurchasedButton(items: SavedCartItem[]): void {
   });
 }
 
+// Checks every cart item against Bandcamp's own ownership state and removes
+// whichever ones the fan already owns. Catches purchases the extension never
+// saw — e.g. checking the same cart out in a separate anonymous window.
+function setupRemoveAlreadyOwnedButton(cartItems: CartItem[]): void {
+  const btn = injectRemoveAlreadyOwnedButton();
+  if (!btn) return;
+  const idleLabel = btn.textContent ?? 'Remove already purchased items from cart';
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    const owned: SavedCartItem[] = [];
+    for (let i = 0; i < cartItems.length; i++) {
+      const item = cartItems[i]!;
+      btn.textContent = `Checking "${item.title || item.url}" (${i + 1} / ${cartItems.length})…`;
+      const html = await fetchRawHtml(item.url);
+      if (html && isReleaseOwned(html)) {
+        owned.push({ url: item.url, title: item.title, artist: item.artist, purchaseType: item.purchaseType });
+      }
+    }
+
+    if (owned.length === 0) {
+      btn.disabled = false;
+      btn.textContent = idleLabel;
+      alert('No already-purchased items found in your cart.');
+      return;
+    }
+
+    if (!await showRemovePurchasedConfirm(owned)) {
+      btn.disabled = false;
+      btn.textContent = idleLabel;
+      return;
+    }
+
+    for (let i = 0; i < owned.length; i++) {
+      const label = owned[i]!.title || owned[i]!.url;
+      btn.textContent = `Removing "${label}" (${i + 1} / ${owned.length})…`;
+      await removeCartItem(owned[i]!);
+    }
+    location.reload();
+  });
+}
+
 async function doRestore(button: HTMLButtonElement, toAdd: SavedCartItem[], toRemove: SavedCartItem[]): Promise<void> {
   button.disabled = true;
   let changed = 0;
@@ -875,6 +916,8 @@ async function main() {
   const settings = await loadSettings();
 
   if (!chrome.extension.inIncognitoContext) {
+    if (cartItems.length > 0) setupRemoveAlreadyOwnedButton(cartItems);
+
     const liveItems: SavedCartItem[] = cartItems.map((i) => ({ url: i.url, title: i.title, purchaseType: i.purchaseType }));
     const snapshots = addSnapshotIfChanged(await loadSnapshots(), liveItems);
     saveSnapshots(snapshots);
@@ -1520,6 +1563,22 @@ async function listCacheEntries(): Promise<CacheDump[]> {
       .sort((a, b) => b.cachedAt - a.cachedAt);
   } catch {
     return [];
+  }
+}
+
+// Bypasses the track-metadata cache: ownership can change between visits to
+// the same release page, so a stale cached fetch would miss a fresh purchase.
+async function fetchRawHtml(url: string): Promise<string | null> {
+  try {
+    const response = await sendBcpMessage({ type: 'fetch', url });
+    if (response.error) {
+      console.error('[bcp] fetchRawHtml: fetch error for', url, response.error);
+      return null;
+    }
+    return response.html ?? null;
+  } catch (err) {
+    console.error('[bcp] fetchRawHtml: exception for', url, err);
+    return null;
   }
 }
 

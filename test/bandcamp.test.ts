@@ -1,7 +1,7 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { describe, it, expect } from 'vitest';
-import { parseTralbum } from '../src/bandcamp';
+import { parseTralbum, isReleaseOwned } from '../src/bandcamp';
 
 function fixture(name: string): string {
   return readFileSync(join(__dirname, 'fixtures', name), 'utf-8');
@@ -213,4 +213,45 @@ describe('parseTralbum — invalid HTML', () => {
       []
     );
   });
+});
+
+describe('isReleaseOwned', () => {
+  const cases: Array<{ name: string; html: string; expected: boolean }> = [
+    {
+      name: 'detects "you own this" in the buy panel',
+      html: '<div class="tralbumInfo"><p>you own this</p></div>',
+      expected: true,
+    },
+    {
+      name: 'is case-insensitive',
+      html: '<p>You Own This Digital Album</p>',
+      expected: true,
+    },
+    {
+      name: 'tolerates extra whitespace between words',
+      html: '<p>you  own   this</p>',
+      expected: true,
+    },
+    {
+      name: 'detects the "already in your collection" fallback phrasing',
+      html: '<p>Already in your collection</p>',
+      expected: true,
+    },
+    {
+      name: 'returns false for a normal unpurchased buy panel',
+      html: '<li class="buyItem digital">Buy Digital Album $7</li>',
+      expected: false,
+    },
+    {
+      name: 'returns false for an empty page',
+      html: '',
+      expected: false,
+    },
+  ];
+
+  for (const { name, html, expected } of cases) {
+    it(name, () => {
+      expect(isReleaseOwned(html)).toBe(expected);
+    });
+  }
 });

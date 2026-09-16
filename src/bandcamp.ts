@@ -162,6 +162,15 @@ function extractJsonContaining(source: string, markerPos: number): unknown | nul
   return null;
 }
 
+// Bandcamp exposes no JSON flag for "the logged-in fan already owns this
+// release" either — like albumOnly above, the rendered page is the source of
+// truth. An owned track/album page replaces the buy panel with "you own
+// this" next to a download link. Text-matched rather than selector-matched
+// so a markup change on Bandcamp's side doesn't silently break detection.
+export function isReleaseOwned(html: string): boolean {
+  return /you\s+own\s+this/i.test(html) || /already\s+in\s+your\s+collection/i.test(html);
+}
+
 function safeOrigin(url: string): string {
   try {
     return new URL(url).origin;
