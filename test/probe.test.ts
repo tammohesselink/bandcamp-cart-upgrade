@@ -1,7 +1,7 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { describe, it, expect, beforeEach } from 'vitest';
-import { probeCart, probeDiscography, injectDiscographyButton, readDataCart, injectRestoreCartButton, type DataCartItem } from '../src/probe';
+import { probeCart, probeDiscography, injectDiscographyButton, readDataCart, injectRestoreCartButton, injectRemoveAlreadyOwnedButton, type DataCartItem } from '../src/probe';
 import { findCheckoutControl, clickCheckout } from '../src/bandcamp-dom';
 
 function fixture(name: string): string {
@@ -343,6 +343,50 @@ describe('injectRestoreCartButton — no sidecart anchor', () => {
 
   it('returns null when #sidecart, #sidecartReveal and #sidecartBody are absent', () => {
     expect(injectRestoreCartButton(5)).toBeNull();
+  });
+});
+
+// --- injectRemoveAlreadyOwnedButton -------------------------------------------
+
+describe('injectRemoveAlreadyOwnedButton — with #sidecart', () => {
+  beforeEach(() => loadFixture('sidecart-with-data-cart.html'));
+
+  it('returns a button element', () => {
+    const btn = injectRemoveAlreadyOwnedButton();
+    expect(btn?.tagName).toBe('BUTTON');
+  });
+
+  it('button has bcp-remove-owned-btn class', () => {
+    const btn = injectRemoveAlreadyOwnedButton();
+    expect(btn?.classList.contains('bcp-remove-owned-btn')).toBe(true);
+  });
+
+  it('button has buttonLink class', () => {
+    const btn = injectRemoveAlreadyOwnedButton();
+    expect(btn?.classList.contains('buttonLink')).toBe(true);
+  });
+
+  it('button is inserted after #sidecart', () => {
+    const btn = injectRemoveAlreadyOwnedButton();
+    const sidecart = document.getElementById('sidecart')!;
+    expect(sidecart.nextElementSibling).toBe(btn);
+  });
+
+  it('does not double-inject', () => {
+    injectRemoveAlreadyOwnedButton();
+    injectRemoveAlreadyOwnedButton();
+    const btns = document.querySelectorAll('.bcp-remove-owned-btn');
+    expect(btns).toHaveLength(1);
+  });
+});
+
+describe('injectRemoveAlreadyOwnedButton — no sidecart anchor', () => {
+  beforeEach(() => {
+    document.documentElement.innerHTML = '<body></body>';
+  });
+
+  it('returns null when #sidecart, #sidecartReveal and #sidecartBody are absent', () => {
+    expect(injectRemoveAlreadyOwnedButton()).toBeNull();
   });
 });
 
