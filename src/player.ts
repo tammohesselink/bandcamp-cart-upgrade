@@ -1,6 +1,7 @@
 import type { PlaylistId, PlaylistTrack } from './types';
 import { PLAYER_CSS } from './styles';
 import { normalizeUrl } from './url';
+import { isStreamFresh } from './cache';
 
 type CartAddType = 'track' | 'release';
 
@@ -55,10 +56,19 @@ export class Player {
 
   private queueVisible = false;
   private playerVisible = true;
-  private discographyExpected = false;
+  // Playlists that are still loading, mapped to the label of their disabled tab.
+  private expectedPlaylists = new Map<PlaylistId, string>();
   private collapseBtn!: HTMLButtonElement;
   private seeking = false;
   private switchingPlaylist = false;
+  // Bumped by every play, pause and track change, so a play that is still
+  // waiting for a fresh stream link can tell it has been superseded.
+  private playRequestId = 0;
+  private playPending = false;
+  // The track whose stream is in the audio element. It can differ from the
+  // current track, e.g. after the playing release is removed from the cart.
+  private sourceTrack: PlaylistTrack | null = null;
+  private streamRetriedFor: PlaylistTrack | null = null;
 
   private cartUrls = new Set<string>();
   private cartActionsEl!: HTMLElement;
@@ -74,6 +84,8 @@ export class Player {
   onDiscographyButtonVisibilityChange?: (show: boolean) => void;
   onReloadPlaylist?: () => Promise<void>;
   onShowCache?: () => Promise<void> | void;
+  // Updates the track's streamUrl in place; `force` skips any cached copy.
+  onRefreshStream?: (track: PlaylistTrack, force: boolean) => Promise<void>;
 
   constructor(initialPlaylist: PlaylistTrack[]) {
     this.audio = new Audio();
@@ -135,8 +147,10 @@ export class Player {
     return this.showDiscographyButton;
   }
 
-  expectDiscography() {
-    this.discographyExpected = true;
+  // Shows a disabled tab for a playlist that is still loading. Calling it again
+  // updates the tab label, e.g. to report loading progress.
+  expectPlaylist(id: PlaylistId, label: string) {
+    this.expectedPlaylists.set(id, label);
     this.updateHeader();
   }
 
@@ -188,7 +202,7 @@ export class Player {
       this.selectPlaylist(id, silent);
     }
     this.loadTrack(index, silent);
-    this.audio.play().catch(console.warn);
+    void this.startPlayback({});
   }
 
   showToast(msg: string, kind: StatusKind = 'info') {
@@ -264,7 +278,12 @@ export class Player {
     if (toAdd.length === 0) return null;
     const startIndex = state.tracks.length;
     state.tracks.push(...toAdd);
-    if (this.activeId === id) this.updateQueueEl();
+    if (this.activeId === id) {
+      // Selecting an empty playlist leaves the bar blank, so load its first
+      // track now, unless a removed track is still playing.
+      if (startIndex === 0 && this.audio.paused) this.loadTrack(0, true);
+      else this.updateQueueEl();
+    }
     return startIndex;
   }
 
@@ -273,11 +292,12 @@ export class Player {
   }
 
   pause() {
+    this.cancelPendingPlay();
     this.audio.pause();
   }
 
   play() {
-    this.audio.play().catch(console.warn);
+    void this.startPlayback({ track: this.sourceTrack ?? undefined });
   }
 
   getActiveTrack(id: PlaylistId): PlaylistTrack | null {
@@ -400,10 +420,11 @@ export class Player {
 
     for (const [id, label] of entries) {
       const state = this.playlists.get(id);
-      if (!state && (id !== 'discography' || !this.discographyExpected)) continue;
+      const expectedLabel = this.expectedPlaylists.get(id);
+      if (!state && expectedLabel === undefined) continue;
       const tab = document.createElement('button');
       tab.className = 'bcp-tab' + (id === this.activeId ? ' bcp-tab-active' : '');
-      tab.textContent = state?.label ?? label;
+      tab.textContent = state?.label ?? expectedLabel ?? label;
       if (state) {
         tab.addEventListener('click', () => this.selectPlaylist(id));
       } else {
@@ -590,7 +611,7 @@ export class Player {
       } else {
         item.addEventListener('click', () => {
           this.loadTrack(i);
-          this.audio.play().catch(console.warn);
+          void this.startPlayback({});
         });
       }
 
@@ -601,6 +622,7 @@ export class Player {
   private loadTrack(index: number, silent = false) {
     const state = this.active();
     if (!state) return;
+    this.cancelPendingPlay();
 
     state.lastIndex = index;
     const track = state.tracks[index];
@@ -649,12 +671,96 @@ export class Player {
     }
 
     this.playPauseBtn.disabled = false;
-    if (needsReload) {
-      this.audio.src = track.streamUrl;
+    if (!needsReload) {
+      this.sourceTrack = track;
+    } else if (!this.onRefreshStream || isStreamFresh(track)) {
+      this.setSource(track);
+    } else {
+      // startPlayback fetches a fresh link first; loading this one could only fail.
+      this.audio.removeAttribute('src');
       this.audio.load();
-      this.audio.playbackRate = this.playbackRate;
-      this.audio.preservesPitch = this.preservesPitch;
+      this.sourceTrack = null;
     }
+  }
+
+  private currentTrack(): PlaylistTrack | null {
+    const state = this.active();
+    return state?.tracks[state.lastIndex] ?? null;
+  }
+
+  private setSource(track: PlaylistTrack, startAt = 0) {
+    this.audio.src = track.streamUrl ?? '';
+    this.audio.load();
+    this.audio.currentTime = startAt;
+    this.audio.playbackRate = this.playbackRate;
+    this.audio.preservesPitch = this.preservesPitch;
+    this.sourceTrack = track;
+  }
+
+  private cancelPendingPlay() {
+    this.playRequestId++;
+    if (!this.playPending) return;
+    this.playPending = false;
+    this.playPauseBtn.textContent = '▶';
+  }
+
+  // Plays `track` (the current track by default), first fetching a fresh
+  // stream link when the one we have may have expired. `skip` is the direction
+  // to move in when the refresh shows the track can no longer be streamed.
+  private async startPlayback(options: {
+    track?: PlaylistTrack;
+    forceRefresh?: boolean;
+    skip?: 1 | -1;
+  }): Promise<void> {
+    const track = options.track ?? this.currentTrack();
+    if (!track?.streamUrl || track.unplayable) return;
+    const isLoaded = track === this.sourceTrack;
+    // A newer link for the playing track would only interrupt it.
+    if (isLoaded && !this.audio.paused && !options.forceRefresh) return;
+    const requestId = ++this.playRequestId;
+    let refreshed = false;
+
+    if (this.onRefreshStream && (options.forceRefresh || !isStreamFresh(track))) {
+      this.playPending = true;
+      this.playPauseBtn.textContent = '…';
+      try {
+        await this.onRefreshStream(track, !!options.forceRefresh);
+        refreshed = true;
+      } catch (err) {
+        console.warn('[bcp] Could not refresh stream link', err);
+      }
+      if (requestId !== this.playRequestId) return;
+      this.playPending = false;
+      if (track.unplayable || !track.streamUrl) {
+        this.showUnplayable(track, options.skip);
+        return;
+      }
+      this.updateQueueEl();
+      this.updateNavButtons();
+    }
+
+    if (refreshed || !isLoaded) {
+      this.setSource(track, isLoaded ? this.audio.currentTime : 0);
+    }
+    this.audio.play().catch(console.warn);
+  }
+
+  private showUnplayable(track: PlaylistTrack, skip?: 1 | -1) {
+    this.playPauseBtn.textContent = '▶';
+    const state = this.active();
+    const index = state ? state.tracks.indexOf(track) : -1;
+    if (index === -1) {
+      // The track was removed from the playlist while loaded; carry on from the current one.
+      if (skip === 1) this.next();
+      else if (skip === -1) this.prev();
+      return;
+    }
+    this.loadTrack(index, true);
+    if (!skip) return;
+    const nextIndex = this.nextPlayable(index + skip, skip);
+    if (nextIndex === -1) return;
+    this.loadTrack(nextIndex);
+    void this.startPlayback({ skip });
   }
 
   get currentPlaylistId(): PlaylistId | null {
@@ -701,8 +807,21 @@ export class Player {
       this.next();
     });
 
+    this.audio.addEventListener('playing', () => {
+      this.streamRetriedFor = null;
+    });
+
     this.audio.addEventListener('error', () => {
+      if (!this.audio.getAttribute('src')) return;
       console.warn('[bcp] Audio error for track', this.active()?.lastIndex, this.audio.error);
+      // The link may have expired mid-session; fetch a fresh one once before
+      // skipping the track.
+      const track = this.sourceTrack;
+      if (track && this.onRefreshStream && this.streamRetriedFor !== track) {
+        this.streamRetriedFor = track;
+        void this.startPlayback({ track, forceRefresh: true, skip: 1 });
+        return;
+      }
       this.next();
     });
   }
@@ -732,8 +851,10 @@ export class Player {
   }
 
   private togglePlay() {
-    if (this.audio.paused) {
-      this.audio.play().catch(console.warn);
+    if (this.playPending) {
+      this.cancelPendingPlay();
+    } else if (this.audio.paused) {
+      this.play();
     } else {
       this.audio.pause();
     }
@@ -745,7 +866,7 @@ export class Player {
     const nextIndex = this.nextPlayable(state.lastIndex + 1, 1);
     if (nextIndex !== -1) {
       this.loadTrack(nextIndex);
-      this.audio.play().catch(console.warn);
+      void this.startPlayback({ skip: 1 });
     }
   }
 
@@ -755,7 +876,7 @@ export class Player {
     const prevIndex = this.nextPlayable(state.lastIndex - 1, -1);
     if (prevIndex !== -1) {
       this.loadTrack(prevIndex);
-      this.audio.play().catch(console.warn);
+      void this.startPlayback({ skip: -1 });
     }
   }
 

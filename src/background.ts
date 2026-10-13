@@ -1,5 +1,9 @@
 import type { BcpRequest, FetchResponse } from './messages';
 import { dedupeInFlight } from './inflight';
+import { pruneTrackCache } from './cache';
+
+chrome.runtime.onStartup.addListener(() => { void pruneTrackCache(); });
+chrome.runtime.onInstalled.addListener(() => { void pruneTrackCache(); });
 
 // Returns the https origin for a Bandcamp URL, or null if the URL isn't a valid
 // https://*.bandcamp.com address. Used to refuse proxying credentialed requests

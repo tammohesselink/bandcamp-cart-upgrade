@@ -46,6 +46,8 @@ export interface PlaylistTrack {
   currency: string | null;
   // False when the track can only be purchased as part of the full release.
   purchasable: boolean;
+  // When streamUrl was fetched. Bandcamp stream links are signed and expire.
+  streamFetchedAt?: number;
 }
 
 // Shape of the TralbumData object embedded in Bandcamp track/album pages.
