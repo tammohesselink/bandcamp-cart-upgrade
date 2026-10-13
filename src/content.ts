@@ -720,14 +720,24 @@ main().catch(console.error);
 // player's cart playlist, and re-injects sidecart UI elements. Returns false
 // if no playable tracks were found so the caller can decide how to proceed.
 async function loadCartPlaylist(cartItems: CartItem[], player: Player): Promise<boolean> {
-  player.setStatus(`Loading 0 / ${cartItems.length}…`, 'loading');
+  // Another playlist (e.g. the current page) may already be active, so progress
+  // goes to the cart tab instead of overwriting that playlist's status line.
+  const reportProgress = (done: number) => {
+    const progress = `${done} / ${cartItems.length}`;
+    player.expectPlaylist('cart', `Cart (loading ${progress})`);
+    if (player.currentPlaylistId === null) {
+      player.setStatus(`Loading ${progress}…`, 'loading');
+    } else {
+      player.setPlaylistStatus('cart', `Loading ${progress}…`, 'loading');
+    }
+  };
+  reportProgress(0);
 
-  const { tracks: cartTracks, indexMap: cartIndexMap } = await resolvePlaylist(cartItems, (done) => {
-    player.setStatus(`Loading ${done} / ${cartItems.length}…`, 'loading');
-  });
+  const { tracks: cartTracks, indexMap: cartIndexMap } = await resolvePlaylist(cartItems, reportProgress);
 
   if (cartTracks.length === 0) {
-    player.setStatus('No playable tracks found', 'error');
+    player.expectPlaylist('cart', 'Cart (no playable tracks)');
+    if (player.currentPlaylistId === null) player.setStatus('No playable tracks found', 'error');
     return false;
   }
 
@@ -742,12 +752,12 @@ async function loadCartPlaylist(cartItems: CartItem[], player: Player): Promise<
   if (unplayable > 0) {
     const pct = unplayable / cartTracks.length;
     if (pct >= 0.5) {
-      player.setStatus('Log in for full streams', 'warn');
+      player.setPlaylistStatus('cart', 'Log in for full streams', 'warn');
     } else {
-      player.setStatus(`${unplayable} track${unplayable > 1 ? 's' : ''} unavailable`, 'warn');
+      player.setPlaylistStatus('cart', `${unplayable} track${unplayable > 1 ? 's' : ''} unavailable`, 'warn');
     }
   } else {
-    player.setStatus(`${cartTracks.length} tracks (${cartItems.length} releases)`, 'info');
+    player.setPlaylistStatus('cart', `${cartTracks.length} tracks (${cartItems.length} releases)`, 'info');
   }
   return true;
 }
@@ -1162,17 +1172,34 @@ async function main() {
   // Inject the discography button up front (in its disabled "Loading…" state) so it's
   // visible while the cart loads, instead of appearing only after the cart finishes.
   const discoBtn = discoItems.length > 0 ? injectDiscographyButton() : null;
-  if (discoItems.length > 0) player.expectDiscography();
+  if (discoItems.length > 0) player.expectPlaylist('discography', 'Label discography');
 
   player.onShowCache = async () => {
     const entries = await listCacheEntries();
     showCacheModal(entries);
   };
 
+  // The current page's tracks are already in the DOM, so they load before the
+  // cart and discography, which each need a fetch per release. Being the first
+  // playlist set, it also becomes the active one.
+  const pageTracks = isTrackOrAlbumPage()
+    ? parseTralbum(document.documentElement.outerHTML, location.href)
+    : [];
+  const setCurrentPageStatus = () => {
+    const n = pageTracks.length;
+    player.setPlaylistStatus('currentpage', `${n} track${n !== 1 ? 's' : ''}`, 'info');
+  };
+  if (pageTracks.length > 0) {
+    player.setPlaylist('currentpage', 'Current page', pageTracks);
+    setCurrentPageStatus();
+    const teardown = setupNativePlayerSync(player);
+    window.addEventListener('pagehide', teardown, { once: true });
+  }
+
   if (cartItems.length > 0) {
     const loaded = await loadCartPlaylist(cartItems, player);
     if (!loaded) return;
-  } else {
+  } else if (player.currentPlaylistId === null) {
     // Cart is empty — show player on label page with a placeholder status.
     // Tracks can still be added from the discography below.
     player.setStatus('Cart is empty', 'info');
@@ -1181,6 +1208,7 @@ async function main() {
   player.onReloadPlaylist = async () => {
     player.setStatus('Reloading playlist info…', 'loading');
     await clearTrackCache();
+    if (pageTracks.length > 0) setCurrentPageStatus();
     if (cartItems.length > 0) {
       await loadCartPlaylist(cartItems, player);
     }
@@ -1229,17 +1257,6 @@ async function main() {
       injectDiscographyPlayButtons(discoIndexMap, discoItems, player);
     } else {
       discoBtn.textContent = 'No playable discography tracks found';
-    }
-  }
-
-  if (isTrackOrAlbumPage()) {
-    const pageTracks = parseTralbum(document.documentElement.outerHTML, location.href);
-    if (pageTracks.length > 0) {
-      player.setPlaylist('currentpage', 'Current page', pageTracks);
-      const n = pageTracks.length;
-      player.setPlaylistStatus('currentpage', `${n} track${n !== 1 ? 's' : ''}`, 'info');
-      const teardown = setupNativePlayerSync(player);
-      window.addEventListener('pagehide', teardown, { once: true });
     }
   }
 }

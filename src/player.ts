@@ -55,7 +55,8 @@ export class Player {
 
   private queueVisible = false;
   private playerVisible = true;
-  private discographyExpected = false;
+  // Playlists that are still loading, mapped to the label of their disabled tab.
+  private expectedPlaylists = new Map<PlaylistId, string>();
   private collapseBtn!: HTMLButtonElement;
   private seeking = false;
   private switchingPlaylist = false;
@@ -135,8 +136,10 @@ export class Player {
     return this.showDiscographyButton;
   }
 
-  expectDiscography() {
-    this.discographyExpected = true;
+  // Shows a disabled tab for a playlist that is still loading. Calling it again
+  // updates the tab label, e.g. to report loading progress.
+  expectPlaylist(id: PlaylistId, label: string) {
+    this.expectedPlaylists.set(id, label);
     this.updateHeader();
   }
 
@@ -400,10 +403,11 @@ export class Player {
 
     for (const [id, label] of entries) {
       const state = this.playlists.get(id);
-      if (!state && (id !== 'discography' || !this.discographyExpected)) continue;
+      const expectedLabel = this.expectedPlaylists.get(id);
+      if (!state && expectedLabel === undefined) continue;
       const tab = document.createElement('button');
       tab.className = 'bcp-tab' + (id === this.activeId ? ' bcp-tab-active' : '');
-      tab.textContent = state?.label ?? label;
+      tab.textContent = state?.label ?? expectedLabel ?? label;
       if (state) {
         tab.addEventListener('click', () => this.selectPlaylist(id));
       } else {
