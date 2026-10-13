@@ -45,6 +45,9 @@ let latestSyncNum: number | null = null;
 // "digital track" suffix in the sidecart link text instead.
 let cartItemTypes = new Map<string, 'track' | 'album'>();
 
+// Cart items that yielded no tracks on the last cart load, keyed by normalised URL.
+let cartItemProblems = new Map<string, ItemProblem>();
+
 // Normalised URLs of cart items the user has checked for partial checkout.
 let cartSelection = new Set<string>();
 
@@ -557,18 +560,14 @@ async function loadCartPlaylist(cartItems: CartItem[], player: Player): Promise<
   };
   reportProgress(0);
 
-  const { tracks: cartTracks, indexMap: cartIndexMap, failedCount } = await resolvePlaylist(cartItems, reportProgress);
+  const { tracks: cartTracks, indexMap: cartIndexMap, problems } = await resolvePlaylist(cartItems, reportProgress);
+  cartItemProblems = new Map(Array.from(problems, ([url, problem]) => [normalizeUrl(url), problem]));
 
   if (cartTracks.length === 0) {
-    player.setPlaylistUnavailable(
-      'cart',
-      'Cart (could not load)',
-      `None of the ${cartItems.length} releases in your cart could be loaded from Bandcamp. ` +
-        'Check that you are online, then press ⟳ to retry. The DevTools console shows the error for each release.',
-      'error'
-    );
-    player.setPlaylistStatus('cart', 'Could not load the cart', 'error');
-    if (player.currentPlaylistId === null) player.setStatus('Could not load the cart', 'error');
+    const { label, reason } = describeNothingToPlay(cartItems.length, problems, 'in your cart');
+    player.setPlaylistUnavailable('cart', `Cart (${label})`, reason, 'error');
+    player.setPlaylistStatus('cart', `Cart: ${label}`, 'error');
+    if (player.currentPlaylistId === null) player.setStatus(`Cart: ${label}`, 'error');
     return;
   }
 
@@ -579,23 +578,7 @@ async function loadCartPlaylist(cartItems: CartItem[], player: Player): Promise<
   cartItems.forEach((item) => injectCheckboxForSidecartItem(item.url));
   injectCheckoutSelectedBtn(player);
 
-  const unplayable = cartTracks.filter((t) => t.unplayable).length;
-  if (unplayable > 0) {
-    const pct = unplayable / cartTracks.length;
-    if (pct >= 0.5) {
-      player.setPlaylistStatus('cart', 'Log in for full streams', 'warn');
-    } else {
-      player.setPlaylistStatus('cart', `${unplayable} track${unplayable > 1 ? 's' : ''} unavailable`, 'warn');
-    }
-  } else if (failedCount > 0) {
-    player.setPlaylistStatus(
-      'cart',
-      `${cartTracks.length} tracks (${failedCount} of ${cartItems.length} releases could not be loaded)`,
-      'warn'
-    );
-  } else {
-    player.setPlaylistStatus('cart', `${cartTracks.length} tracks (${cartItems.length} releases)`, 'info');
-  }
+  refreshCartStatus(player);
 }
 
 async function main() {
@@ -799,7 +782,7 @@ async function main() {
   if (cartItems.length === 0) {
     const reason = document.querySelector(SEL_SIDECART_BODY)
       ? 'No items found in your shopping cart. If it is not empty, Bandcamp may have changed its page layout.'
-      : 'Your cart is empty: Bandcamp shows no shopping cart on this page. Use + Track or + Release to add something.';
+      : 'Your cart is empty: Bandcamp shows no shopping cart on this page. Use + Track, + Release or + Cart to add something.';
     player.setPlaylistUnavailable('cart', 'Cart (empty)', reason);
   }
 
@@ -1091,15 +1074,10 @@ async function main() {
       }
     };
     reportProgress(0);
-    const { tracks: discoTracks, indexMap: discoIndexMap } = await resolvePlaylist(discoItems, reportProgress);
+    const { tracks: discoTracks, indexMap: discoIndexMap, problems } = await resolvePlaylist(discoItems, reportProgress);
     if (discoTracks.length === 0) {
-      player.setPlaylistUnavailable(
-        'discography',
-        'Label discography (could not load)',
-        `None of the ${discoItems.length} releases on this page could be loaded from Bandcamp. ` +
-          'Check that you are online, then press ⟳ to retry.',
-        'error'
-      );
+      const { label, reason } = describeNothingToPlay(discoItems.length, problems, 'on this page');
+      player.setPlaylistUnavailable('discography', `Label discography (${label})`, reason, 'error');
       if (discoBtn) discoBtn.textContent = 'No playable discography tracks found';
       return false;
     }
@@ -1185,17 +1163,35 @@ function refreshCartState(player: Player): void {
 
 function refreshCartStatus(player: Player): void {
   const tracks = player.getPlaylistTracks('cart');
-  if (tracks.length === 0) return;
-  const unplayable = tracks.filter((t) => t.unplayable).length;
-  const releaseCount = new Set(tracks.map((t) => t.releaseUrl)).size;
-  if (unplayable > 0) {
-    const pct = unplayable / tracks.length;
-    player.setPlaylistStatus(
+  if (tracks.length === 0) {
+    player.setPlaylistUnavailable(
       'cart',
-      pct >= 0.5 ? 'Log in for full streams' : `${unplayable} track${unplayable > 1 ? 's' : ''} unavailable`,
-      'warn'
+      'Cart (empty)',
+      'Everything was removed from your cart. Use + Track, + Release or + Cart to add something.'
     );
+    player.setPlaylistStatus('cart', 'Cart is empty', 'info');
+    return;
+  }
+
+  const inCart = new Set(probeCart().map((i) => normalizeUrl(i.url)));
+  const problemsInCart = Array.from(cartItemProblems).filter(([url]) => inCart.has(url)).map(([, problem]) => problem);
+  const fetchFailed = problemsInCart.filter((p) => p === 'fetch-failed').length;
+  const noTracks = problemsInCart.length - fetchFailed;
+  const unplayable = tracks.filter((t) => t.unplayable).length;
+
+  const notes: string[] = [];
+  if (unplayable > 0) {
+    notes.push(unplayable / tracks.length >= 0.5
+      ? 'Log in for full streams'
+      : `${unplayable} track${unplayable > 1 ? 's' : ''} unavailable`);
+  }
+  if (fetchFailed > 0) notes.push(`${fetchFailed} item${fetchFailed > 1 ? 's' : ''} could not be loaded`);
+  if (noTracks > 0) notes.push(`${noTracks} item${noTracks > 1 ? 's have' : ' has'} nothing to play`);
+
+  if (notes.length > 0) {
+    player.setPlaylistStatus('cart', notes.join(' · '), 'warn');
   } else {
+    const releaseCount = new Set(tracks.map((t) => t.releaseUrl)).size;
     player.setPlaylistStatus('cart', `${tracks.length} tracks (${releaseCount} releases)`, 'info');
   }
 }
@@ -1381,53 +1377,80 @@ function updateSyncNum(responseBody: unknown): void {
 
 // --- Fetch + parse -----------------------------------------------------------
 
+// Why an item yielded no tracks: the page could not be fetched, or it was
+// fetched but has nothing to play (e.g. merch).
+type ItemProblem = 'fetch-failed' | 'no-tracks';
+
 // Fetches and parses a release page, bypassing the cache, and caches the result.
-async function fetchRelease(url: string): Promise<PlaylistTrack[]> {
+async function fetchRelease(url: string): Promise<{ tracks: PlaylistTrack[]; problem?: ItemProblem }> {
   try {
     const response = await sendBcpMessage({ type: 'fetch', url });
     if (response.error) {
       console.warn('[bcp] Fetch error for', url, response.error);
-      return [];
+      return { tracks: [], problem: 'fetch-failed' };
     }
     const parsed = parseTralbum(response.html ?? '', url);
-    if (parsed.length === 0) console.warn('[bcp] No tracks parsed from', url);
+    if (parsed.length === 0) {
+      console.warn('[bcp] No tracks parsed from', url);
+      return { tracks: [], problem: 'no-tracks' };
+    }
     const fetchedAt = Date.now();
     for (const track of parsed) track.streamFetchedAt = fetchedAt;
     writeCache(url, parsed);
-    return parsed;
+    return { tracks: parsed };
   } catch (err) {
     console.warn('[bcp] Failed to fetch', url, err);
-    return [];
+    return { tracks: [], problem: 'fetch-failed' };
   }
 }
 
 async function fetchTracksForUrl(url: string, maxAgeMs = TRACK_DETAILS_MAX_AGE_MS): Promise<PlaylistTrack[]> {
-  return (await readCache(url, maxAgeMs)) ?? fetchRelease(url);
+  return (await readCache(url, maxAgeMs)) ?? (await fetchRelease(url)).tracks;
 }
 
 async function resolvePlaylist(
   items: CartItem[],
   onProgress: (done: number) => void
-): Promise<{ tracks: PlaylistTrack[]; indexMap: Map<string, number>; failedCount: number }> {
+): Promise<{ tracks: PlaylistTrack[]; indexMap: Map<string, number>; problems: Map<string, ItemProblem> }> {
   const tracks: PlaylistTrack[] = [];
   const indexMap = new Map<string, number>();
+  const problems = new Map<string, ItemProblem>();
   const cached = await readCacheBatch(items.map((item) => item.url));
   let done = 0;
-  let failedCount = 0;
 
   for (const item of items) {
-    const itemTracks = cached.get(item.url) ?? await fetchRelease(item.url);
-    if (itemTracks.length > 0) {
+    const result = cached.has(item.url) ? { tracks: cached.get(item.url)! } : await fetchRelease(item.url);
+    if (result.tracks.length > 0) {
       indexMap.set(item.url, tracks.length);
-      tracks.push(...itemTracks);
+      tracks.push(...result.tracks);
     } else {
-      failedCount++;
+      problems.set(item.url, result.problem ?? 'no-tracks');
     }
     done++;
     onProgress(done);
   }
 
-  return { tracks, indexMap, failedCount };
+  return { tracks, indexMap, problems };
+}
+
+// Explains why nothing in a playlist could be played, for its greyed-out tab.
+function describeNothingToPlay(itemCount: number, problems: Map<string, ItemProblem>, what: string): { label: string; reason: string } {
+  const fetchFailed = Array.from(problems.values()).filter((p) => p === 'fetch-failed').length;
+  if (fetchFailed === itemCount) {
+    return {
+      label: 'could not load',
+      reason:
+        `None of the ${itemCount} items ${what} could be fetched from Bandcamp. ` +
+        'Check that you are online, then press ⟳ to retry. The DevTools console shows the error for each item.',
+    };
+  }
+  return {
+    label: 'nothing to play',
+    reason:
+      `None of the ${itemCount} items ${what} have tracks the player can read; merch and other non-music items have none.` +
+      (fetchFailed > 0 ? ` ${fetchFailed} could not be fetched at all; press ⟳ to retry those.` : '') +
+      ' The DevTools console lists each item.',
+  };
 }
 
 function findReleaseUrlForIndex(indexMap: Map<string, number>, activeIndex: number): string | null {

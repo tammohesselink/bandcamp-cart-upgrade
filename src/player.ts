@@ -147,9 +147,9 @@ export class Player {
     return this.showDiscographyButton;
   }
 
-  // Shows a greyed-out tab for a playlist that is loading or failed to load;
-  // hovering or clicking it shows `reason`. Once the playlist is set, its
-  // normal tab replaces this one.
+  // Shows a greyed-out tab for a playlist that is loading, failed to load or
+  // is empty; hovering or clicking it shows `reason`. Setting or adding tracks
+  // to the playlist replaces it with the normal tab.
   setPlaylistUnavailable(id: PlaylistId, label: string, reason: string, kind: StatusKind = 'info') {
     this.unavailablePlaylists.set(id, { label, reason, kind });
     this.updateHeader();
@@ -158,6 +158,7 @@ export class Player {
   setPlaylist(id: PlaylistId, label: string, tracks: PlaylistTrack[]) {
     const isNew = !this.playlists.has(id);
     this.playlists.set(id, { label, tracks, lastIndex: 0, statusMsg: '', statusKind: 'info' });
+    if (tracks.length > 0) this.unavailablePlaylists.delete(id);
     this.updateHeader();
     if (isNew && this.playlists.size === 1) {
       this.selectPlaylist(id);
@@ -208,6 +209,7 @@ export class Player {
 
   showToast(msg: string, kind: StatusKind = 'info') {
     const toast = el('div', `bcp-toast bcp-toast-${kind}`);
+    toast.setAttribute('role', 'status');
     toast.textContent = msg;
     document.body.appendChild(toast);
     // Force reflow so the CSS transition has a starting state to animate from.
@@ -279,6 +281,7 @@ export class Player {
     if (toAdd.length === 0) return null;
     const startIndex = state.tracks.length;
     state.tracks.push(...toAdd);
+    if (this.unavailablePlaylists.delete(id)) this.updateHeader();
     if (this.activeId === id) {
       // Selecting an empty playlist leaves the bar blank, so load its first
       // track now, unless a removed track is still playing.
@@ -421,7 +424,8 @@ export class Player {
       if (!state && !unavailable) continue;
       const tab = document.createElement('button');
       tab.className = 'bcp-tab' + (id === this.activeId ? ' bcp-tab-active' : '');
-      if (state) {
+      // An emptied playlist (e.g. every cart item removed) shows its reason too.
+      if (state && !(state.tracks.length === 0 && unavailable)) {
         tab.textContent = state.label;
         tab.addEventListener('click', () => this.selectPlaylist(id));
       } else if (unavailable) {

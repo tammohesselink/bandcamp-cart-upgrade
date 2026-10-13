@@ -215,6 +215,19 @@ describe('Player playlist tabs', () => {
     expect(document.querySelector('.bcp-toast-error')?.textContent).toBe('None of the 3 releases could be loaded.');
   });
 
+  it('greys out an emptied playlist and restores it when tracks are added again', () => {
+    const track = freshTrack(1);
+    const player = new Player([track]);
+
+    player.removeTracksByReleaseUrl('cart', track.releaseUrl);
+    player.setPlaylistUnavailable('cart', 'Cart (empty)', 'Everything was removed from your cart.');
+    const emptiedTab = tabNamed(player, 'Cart (empty)');
+    player.addTracksToPlaylist('cart', [freshTrack(2)]);
+
+    expect(emptiedTab?.getAttribute('aria-disabled')).toBe('true');
+    expect(tabNamed(player, 'Cart')?.getAttribute('aria-disabled')).toBeNull();
+  });
+
   it('replaces the greyed-out tab with a playable one once the playlist loads', () => {
     const player = new Player([freshTrack(1)]);
     player.setPlaylistUnavailable('discography', 'Label discography (loading 0 / 5)', 'Loading.', 'loading');
