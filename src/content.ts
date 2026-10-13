@@ -555,6 +555,7 @@ async function loadCartPlaylist(cartItems: CartItem[], player: Player): Promise<
 
   if (cartTracks.length === 0) {
     player.expectPlaylist('cart', 'Cart (no playable tracks)');
+    player.setPlaylistStatus('cart', 'No playable tracks found', 'error');
     if (player.currentPlaylistId === null) player.setStatus('No playable tracks found', 'error');
     return;
   }
@@ -801,8 +802,14 @@ async function main() {
 
     // Playlist tracks can come from a months-old cache entry; prices must be current.
     const releaseTracks = await fetchTracksForUrl(track.releaseUrl, LIVE_DATA_MAX_AGE_MS);
-    const currentTrack = releaseTracks.find((t) => t.trackId === track.trackId) ?? track;
-    let minPrice = addType === 'track' ? currentTrack.trackMinPrice : currentTrack.minPrice;
+    if (releaseTracks.length === 0) {
+      player.showToast('Could not check the current price, please try again', 'error');
+      return false;
+    }
+    // A null track price makes the code below read it from the track's own page.
+    let minPrice = addType === 'track'
+      ? (releaseTracks.find((t) => t.trackId === track.trackId)?.trackMinPrice ?? null)
+      : releaseTracks[0]!.minPrice;
 
     // Album pages often omit per-track pricing. Fetch the track's own page to get it.
     // We also check purchasability here: album pages always produce purchasable=true since
@@ -850,7 +857,7 @@ async function main() {
       player.addCartUrl(cartItemUrl);
       const label = addType === 'track' ? track.trackTitle : (track.albumTitle || track.trackTitle);
       addSidecartItem(cartItemUrl, label, minPrice, addType);
-      const tracksToAdd = addType === 'track' || releaseTracks.length === 0 ? [track] : releaseTracks;
+      const tracksToAdd = addType === 'track' ? [track] : releaseTracks;
       const startIndex = player.addTracksToPlaylist('cart', tracksToAdd);
       if (startIndex !== null) {
         activeCartIndexMap.set(normalizeUrl(cartItemUrl), startIndex);
@@ -1005,14 +1012,14 @@ async function main() {
   player.onRefreshStream = async (track, force) => {
     const fresh = await fetchTracksForUrl(track.releaseUrl, force ? 0 : LIVE_DATA_MAX_AGE_MS);
     const freshByPage = new Map(fresh.map((t) => [normalizeUrl(t.pageUrl), t]));
-    for (const id of ['currentpage', 'cart', 'discography'] as const) {
-      for (const loaded of player.getPlaylistTracks(id)) {
-        const match = freshByPage.get(normalizeUrl(loaded.pageUrl));
-        if (!match) continue;
-        loaded.streamUrl = match.streamUrl;
-        loaded.unplayable = match.unplayable;
-        loaded.streamFetchedAt = match.streamFetchedAt;
-      }
+    const playlistTracks = (['currentpage', 'cart', 'discography'] as const).flatMap((id) => player.getPlaylistTracks(id));
+    // `track` may no longer be in any playlist, e.g. after its release was removed mid-play.
+    for (const loaded of [track, ...playlistTracks]) {
+      const match = freshByPage.get(normalizeUrl(loaded.pageUrl));
+      if (!match) continue;
+      loaded.streamUrl = match.streamUrl;
+      loaded.unplayable = match.unplayable;
+      loaded.streamFetchedAt = match.streamFetchedAt;
     }
   };
 
@@ -1107,6 +1114,8 @@ async function main() {
       await loadCartPlaylist(cartItems, player);
     }
     if (discoLoad) {
+      // Let a load that is still running finish, so two never run at once.
+      await discoLoad;
       discoLoad = null;
       await loadDiscography();
     }

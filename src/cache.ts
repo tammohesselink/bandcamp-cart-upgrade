@@ -73,6 +73,20 @@ export function writeCache(url: string, tracks: PlaylistTrack[]): void {
   chrome.storage.local.set({ [cacheKey(url)]: entry }).catch(() => {});
 }
 
+// Removes expired entries and entries from older cache versions. Entries are
+// otherwise only dropped when read, and a label page visited once never is.
+export async function pruneTrackCache(): Promise<void> {
+  try {
+    const all = await chrome.storage.local.get(null);
+    const keys = Object.keys(all).filter((key) => {
+      if (!key.startsWith('bcp_tracks_')) return false;
+      if (!key.startsWith(CACHE_KEY_PREFIX)) return true;
+      return !isCacheEntryUsable(all[key] as CacheEntry, TRACK_DETAILS_MAX_AGE_MS);
+    });
+    if (keys.length > 0) await chrome.storage.local.remove(keys);
+  } catch {}
+}
+
 export async function clearTrackCache(): Promise<void> {
   try {
     const all = await chrome.storage.local.get(null);

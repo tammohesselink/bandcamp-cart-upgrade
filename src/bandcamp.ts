@@ -75,9 +75,8 @@ function extractTralbumData(html: string): TralbumData | null {
     }
   }
 
-  // Strip comments before the remaining strategies scan raw HTML instead of
-  // parsed <script> textContent — otherwise a marker mentioned only in an
-  // HTML comment (e.g. explanatory prose) would be mistaken for real data.
+  // A marker mentioned only in an HTML comment would otherwise be mistaken
+  // for real data.
   const scanned = stripHtmlComments(html);
 
   // Strategy 2: inline TralbumData variable

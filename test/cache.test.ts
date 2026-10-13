@@ -5,34 +5,11 @@ import {
   LIVE_DATA_MAX_AGE_MS,
   TRACK_DETAILS_MAX_AGE_MS,
 } from '../src/cache';
-import type { PlaylistTrack } from '../src/types';
+import { makeTrack as track } from './track-factory';
 
 const NOW = 1_800_000_000_000;
 const MINUTE = 60 * 1000;
 const DAY = 24 * 60 * MINUTE;
-
-function track(overrides: Partial<PlaylistTrack> = {}): PlaylistTrack {
-  return {
-    trackTitle: 'Intro',
-    albumTitle: 'Echoes of the Void',
-    artist: 'Solar Drift',
-    streamUrl: 'https://t4.bcbits.com/stream/fake-stream-url-1',
-    pageUrl: 'https://solardrift.bandcamp.com/track/intro',
-    artworkUrl: '',
-    durationSec: 90,
-    unplayable: false,
-    releaseUrl: 'https://solardrift.bandcamp.com/album/echoes-of-the-void',
-    releaseId: 5000,
-    releaseType: 'album',
-    trackId: 10,
-    bandId: 99999,
-    minPrice: 7,
-    trackMinPrice: 1.5,
-    currency: null,
-    purchasable: true,
-    ...overrides,
-  };
-}
 
 describe('isCacheEntryUsable', () => {
   it.each([
