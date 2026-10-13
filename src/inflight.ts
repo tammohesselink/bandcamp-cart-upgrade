@@ -1,6 +1,4 @@
-// Coalesces concurrent calls for the same key into a single in-flight promise,
-// so multiple callers (e.g. several browser tabs racing on a cache miss) share
-// one underlying operation instead of each starting their own.
+// Concurrent calls for the same key share one in-flight promise until it settles.
 export function dedupeInFlight<T>(
   inFlight: Map<string, Promise<T>>,
   key: string,

@@ -15,10 +15,8 @@ function bandcampOrigin(rawUrl: string): string | null {
   }
 }
 
-// Every Bandcamp tab runs its own content script, so several tabs can hit a
-// cache miss for the same release URL at once. Coalescing here — the one
-// service worker shared by all tabs — means concurrent tabs share a single
-// real fetch instead of each loading it themselves.
+// Several tabs can miss the cache for the same release at once; the service
+// worker is shared by all of them, so coalescing here gives one real fetch.
 const inFlightHtmlFetches = new Map<string, Promise<FetchResponse>>();
 
 function fetchBandcampHtml(url: string): Promise<FetchResponse> {
