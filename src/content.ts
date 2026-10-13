@@ -5,6 +5,16 @@ import { probeCart, probeDiscography, injectDiscographyButton, injectRestoreCart
 import { addSnapshotIfChanged, diffSnapshot } from './cart-history';
 import { normalizeUrl } from './url';
 import {
+  readCache,
+  readCacheBatch,
+  writeCache,
+  clearTrackCache,
+  listCacheEntries,
+  TRACK_DETAILS_MAX_AGE_MS,
+  LIVE_DATA_MAX_AGE_MS,
+  type CacheDump,
+} from './cache';
+import {
   readPageContext,
   isTrackOrAlbumPage,
   clickCheckout,
@@ -409,7 +419,7 @@ function showCacheModal(entries: CacheDump[]): void {
 // line-item-id resolution are always consistent.
 
 async function addCartItem(item: SavedCartItem, cartLengthHint: number): Promise<boolean> {
-  const tracks = await fetchTracksForUrl(item.url);
+  const tracks = await fetchTracksForUrl(item.url, LIVE_DATA_MAX_AGE_MS);
   if (tracks.length === 0) {
     console.error('[bcp] cart-add: could not fetch release page for', item.url);
     return false;
@@ -717,9 +727,8 @@ async function doRestore(button: HTMLButtonElement, toAdd: SavedCartItem[], toRe
 main().catch(console.error);
 
 // Loads (or reloads) the cart playlist: resolves track metadata, updates the
-// player's cart playlist, and re-injects sidecart UI elements. Returns false
-// if no playable tracks were found so the caller can decide how to proceed.
-async function loadCartPlaylist(cartItems: CartItem[], player: Player): Promise<boolean> {
+// player's cart playlist, and re-injects sidecart UI elements.
+async function loadCartPlaylist(cartItems: CartItem[], player: Player): Promise<void> {
   // Another playlist (e.g. the current page) may already be active, so progress
   // goes to the cart tab instead of overwriting that playlist's status line.
   const reportProgress = (done: number) => {
@@ -738,7 +747,7 @@ async function loadCartPlaylist(cartItems: CartItem[], player: Player): Promise<
   if (cartTracks.length === 0) {
     player.expectPlaylist('cart', 'Cart (no playable tracks)');
     if (player.currentPlaylistId === null) player.setStatus('No playable tracks found', 'error');
-    return false;
+    return;
   }
 
   activeCartIndexMap = cartIndexMap;
@@ -759,7 +768,6 @@ async function loadCartPlaylist(cartItems: CartItem[], player: Player): Promise<
   } else {
     player.setPlaylistStatus('cart', `${cartTracks.length} tracks (${cartItems.length} releases)`, 'info');
   }
-  return true;
 }
 
 async function main() {
@@ -971,7 +979,10 @@ async function main() {
     const tralbumId = addType === 'track' ? track.trackId : track.releaseId;
     const tralbumType = addType === 'track' ? 't' : (track.releaseType === 'track' ? 't' : 'a');
 
-    let minPrice = addType === 'track' ? track.trackMinPrice : track.minPrice;
+    // Playlist tracks can come from a months-old cache entry; prices must be current.
+    const releaseTracks = await fetchTracksForUrl(track.releaseUrl, LIVE_DATA_MAX_AGE_MS);
+    const currentTrack = releaseTracks.find((t) => t.trackId === track.trackId) ?? track;
+    let minPrice = addType === 'track' ? currentTrack.trackMinPrice : currentTrack.minPrice;
 
     // Album pages often omit per-track pricing. Fetch the track's own page to get it.
     // We also check purchasability here: album pages always produce purchasable=true since
@@ -1019,9 +1030,7 @@ async function main() {
       player.addCartUrl(cartItemUrl);
       const label = addType === 'track' ? track.trackTitle : (track.albumTitle || track.trackTitle);
       addSidecartItem(cartItemUrl, label, minPrice, addType);
-      const tracksToAdd = addType === 'track'
-        ? [track]
-        : await fetchTracksForUrl(track.releaseUrl).then((r) => r.length > 0 ? r : [track]);
+      const tracksToAdd = addType === 'track' || releaseTracks.length === 0 ? [track] : releaseTracks;
       const startIndex = player.addTracksToPlaylist('cart', tracksToAdd);
       if (startIndex !== null) {
         activeCartIndexMap.set(normalizeUrl(cartItemUrl), startIndex);
@@ -1122,12 +1131,12 @@ async function main() {
       return;
     }
 
-    // Resolve track data here in the normal window where the cache is warm
-    // (resolvePlaylist already fetched these). The incognito window's storage
-    // is a separate empty instance, so it can't use the cache.
+    // Resolve track data here in the normal window where the cache is warm.
+    // The incognito window's storage is a separate empty instance, so it
+    // can't use the cache.
     const items: Array<{ u: string; id: number; t: 't' | 'a'; pr: number; b: number | null }> = [];
     for (const item of selectedItems) {
-      const tracks = await fetchTracksForUrl(item.url);
+      const tracks = await fetchTracksForUrl(item.url, LIVE_DATA_MAX_AGE_MS);
       if (tracks.length === 0) continue;
       const track = tracks[0]!;
       const isTrackAdd = item.purchaseType === 'track';
@@ -1169,10 +1178,23 @@ async function main() {
     player.destroy();
   }, { once: true });
 
-  // Inject the discography button up front (in its disabled "Loading…" state) so it's
-  // visible while the cart loads, instead of appearing only after the cart finishes.
   const discoBtn = discoItems.length > 0 ? injectDiscographyButton() : null;
-  if (discoItems.length > 0) player.expectPlaylist('discography', 'Label discography');
+
+  // Refreshes every loaded copy of the release's tracks, so the rest of an
+  // album plays without another fetch.
+  player.onRefreshStream = async (track, force) => {
+    const fresh = await fetchTracksForUrl(track.releaseUrl, force ? 0 : LIVE_DATA_MAX_AGE_MS);
+    const freshByPage = new Map(fresh.map((t) => [normalizeUrl(t.pageUrl), t]));
+    for (const id of ['currentpage', 'cart', 'discography'] as const) {
+      for (const loaded of player.getPlaylistTracks(id)) {
+        const match = freshByPage.get(normalizeUrl(loaded.pageUrl));
+        if (!match) continue;
+        loaded.streamUrl = match.streamUrl;
+        loaded.unplayable = match.unplayable;
+        loaded.streamFetchedAt = match.streamFetchedAt;
+      }
+    }
+  };
 
   player.onShowCache = async () => {
     const entries = await listCacheEntries();
@@ -1185,6 +1207,8 @@ async function main() {
   const pageTracks = isTrackOrAlbumPage()
     ? parseTralbum(document.documentElement.outerHTML, location.href)
     : [];
+  const pageLoadedAt = Date.now();
+  for (const track of pageTracks) track.streamFetchedAt = pageLoadedAt;
   const setCurrentPageStatus = () => {
     const n = pageTracks.length;
     player.setPlaylistStatus('currentpage', `${n} track${n !== 1 ? 's' : ''}`, 'info');
@@ -1196,13 +1220,63 @@ async function main() {
     window.addEventListener('pagehide', teardown, { once: true });
   }
 
-  if (cartItems.length > 0) {
-    const loaded = await loadCartPlaylist(cartItems, player);
-    if (!loaded) return;
-  } else if (player.currentPlaylistId === null) {
-    // Cart is empty — show player on label page with a placeholder status.
-    // Tracks can still be added from the discography below.
-    player.setStatus('Cart is empty', 'info');
+  // A label can have hundreds of releases, each needing a fetch on first load,
+  // so the discography only loads once the user asks to play it.
+  let discoLoad: Promise<boolean> | null = null;
+  const resolveDiscography = async (): Promise<boolean> => {
+    const reportProgress = (done: number) => {
+      const progress = `${done} / ${discoItems.length}`;
+      player.expectPlaylist('discography', `Label discography (loading ${progress})`);
+      if (discoBtn) {
+        discoBtn.textContent = `Loading label discography… ${progress}`;
+        discoBtn.disabled = true;
+      }
+    };
+    reportProgress(0);
+    const { tracks: discoTracks, indexMap: discoIndexMap } = await resolvePlaylist(discoItems, reportProgress);
+    if (discoTracks.length === 0) {
+      player.expectPlaylist('discography', 'Label discography (no playable tracks)');
+      if (discoBtn) discoBtn.textContent = 'No playable discography tracks found';
+      return false;
+    }
+    activeDiscoIndexMap = discoIndexMap;
+    player.setPlaylist('discography', 'Label discography', discoTracks);
+    player.setPlaylistStatus('discography', `${discoTracks.length} tracks (${discoItems.length} releases)`, 'info');
+    if (discoBtn) {
+      discoBtn.textContent = `Play label discography (${discoTracks.length} tracks, ${discoItems.length} releases)`;
+      discoBtn.disabled = false;
+    }
+    return true;
+  };
+  const loadDiscography = (): Promise<boolean> => {
+    discoLoad ??= resolveDiscography();
+    return discoLoad;
+  };
+
+  if (discoItems.length > 0) {
+    console.log('[bcp] Discography releases found:');
+    console.table(discoItems.map((it) => ({ type: it.type, url: it.url })));
+
+    injectDiscographyPlayButtons(discoItems, async (item) => {
+      if (!(await loadDiscography())) return;
+      const index = activeDiscoIndexMap.get(item.url);
+      if (index === undefined) {
+        player.showToast('No playable tracks for this release', 'warn');
+        return;
+      }
+      player.jumpTo('discography', index);
+    });
+  }
+
+  if (discoBtn) {
+    discoBtn.textContent = `Play label discography (${discoItems.length} releases)`;
+    discoBtn.style.display = player.discographyButtonEnabled ? '' : 'none';
+    player.onDiscographyButtonVisibilityChange = (show) => {
+      discoBtn.style.display = show ? '' : 'none';
+    };
+    discoBtn.addEventListener('click', async () => {
+      if (await loadDiscography()) player.jumpTo('discography', 0);
+    });
   }
 
   player.onReloadPlaylist = async () => {
@@ -1212,52 +1286,18 @@ async function main() {
     if (cartItems.length > 0) {
       await loadCartPlaylist(cartItems, player);
     }
-    if (discoItems.length > 0 && discoBtn) {
-      discoBtn.textContent = `Loading label discography…`;
-      discoBtn.disabled = true;
-      const { tracks: discoTracks, indexMap: discoIndexMap } = await resolvePlaylist(discoItems, (done) => {
-        discoBtn.textContent = `Loading label discography… ${done} / ${discoItems.length}`;
-      });
-      if (discoTracks.length > 0) {
-        activeDiscoIndexMap = discoIndexMap;
-        player.setPlaylist('discography', 'Label discography', discoTracks);
-        player.setPlaylistStatus('discography', `${discoTracks.length} tracks (${discoItems.length} releases)`, 'info');
-        discoBtn.textContent = `Play label discography (${discoTracks.length} tracks, ${discoItems.length} releases)`;
-        discoBtn.disabled = false;
-        injectDiscographyPlayButtons(discoIndexMap, discoItems, player);
-      } else {
-        discoBtn.textContent = 'No playable discography tracks found';
-      }
+    if (discoLoad) {
+      discoLoad = null;
+      await loadDiscography();
     }
   };
 
-  if (discoItems.length > 0 && discoBtn) {
-    discoBtn.style.display = player.discographyButtonEnabled ? '' : 'none';
-    player.onDiscographyButtonVisibilityChange = (show) => {
-      discoBtn.style.display = show ? '' : 'none';
-    };
-
-
-    console.log('[bcp] Discography releases found:');
-    console.table(discoItems.map((it) => ({ type: it.type, url: it.url })));
-
-    const { tracks: discoTracks, indexMap: discoIndexMap } = await resolvePlaylist(discoItems, (done) => {
-      discoBtn.textContent = `Loading label discography… ${done} / ${discoItems.length}`;
-    });
-
-    if (discoTracks.length > 0) {
-      activeDiscoIndexMap = discoIndexMap;
-      player.setPlaylist('discography', 'Label discography', discoTracks);
-      player.setPlaylistStatus('discography', `${discoTracks.length} tracks (${discoItems.length} releases)`, 'info');
-      discoBtn.textContent = `Play label discography (${discoTracks.length} tracks, ${discoItems.length} releases)`;
-      discoBtn.disabled = false;
-      discoBtn.addEventListener('click', () => {
-        player.jumpTo('discography', 0);
-      });
-      injectDiscographyPlayButtons(discoIndexMap, discoItems, player);
-    } else {
-      discoBtn.textContent = 'No playable discography tracks found';
-    }
+  if (cartItems.length > 0) {
+    await loadCartPlaylist(cartItems, player);
+  } else if (player.currentPlaylistId === null) {
+    // Cart is empty — show player on label page with a placeholder status.
+    // Tracks can still be added from the discography below.
+    player.setStatus('Cart is empty', 'info');
   }
 }
 
@@ -1475,87 +1515,28 @@ function updateSyncNum(responseBody: unknown): void {
 
 // --- Fetch + parse -----------------------------------------------------------
 
-const CACHE_KEY_PREFIX = 'bcp_tracks_v6_';
-const CACHE_TTL_MS = 60 * 60 * 1000;
-
-interface CacheEntry {
-  tracks: PlaylistTrack[];
-  cachedAt: number;
-}
-
-async function readCache(url: string): Promise<PlaylistTrack[] | null> {
+// Fetches and parses a release page, bypassing the cache, and caches the result.
+async function fetchRelease(url: string): Promise<PlaylistTrack[]> {
   try {
-    const key = CACHE_KEY_PREFIX + url;
-    const result = await chrome.storage.local.get(key);
-    const entry = result[key] as CacheEntry | undefined;
-    if (!entry) return null;
-    if (Date.now() - entry.cachedAt > CACHE_TTL_MS) {
-      chrome.storage.local.remove(key);
-      return null;
+    const response = await sendBcpMessage({ type: 'fetch', url });
+    if (response.error) {
+      console.warn('[bcp] Fetch error for', url, response.error);
+      return [];
     }
-    // Treat cached empty arrays as misses so transient parse failures don't
-    // permanently block resolution on subsequent calls.
-    if (entry.tracks.length === 0) {
-      chrome.storage.local.remove(key);
-      return null;
-    }
-    return entry.tracks;
-  } catch {
-    return null;
-  }
-}
-
-function writeCache(url: string, tracks: PlaylistTrack[]): void {
-  if (tracks.length === 0) return; // Don't cache parse failures — allow retries.
-  const entry: CacheEntry = { tracks, cachedAt: Date.now() };
-  chrome.storage.local.set({ [CACHE_KEY_PREFIX + url]: entry }).catch(() => {});
-}
-
-async function clearTrackCache(): Promise<void> {
-  try {
-    const all = await chrome.storage.local.get(null);
-    const keys = Object.keys(all).filter((k) => k.startsWith(CACHE_KEY_PREFIX));
-    if (keys.length > 0) await chrome.storage.local.remove(keys);
-  } catch {}
-}
-
-interface CacheDump {
-  url: string;
-  cachedAt: number;
-  tracks: PlaylistTrack[];
-}
-
-async function listCacheEntries(): Promise<CacheDump[]> {
-  try {
-    const all = await chrome.storage.local.get(null);
-    return Object.keys(all)
-      .filter((k) => k.startsWith(CACHE_KEY_PREFIX))
-      .map((k) => {
-        const entry = all[k] as CacheEntry;
-        return { url: k.slice(CACHE_KEY_PREFIX.length), cachedAt: entry.cachedAt, tracks: entry.tracks };
-      })
-      .sort((a, b) => b.cachedAt - a.cachedAt);
-  } catch {
+    const parsed = parseTralbum(response.html ?? '', url);
+    if (parsed.length === 0) console.warn('[bcp] No tracks parsed from', url);
+    const fetchedAt = Date.now();
+    for (const track of parsed) track.streamFetchedAt = fetchedAt;
+    writeCache(url, parsed);
+    return parsed;
+  } catch (err) {
+    console.warn('[bcp] Failed to fetch', url, err);
     return [];
   }
 }
 
-async function fetchTracksForUrl(url: string): Promise<PlaylistTrack[]> {
-  const cached = await readCache(url);
-  if (cached) return cached;
-  try {
-    const response = await sendBcpMessage({ type: 'fetch', url });
-    if (!response.error) {
-      const parsed = parseTralbum(response.html ?? '', url);
-      if (parsed.length === 0) console.warn('[bcp] fetchTracksForUrl: no tracks parsed from', url);
-      writeCache(url, parsed);
-      return parsed;
-    }
-    console.error('[bcp] fetchTracksForUrl: fetch error for', url, response.error);
-  } catch (err) {
-    console.error('[bcp] fetchTracksForUrl: exception for', url, err);
-  }
-  return [];
+async function fetchTracksForUrl(url: string, maxAgeMs = TRACK_DETAILS_MAX_AGE_MS): Promise<PlaylistTrack[]> {
+  return (await readCache(url, maxAgeMs)) ?? fetchRelease(url);
 }
 
 async function resolvePlaylist(
@@ -1564,36 +1545,14 @@ async function resolvePlaylist(
 ): Promise<{ tracks: PlaylistTrack[]; indexMap: Map<string, number> }> {
   const tracks: PlaylistTrack[] = [];
   const indexMap = new Map<string, number>();
+  const cached = await readCacheBatch(items.map((item) => item.url));
   let done = 0;
 
   for (const item of items) {
-    const firstIndex = tracks.length;
-
-    const cached = await readCache(item.url);
-    if (cached) {
-      console.log('[bcp] Cache hit:', item.url);
-      indexMap.set(item.url, firstIndex);
-      tracks.push(...cached);
-      done++;
-      onProgress(done);
-      continue;
-    }
-
-    try {
-      const response = await sendBcpMessage({ type: 'fetch', url: item.url });
-      if (response.error) {
-        console.warn(`[bcp] Fetch error for ${item.url}:`, response.error);
-      } else {
-        const parsed = parseTralbum(response.html ?? '', item.url);
-        if (parsed.length === 0) {
-          console.warn('[bcp] No tracks parsed from', item.url);
-        }
-        writeCache(item.url, parsed);
-        indexMap.set(item.url, firstIndex);
-        tracks.push(...parsed);
-      }
-    } catch (err) {
-      console.warn('[bcp] Failed to fetch', item.url, err);
+    const itemTracks = cached.get(item.url) ?? await fetchRelease(item.url);
+    if (itemTracks.length > 0) {
+      indexMap.set(item.url, tracks.length);
+      tracks.push(...itemTracks);
     }
     done++;
     onProgress(done);
@@ -1684,9 +1643,8 @@ function injectCartPlayButtons(indexMap: Map<string, number>, player: Player): v
 }
 
 function injectDiscographyPlayButtons(
-  indexMap: Map<string, number>,
   discoItems: CartItem[],
-  player: Player
+  onPlay: (item: CartItem) => void
 ): void {
   // Pre-index all visible grid <li> elements by their link's pathname.
   // We use the JS .pathname property rather than the href attribute so that
@@ -1713,9 +1671,6 @@ function injectDiscographyPlayButtons(
   }
 
   for (const item of discoItems) {
-    const index = indexMap.get(item.url);
-    if (index === undefined) continue;
-
     const itemPath = new URL(item.url).pathname;
     const lis = lisByPath.get(itemPath);
     if (!lis) continue;
@@ -1729,7 +1684,7 @@ function injectDiscographyPlayButtons(
       playBtn.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        player.jumpTo('discography', index);
+        onPlay(item);
       });
 
       const titleEl = li.querySelector<HTMLElement>(SEL_GRID_ITEM_TITLE);

@@ -204,9 +204,9 @@ describe('injectDiscographyButton — with #music-grid', () => {
     expect(btn.classList.contains('bcp-discography-btn')).toBe(true);
   });
 
-  it('button is disabled initially', () => {
+  it('button is enabled initially so the discography can load on demand', () => {
     const btn = injectDiscographyButton();
-    expect(btn.disabled).toBe(true);
+    expect(btn.disabled).toBe(false);
   });
 
   it('inserts button immediately before #music-grid', () => {
