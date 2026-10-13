@@ -1,10 +1,7 @@
 import type { SavedCartItem, CartSnapshot } from './types';
+import { normalizeUrl } from './url';
 
 const MAX_SNAPSHOTS = 60;
-
-function normalizeUrl(url: string): string {
-  return url.toLowerCase().replace(/\/+$/, '');
-}
 
 function sameItems(a: SavedCartItem[], b: SavedCartItem[]): boolean {
   if (a.length !== b.length) return false;
