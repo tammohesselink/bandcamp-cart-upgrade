@@ -399,10 +399,17 @@ input[type=range].bcp-tempo {
   border-color: #1da0c3;
 }
 
-.bcp-tab:disabled {
-  color: #444;
+.bcp-tab.bcp-tab-unavailable {
+  color: #555;
   border-color: #333;
-  cursor: default;
+  border-style: dashed;
+  cursor: help;
+}
+
+.bcp-tab.bcp-tab-unavailable.bcp-tab-error,
+.bcp-tab.bcp-tab-unavailable.bcp-tab-warn {
+  color: #a86a3d;
+  border-color: #5a3a24;
 }
 
 .bcp-grid-play-btn {
@@ -486,6 +493,15 @@ input[type=range].bcp-tempo {
   font-size: 11px;
   flex-shrink: 0;
   margin-left: auto;
+}
+
+.bcp-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 
 .bcp-toast {
