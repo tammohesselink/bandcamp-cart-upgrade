@@ -70,6 +70,7 @@ export class Player {
   private sourceTrack: PlaylistTrack | null = null;
   private streamRetriedFor: PlaylistTrack | null = null;
 
+  private announcer!: HTMLElement;
   private cartUrls = new Set<string>();
   private cartActionsEl!: HTMLElement;
 
@@ -109,6 +110,10 @@ export class Player {
     this.wrapper.appendChild(this.queueEl);
     this.wrapper.appendChild(this.headerEl);
     this.wrapper.appendChild(this.bar);
+
+    this.announcer = el('div', 'bcp-visually-hidden');
+    this.announcer.setAttribute('role', 'status');
+    this.wrapper.appendChild(this.announcer);
 
     new ResizeObserver(() => {
       document.body.style.paddingBottom = this.wrapper.offsetHeight + 'px';
@@ -209,8 +214,12 @@ export class Player {
 
   showToast(msg: string, kind: StatusKind = 'info') {
     const toast = el('div', `bcp-toast bcp-toast-${kind}`);
-    toast.setAttribute('role', 'status');
+    toast.setAttribute('aria-hidden', 'true');
     toast.textContent = msg;
+    // Screen readers announce changes to an existing live region, not a newly
+    // added element, so the message also goes to the player's persistent one.
+    this.announcer.textContent = '';
+    setTimeout(() => { this.announcer.textContent = msg; }, 50);
     document.body.appendChild(toast);
     // Force reflow so the CSS transition has a starting state to animate from.
     toast.getBoundingClientRect();

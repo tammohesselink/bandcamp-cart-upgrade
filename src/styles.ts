@@ -495,6 +495,15 @@ input[type=range].bcp-tempo {
   margin-left: auto;
 }
 
+.bcp-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
 .bcp-toast {
   background: #1a1a1a;
   border: 1px solid #2e2e2e;

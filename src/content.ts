@@ -1163,6 +1163,15 @@ function refreshCartState(player: Player): void {
 
 function refreshCartStatus(player: Player): void {
   const tracks = player.getPlaylistTracks('cart');
+  const cartItems = probeCart();
+  if (tracks.length === 0 && cartItems.length > 0) {
+    // The items left in the cart are ones that yielded no tracks.
+    const problems = new Map(cartItems.map((i) => [i.url, cartItemProblems.get(normalizeUrl(i.url)) ?? 'no-tracks' as const]));
+    const { label, reason } = describeNothingToPlay(cartItems.length, problems, 'in your cart');
+    player.setPlaylistUnavailable('cart', `Cart (${label})`, reason, 'error');
+    player.setPlaylistStatus('cart', `Cart: ${label}`, 'error');
+    return;
+  }
   if (tracks.length === 0) {
     player.setPlaylistUnavailable(
       'cart',
@@ -1173,7 +1182,7 @@ function refreshCartStatus(player: Player): void {
     return;
   }
 
-  const inCart = new Set(probeCart().map((i) => normalizeUrl(i.url)));
+  const inCart = new Set(cartItems.map((i) => normalizeUrl(i.url)));
   const problemsInCart = Array.from(cartItemProblems).filter(([url]) => inCart.has(url)).map(([, problem]) => problem);
   const fetchFailed = problemsInCart.filter((p) => p === 'fetch-failed').length;
   const noTracks = problemsInCart.length - fetchFailed;

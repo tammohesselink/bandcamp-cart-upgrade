@@ -206,13 +206,15 @@ describe('Player playlist tabs', () => {
     expect(tab?.title).toBe('Your cart is empty.');
   });
 
-  it('shows the reason as a message when the greyed-out tab is clicked', () => {
+  it('shows the reason as a message, also announced to screen readers, when the greyed-out tab is clicked', async () => {
     const player = new Player([]);
     player.setPlaylistUnavailable('cart', 'Cart (could not load)', 'None of the 3 releases could be loaded.', 'error');
 
     tabNamed(player, 'Cart (could not load)')!.click();
+    await new Promise((resolve) => setTimeout(resolve, 60));
 
     expect(document.querySelector('.bcp-toast-error')?.textContent).toBe('None of the 3 releases could be loaded.');
+    expect(player.wrapper.querySelector('[role="status"]')?.textContent).toBe('None of the 3 releases could be loaded.');
   });
 
   it('greys out an emptied playlist and restores it when tracks are added again', () => {
