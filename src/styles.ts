@@ -399,10 +399,17 @@ input[type=range].bcp-tempo {
   border-color: #1da0c3;
 }
 
-.bcp-tab:disabled {
-  color: #444;
+.bcp-tab.bcp-tab-unavailable {
+  color: #555;
   border-color: #333;
-  cursor: default;
+  border-style: dashed;
+  cursor: help;
+}
+
+.bcp-tab.bcp-tab-unavailable.bcp-tab-error,
+.bcp-tab.bcp-tab-unavailable.bcp-tab-warn {
+  color: #a86a3d;
+  border-color: #5a3a24;
 }
 
 .bcp-grid-play-btn {

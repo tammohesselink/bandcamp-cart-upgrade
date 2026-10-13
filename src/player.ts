@@ -56,8 +56,8 @@ export class Player {
 
   private queueVisible = false;
   private playerVisible = true;
-  // Playlists that are still loading, mapped to the label of their disabled tab.
-  private expectedPlaylists = new Map<PlaylistId, string>();
+  // Playlists that can't be played (yet), shown as greyed-out tabs that explain why.
+  private unavailablePlaylists = new Map<PlaylistId, { label: string; reason: string; kind: StatusKind }>();
   private collapseBtn!: HTMLButtonElement;
   private seeking = false;
   private switchingPlaylist = false;
@@ -147,10 +147,11 @@ export class Player {
     return this.showDiscographyButton;
   }
 
-  // Shows a disabled tab for a playlist that is still loading. Calling it again
-  // updates the tab label, e.g. to report loading progress.
-  expectPlaylist(id: PlaylistId, label: string) {
-    this.expectedPlaylists.set(id, label);
+  // Shows a greyed-out tab for a playlist that is loading or failed to load;
+  // hovering or clicking it shows `reason`. Once the playlist is set, its
+  // normal tab replaces this one.
+  setPlaylistUnavailable(id: PlaylistId, label: string, reason: string, kind: StatusKind = 'info') {
+    this.unavailablePlaylists.set(id, { label, reason, kind });
     this.updateHeader();
   }
 
@@ -412,23 +413,25 @@ export class Player {
     label.textContent = 'Playlist type:';
     tabs.appendChild(label);
 
-    const entries: [PlaylistId, string][] = [
-      ['currentpage', 'Current page'],
-      ['discography', 'Label discography'],
-      ['cart', 'Cart'],
-    ];
+    const ids: PlaylistId[] = ['currentpage', 'discography', 'cart'];
 
-    for (const [id, label] of entries) {
+    for (const id of ids) {
       const state = this.playlists.get(id);
-      const expectedLabel = this.expectedPlaylists.get(id);
-      if (!state && expectedLabel === undefined) continue;
+      const unavailable = this.unavailablePlaylists.get(id);
+      if (!state && !unavailable) continue;
       const tab = document.createElement('button');
       tab.className = 'bcp-tab' + (id === this.activeId ? ' bcp-tab-active' : '');
-      tab.textContent = state?.label ?? expectedLabel ?? label;
       if (state) {
+        tab.textContent = state.label;
         tab.addEventListener('click', () => this.selectPlaylist(id));
-      } else {
-        tab.disabled = true;
+      } else if (unavailable) {
+        // Not `disabled`: disabled buttons ignore clicks, and the click is how
+        // the reason gets shown on touch devices.
+        tab.textContent = unavailable.label;
+        tab.title = unavailable.reason;
+        tab.classList.add('bcp-tab-unavailable', `bcp-tab-${unavailable.kind}`);
+        tab.setAttribute('aria-disabled', 'true');
+        tab.addEventListener('click', () => this.showToast(unavailable.reason, unavailable.kind));
       }
       tabs.appendChild(tab);
     }

@@ -542,7 +542,13 @@ async function loadCartPlaylist(cartItems: CartItem[], player: Player): Promise<
   // goes to the cart tab instead of overwriting that playlist's status line.
   const reportProgress = (done: number) => {
     const progress = `${done} / ${cartItems.length}`;
-    player.expectPlaylist('cart', `Cart (loading ${progress})`);
+    player.setPlaylistUnavailable(
+      'cart',
+      `Cart (loading ${progress})`,
+      `Loading track info for your cart: ${done} of ${cartItems.length} releases done. ` +
+        'Releases loaded before come from the cache; new ones are fetched from Bandcamp one by one.',
+      'loading'
+    );
     if (player.currentPlaylistId === null) {
       player.setStatus(`Loading ${progress}…`, 'loading');
     } else {
@@ -551,12 +557,18 @@ async function loadCartPlaylist(cartItems: CartItem[], player: Player): Promise<
   };
   reportProgress(0);
 
-  const { tracks: cartTracks, indexMap: cartIndexMap } = await resolvePlaylist(cartItems, reportProgress);
+  const { tracks: cartTracks, indexMap: cartIndexMap, failedCount } = await resolvePlaylist(cartItems, reportProgress);
 
   if (cartTracks.length === 0) {
-    player.expectPlaylist('cart', 'Cart (no playable tracks)');
-    player.setPlaylistStatus('cart', 'No playable tracks found', 'error');
-    if (player.currentPlaylistId === null) player.setStatus('No playable tracks found', 'error');
+    player.setPlaylistUnavailable(
+      'cart',
+      'Cart (could not load)',
+      `None of the ${cartItems.length} releases in your cart could be loaded from Bandcamp. ` +
+        'Check that you are online, then press ⟳ to retry. The DevTools console shows the error for each release.',
+      'error'
+    );
+    player.setPlaylistStatus('cart', 'Could not load the cart', 'error');
+    if (player.currentPlaylistId === null) player.setStatus('Could not load the cart', 'error');
     return;
   }
 
@@ -575,6 +587,12 @@ async function loadCartPlaylist(cartItems: CartItem[], player: Player): Promise<
     } else {
       player.setPlaylistStatus('cart', `${unplayable} track${unplayable > 1 ? 's' : ''} unavailable`, 'warn');
     }
+  } else if (failedCount > 0) {
+    player.setPlaylistStatus(
+      'cart',
+      `${cartTracks.length} tracks (${failedCount} of ${cartItems.length} releases could not be loaded)`,
+      'warn'
+    );
   } else {
     player.setPlaylistStatus('cart', `${cartTracks.length} tracks (${cartItems.length} releases)`, 'info');
   }
@@ -777,6 +795,13 @@ async function main() {
 
   const player = new Player([]);
   document.body.appendChild(player.wrapper);
+
+  if (cartItems.length === 0) {
+    const reason = document.querySelector(SEL_SIDECART_BODY)
+      ? 'No items found in your shopping cart. If it is not empty, Bandcamp may have changed its page layout.'
+      : 'Your cart is empty: Bandcamp shows no shopping cart on this page. Use + Track or + Release to add something.';
+    player.setPlaylistUnavailable('cart', 'Cart (empty)', reason);
+  }
 
   // Build the initial cart URL set and purchase-type map.
   cartItemTypes = buildCartItemTypes(cartItems);
@@ -1054,7 +1079,12 @@ async function main() {
   const resolveDiscography = async (): Promise<boolean> => {
     const reportProgress = (done: number) => {
       const progress = `${done} / ${discoItems.length}`;
-      player.expectPlaylist('discography', `Label discography (loading ${progress})`);
+      player.setPlaylistUnavailable(
+        'discography',
+        `Label discography (loading ${progress})`,
+        `Loading track info for this label: ${done} of ${discoItems.length} releases done.`,
+        'loading'
+      );
       if (discoBtn) {
         discoBtn.textContent = `Loading label discography… ${progress}`;
         discoBtn.disabled = true;
@@ -1063,7 +1093,13 @@ async function main() {
     reportProgress(0);
     const { tracks: discoTracks, indexMap: discoIndexMap } = await resolvePlaylist(discoItems, reportProgress);
     if (discoTracks.length === 0) {
-      player.expectPlaylist('discography', 'Label discography (no playable tracks)');
+      player.setPlaylistUnavailable(
+        'discography',
+        'Label discography (could not load)',
+        `None of the ${discoItems.length} releases on this page could be loaded from Bandcamp. ` +
+          'Check that you are online, then press ⟳ to retry.',
+        'error'
+      );
       if (discoBtn) discoBtn.textContent = 'No playable discography tracks found';
       return false;
     }
@@ -1372,23 +1408,26 @@ async function fetchTracksForUrl(url: string, maxAgeMs = TRACK_DETAILS_MAX_AGE_M
 async function resolvePlaylist(
   items: CartItem[],
   onProgress: (done: number) => void
-): Promise<{ tracks: PlaylistTrack[]; indexMap: Map<string, number> }> {
+): Promise<{ tracks: PlaylistTrack[]; indexMap: Map<string, number>; failedCount: number }> {
   const tracks: PlaylistTrack[] = [];
   const indexMap = new Map<string, number>();
   const cached = await readCacheBatch(items.map((item) => item.url));
   let done = 0;
+  let failedCount = 0;
 
   for (const item of items) {
     const itemTracks = cached.get(item.url) ?? await fetchRelease(item.url);
     if (itemTracks.length > 0) {
       indexMap.set(item.url, tracks.length);
       tracks.push(...itemTracks);
+    } else {
+      failedCount++;
     }
     done++;
     onProgress(done);
   }
 
-  return { tracks, indexMap };
+  return { tracks, indexMap, failedCount };
 }
 
 function findReleaseUrlForIndex(indexMap: Map<string, number>, activeIndex: number): string | null {

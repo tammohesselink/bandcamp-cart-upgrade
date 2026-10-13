@@ -190,3 +190,38 @@ describe('Player with a removed track still loaded', () => {
     expect(audioOf(player).paused).toBe(false);
   });
 });
+
+describe('Player playlist tabs', () => {
+  function tabNamed(player: Player, text: string): HTMLButtonElement | undefined {
+    return Array.from(player.wrapper.querySelectorAll<HTMLButtonElement>('.bcp-tab')).find((tab) => tab.textContent === text);
+  }
+
+  it('shows a greyed-out tab that explains why the playlist cannot be played', () => {
+    const player = new Player([]);
+    player.setPlaylistUnavailable('cart', 'Cart (empty)', 'Your cart is empty.');
+
+    const tab = tabNamed(player, 'Cart (empty)');
+
+    expect(tab?.getAttribute('aria-disabled')).toBe('true');
+    expect(tab?.title).toBe('Your cart is empty.');
+  });
+
+  it('shows the reason as a message when the greyed-out tab is clicked', () => {
+    const player = new Player([]);
+    player.setPlaylistUnavailable('cart', 'Cart (could not load)', 'None of the 3 releases could be loaded.', 'error');
+
+    tabNamed(player, 'Cart (could not load)')!.click();
+
+    expect(document.querySelector('.bcp-toast-error')?.textContent).toBe('None of the 3 releases could be loaded.');
+  });
+
+  it('replaces the greyed-out tab with a playable one once the playlist loads', () => {
+    const player = new Player([freshTrack(1)]);
+    player.setPlaylistUnavailable('discography', 'Label discography (loading 0 / 5)', 'Loading.', 'loading');
+
+    player.setPlaylist('discography', 'Label discography', [freshTrack(2)]);
+
+    expect(tabNamed(player, 'Label discography (loading 0 / 5)')).toBeUndefined();
+    expect(tabNamed(player, 'Label discography')?.getAttribute('aria-disabled')).toBeNull();
+  });
+});
