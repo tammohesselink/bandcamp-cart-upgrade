@@ -1,4 +1,5 @@
-import type { BcpRequest } from './messages';
+import type { BcpRequest, FetchResponse } from './messages';
+import { dedupeInFlight } from './inflight';
 
 // Returns the https origin for a Bandcamp URL, or null if the URL isn't a valid
 // https://*.bandcamp.com address. Used to refuse proxying credentialed requests
@@ -14,6 +15,18 @@ function bandcampOrigin(rawUrl: string): string | null {
   }
 }
 
+// Several tabs can miss the cache for the same release at once; the service
+// worker is shared by all of them, so coalescing here gives one real fetch.
+const inFlightHtmlFetches = new Map<string, Promise<FetchResponse>>();
+
+function fetchBandcampHtml(url: string): Promise<FetchResponse> {
+  return dedupeInFlight(inFlightHtmlFetches, url, () =>
+    fetch(url, { credentials: 'include' })
+      .then(async (res) => (res.ok ? { html: await res.text() } : { error: `HTTP ${res.status}` }))
+      .catch((err: unknown) => ({ error: String(err) }))
+  );
+}
+
 chrome.runtime.onMessage.addListener((message: BcpRequest, sender, sendResponse) => {
   // Only act on messages from this extension's own content scripts/pages.
   if (sender.id !== chrome.runtime.id) return false;
@@ -23,17 +36,7 @@ chrome.runtime.onMessage.addListener((message: BcpRequest, sender, sendResponse)
       sendResponse({ error: 'Refused: not a bandcamp.com URL' });
       return false;
     }
-    fetch(message.url, { credentials: 'include' })
-      .then(async (res) => {
-        if (!res.ok) {
-          sendResponse({ error: `HTTP ${res.status}` });
-          return;
-        }
-        sendResponse({ html: await res.text() });
-      })
-      .catch((err: unknown) => {
-        sendResponse({ error: String(err) });
-      });
+    fetchBandcampHtml(message.url).then(sendResponse);
     return true; // keep message channel open for async response
   }
 
