@@ -803,8 +803,9 @@ async function main() {
     // Playlist tracks can come from a months-old cache entry; prices must be current.
     const releaseTracks = await fetchTracksForUrl(track.releaseUrl, LIVE_DATA_MAX_AGE_MS);
     if (releaseTracks.length === 0) {
+      // `false` would tell the player only the full release is for sale.
       player.showToast('Could not check the current price, please try again', 'error');
-      return false;
+      return;
     }
     // A null track price makes the code below read it from the track's own page.
     let minPrice = addType === 'track'

@@ -746,9 +746,15 @@ export class Player {
   }
 
   private showUnplayable(track: PlaylistTrack, skip?: 1 | -1) {
+    this.playPauseBtn.textContent = '▶';
     const state = this.active();
     const index = state ? state.tracks.indexOf(track) : -1;
-    if (index === -1) return;
+    if (index === -1) {
+      // The track was removed from the playlist while loaded; carry on from the current one.
+      if (skip === 1) this.next();
+      else if (skip === -1) this.prev();
+      return;
+    }
     this.loadTrack(index, true);
     if (!skip) return;
     const nextIndex = this.nextPlayable(index + skip, skip);

@@ -170,3 +170,23 @@ describe('Player stream link refresh', () => {
     expect(audioOf(player).paused).toBe(true);
   });
 });
+
+describe('Player with a removed track still loaded', () => {
+  it('moves on to the next track when the removed track can no longer stream', async () => {
+    const otherRelease = 'https://solardrift.bandcamp.com/album/other';
+    const first = freshTrack(1, { releaseUrl: otherRelease });
+    const removed = freshTrack(2);
+    const next = freshTrack(3, { releaseUrl: otherRelease });
+    const player = new Player([first, removed, next]);
+    refreshWith(player, { unplayable: ['Track 2'] });
+    player.jumpTo('cart', 1);
+    await settle();
+    player.removeTracksByReleaseUrl('cart', removed.releaseUrl);
+
+    audioOf(player).dispatchEvent(new Event('error'));
+    await settle();
+
+    expect(audioOf(player).src).toBe('https://t4.bcbits.com/stream/track-3-old');
+    expect(audioOf(player).paused).toBe(false);
+  });
+});
