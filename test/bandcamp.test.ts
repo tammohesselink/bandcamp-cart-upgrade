@@ -1,7 +1,7 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { describe, it, expect } from 'vitest';
-import { parseTralbum, isReleaseOwned } from '../src/bandcamp';
+import { parseTralbum, isReleaseOwned, findAlbumUrl } from '../src/bandcamp';
 
 function fixture(name: string): string {
   return readFileSync(join(__dirname, 'fixtures', name), 'utf-8');
@@ -247,6 +247,31 @@ describe('isReleaseOwned', () => {
       html: '',
       expected: false,
     },
+    {
+      name: 'detects the tralbum is_purchased flag',
+      html: tralbumPage({ is_purchased: true }),
+      expected: true,
+    },
+    {
+      name: 'returns false when the tralbum is_purchased flag is null',
+      html: tralbumPage({ is_purchased: null }),
+      expected: false,
+    },
+    {
+      name: 'ignores the phrase in a fan comment',
+      html: '<div class="collected-by"><div class="comment">If you own this on vinyl, get the digital too</div></div>',
+      expected: false,
+    },
+    {
+      name: 'ignores the phrase in the release about text',
+      html: '<div class="tralbumData tralbum-about">Already in your collection? Grab the remix EP</div>',
+      expected: false,
+    },
+    {
+      name: 'ignores the phrase inside a script',
+      html: '<script>var strings = { owned: "You own this" };</script>',
+      expected: false,
+    },
   ];
 
   for (const { name, html, expected } of cases) {
@@ -255,3 +280,43 @@ describe('isReleaseOwned', () => {
     });
   }
 });
+
+describe('findAlbumUrl', () => {
+  const cases: Array<{ name: string; html: string; pageUrl: string; expected: string | null }> = [
+    {
+      name: 'resolves the album of a track page against the page origin',
+      html: tralbumPage({ tralbum_type: 't', album_url: '/album/untrue' }),
+      pageUrl: 'https://burial.bandcamp.com/track/archangel',
+      expected: 'https://burial.bandcamp.com/album/untrue',
+    },
+    {
+      name: 'returns null for a standalone track',
+      html: tralbumPage({ tralbum_type: 't', album_url: null }),
+      pageUrl: 'https://artist.bandcamp.com/track/single',
+      expected: null,
+    },
+    {
+      name: 'returns null for an album page',
+      html: tralbumPage({ tralbum_type: 'a', album_url: '/album/untrue' }),
+      pageUrl: 'https://burial.bandcamp.com/album/untrue',
+      expected: null,
+    },
+    {
+      name: 'returns null when the page has no tralbum data',
+      html: '<p>nothing here</p>',
+      pageUrl: 'https://artist.bandcamp.com/track/single',
+      expected: null,
+    },
+  ];
+
+  for (const { name, html, pageUrl, expected } of cases) {
+    it(name, () => {
+      expect(findAlbumUrl(html, pageUrl)).toBe(expected);
+    });
+  }
+});
+
+function tralbumPage(data: Record<string, unknown>): string {
+  const attr = JSON.stringify(data).replace(/"/g, '&quot;');
+  return `<script data-tralbum="${attr}"></script>`;
+}

@@ -67,7 +67,9 @@ export interface TralbumData {
   artist?: string;
   art_id?: number;
   album_title?: string;
+  album_url?: string | null;
   url?: string;
+  is_purchased?: boolean | null;
   trackinfo?: TrackInfo[];
 }
 

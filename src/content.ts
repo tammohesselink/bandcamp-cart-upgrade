@@ -1,5 +1,5 @@
 import type { CartItem, PlaylistTrack, SavedCartItem, CartSnapshot } from './types';
-import { parseTralbum, isReleaseOwned } from './bandcamp';
+import { parseTralbum, isReleaseOwned, findAlbumUrl } from './bandcamp';
 import { Player } from './player';
 import { probeCart, probeDiscography, injectDiscographyButton, injectRestoreCartButton, injectRemovePurchasedButton, injectRemoveAlreadyOwnedButton } from './probe';
 import { addSnapshotIfChanged, diffSnapshot } from './cart-history';
@@ -675,44 +675,81 @@ function setupRemovePurchasedButton(items: SavedCartItem[]): void {
   });
 }
 
+// Album purchases can link to one of the album's track pages; owning just
+// that track doesn't mean owning the album, so those are checked on the album
+// page. Returns null when the release page couldn't be fetched.
+async function isCartItemOwned(item: CartItem): Promise<boolean | null> {
+  const html = await fetchRawHtml(item.url);
+  if (html === null) return null;
+  if (item.purchaseType === 'album') {
+    const albumUrl = findAlbumUrl(html, item.url);
+    if (albumUrl) {
+      const albumHtml = await fetchRawHtml(albumUrl);
+      return albumHtml === null ? null : isReleaseOwned(albumHtml);
+    }
+  }
+  return isReleaseOwned(html);
+}
+
 // Checks every cart item against Bandcamp's own ownership state and removes
 // whichever ones the fan already owns. Catches purchases the extension never
 // saw — e.g. checking the same cart out in a separate anonymous window.
-function setupRemoveAlreadyOwnedButton(cartItems: CartItem[]): void {
+function setupRemoveAlreadyOwnedButton(): void {
   const btn = injectRemoveAlreadyOwnedButton();
   if (!btn) return;
   const idleLabel = btn.textContent ?? 'Remove already purchased items from cart';
+  const reset = () => {
+    btn.disabled = false;
+    btn.textContent = idleLabel;
+  };
   btn.addEventListener('click', async () => {
     btn.disabled = true;
-    const owned: SavedCartItem[] = [];
-    for (let i = 0; i < cartItems.length; i++) {
-      const item = cartItems[i]!;
-      btn.textContent = `Checking "${item.title || item.url}" (${i + 1} / ${cartItems.length})…`;
-      const html = await fetchRawHtml(item.url);
-      if (html && isReleaseOwned(html)) {
-        owned.push({ url: item.url, title: item.title, artist: item.artist, purchaseType: item.purchaseType });
+    try {
+      // Re-probed on click: items can be added to the sidecart without a reload.
+      const cartItems = probeCart();
+      const owned: CartItem[] = [];
+      const unchecked: CartItem[] = [];
+      for (let i = 0; i < cartItems.length; i++) {
+        const item = cartItems[i]!;
+        btn.textContent = `Checking "${item.title || item.url}" (${i + 1} / ${cartItems.length})…`;
+        const isOwned = await isCartItemOwned(item);
+        if (isOwned === null) unchecked.push(item);
+        else if (isOwned) owned.push(item);
       }
-    }
+      const uncheckedNote = unchecked.length > 0
+        ? `\n\nCould not check ${unchecked.length} item${unchecked.length !== 1 ? 's' : ''}: ${unchecked.map((i) => i.title || i.url).join(', ')}`
+        : '';
 
-    if (owned.length === 0) {
-      btn.disabled = false;
-      btn.textContent = idleLabel;
-      alert('No already-purchased items found in your cart.');
-      return;
-    }
+      if (owned.length === 0) {
+        reset();
+        alert(`No already-purchased items found in your cart.${uncheckedNote}`);
+        return;
+      }
 
-    if (!await showRemovePurchasedConfirm(owned)) {
-      btn.disabled = false;
-      btn.textContent = idleLabel;
-      return;
-    }
+      const toRemove: SavedCartItem[] = owned.map((i) => ({ url: i.url, title: i.title, artist: i.artist, purchaseType: i.purchaseType }));
+      if (!await showRemovePurchasedConfirm(toRemove)) {
+        reset();
+        return;
+      }
 
-    for (let i = 0; i < owned.length; i++) {
-      const label = owned[i]!.title || owned[i]!.url;
-      btn.textContent = `Removing "${label}" (${i + 1} / ${owned.length})…`;
-      await removeCartItem(owned[i]!);
+      const failed: SavedCartItem[] = [];
+      for (let i = 0; i < toRemove.length; i++) {
+        const item = toRemove[i]!;
+        btn.textContent = `Removing "${item.title || item.url}" (${i + 1} / ${toRemove.length})…`;
+        if (!await removeCartItem(item)) failed.push(item);
+      }
+      if (failed.length > 0 || uncheckedNote) {
+        const failedNote = failed.length > 0
+          ? `\n\nCould not remove: ${failed.map((i) => i.title || i.url).join(', ')}`
+          : '';
+        alert(`Removed ${toRemove.length - failed.length} of ${toRemove.length} already-purchased items.${failedNote}${uncheckedNote}`);
+      }
+      location.reload();
+    } catch (err) {
+      console.error('[bcp] remove already owned: failed', err);
+      reset();
+      alert('Checking the cart for already-purchased items failed. See the console for details.');
     }
-    location.reload();
   });
 }
 
@@ -916,7 +953,7 @@ async function main() {
   const settings = await loadSettings();
 
   if (!chrome.extension.inIncognitoContext) {
-    if (cartItems.length > 0) setupRemoveAlreadyOwnedButton(cartItems);
+    if (cartItems.length > 0) setupRemoveAlreadyOwnedButton();
 
     const liveItems: SavedCartItem[] = cartItems.map((i) => ({ url: i.url, title: i.title, purchaseType: i.purchaseType }));
     const snapshots = addSnapshotIfChanged(await loadSnapshots(), liveItems);

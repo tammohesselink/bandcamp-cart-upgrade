@@ -162,13 +162,36 @@ function extractJsonContaining(source: string, markerPos: number): unknown | nul
   return null;
 }
 
-// Bandcamp exposes no JSON flag for "the logged-in fan already owns this
-// release" either — like albumOnly above, the rendered page is the source of
-// truth. An owned track/album page replaces the buy panel with "you own
-// this" next to a download link. Text-matched rather than selector-matched
-// so a markup change on Bandcamp's side doesn't silently break detection.
+// Fan-written text (comments, about/credits, lyrics) can quote the ownership
+// phrases verbatim, so those sections are dropped before text matching.
+const USER_CONTENT_SELECTOR = 'script, style, .tralbumData, .lyricsText, .collected-by, .comment';
+const OWNED_PATTERNS = [/you\s+own\s+this/i, /already\s+in\s+your\s+collection/i];
+
+// The fetch must carry the fan's session cookies; a logged-out page never
+// reports ownership. The tralbum is_purchased flag is checked first, with the
+// rendered "you own this" buy panel as a fallback.
 export function isReleaseOwned(html: string): boolean {
-  return /you\s+own\s+this/i.test(html) || /already\s+in\s+your\s+collection/i.test(html);
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  if (extractTralbumData(doc)?.is_purchased) return true;
+
+  doc.querySelectorAll(USER_CONTENT_SELECTOR).forEach((el) => el.remove());
+  const text = doc.body?.textContent ?? '';
+  return OWNED_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+// Returns the album page a track page belongs to, or null for album pages and
+// standalone tracks.
+export function findAlbumUrl(html: string, pageUrl: string): string | null {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const data = extractTralbumData(doc);
+  if (!data?.album_url) return null;
+  const isTrackPage = data.tralbum_type === 't' || pageUrl.includes('/track/');
+  if (!isTrackPage) return null;
+  try {
+    return new URL(data.album_url, pageUrl).href;
+  } catch {
+    return null;
+  }
 }
 
 function safeOrigin(url: string): string {
