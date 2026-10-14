@@ -56,8 +56,9 @@ export class Player {
 
   private queueVisible = false;
   private playerVisible = true;
-  // Playlists that can't be played (yet), shown as greyed-out tabs that explain why.
-  private unavailablePlaylists = new Map<PlaylistId, { label: string; reason: string; kind: StatusKind }>();
+  // Playlists that can't be played (yet), shown as greyed-out tabs that explain
+  // why, or as clickable tabs when they load on demand.
+  private unavailablePlaylists = new Map<PlaylistId, { label: string; reason: string; kind: StatusKind; onLoad?: () => void }>();
   private collapseBtn!: HTMLButtonElement;
   private seeking = false;
   private switchingPlaylist = false;
@@ -157,6 +158,13 @@ export class Player {
   // to the playlist replaces it with the normal tab.
   setPlaylistUnavailable(id: PlaylistId, label: string, reason: string, kind: StatusKind = 'info') {
     this.unavailablePlaylists.set(id, { label, reason, kind });
+    this.updateHeader();
+  }
+
+  // Shows a clickable tab for a playlist that only loads when asked; `onLoad`
+  // runs on click and is expected to set or grey out the playlist.
+  setPlaylistOnDemand(id: PlaylistId, label: string, hint: string, onLoad: () => void) {
+    this.unavailablePlaylists.set(id, { label, reason: hint, kind: 'info', onLoad });
     this.updateHeader();
   }
 
@@ -437,6 +445,10 @@ export class Player {
       if (state && !(state.tracks.length === 0 && unavailable)) {
         tab.textContent = state.label;
         tab.addEventListener('click', () => this.selectPlaylist(id));
+      } else if (unavailable?.onLoad) {
+        tab.textContent = unavailable.label;
+        tab.title = unavailable.reason;
+        tab.addEventListener('click', unavailable.onLoad);
       } else if (unavailable) {
         // Not `disabled`: disabled buttons ignore clicks, and the click is how
         // the reason gets shown on touch devices.

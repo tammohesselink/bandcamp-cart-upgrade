@@ -230,6 +230,21 @@ describe('Player playlist tabs', () => {
     expect(tabNamed(player, 'Cart')?.getAttribute('aria-disabled')).toBeNull();
   });
 
+  it('shows a clickable tab for an on-demand playlist that starts loading it when clicked', () => {
+    const player = new Player([freshTrack(1)]);
+    const onLoad = vi.fn(() => player.setPlaylist('discography', 'Label discography', [freshTrack(2)]));
+    player.setPlaylistOnDemand('discography', 'Label discography (5 releases)', 'Click to load.', onLoad);
+
+    const tab = tabNamed(player, 'Label discography (5 releases)');
+    expect(tab?.getAttribute('aria-disabled')).toBeNull();
+    expect(tab?.classList.contains('bcp-tab-unavailable')).toBe(false);
+
+    tab!.click();
+
+    expect(onLoad).toHaveBeenCalledOnce();
+    expect(tabNamed(player, 'Label discography')).toBeDefined();
+  });
+
   it('replaces the greyed-out tab with a playable one once the playlist loads', () => {
     const player = new Player([freshTrack(1)]);
     player.setPlaylistUnavailable('discography', 'Label discography (loading 0 / 5)', 'Loading.', 'loading');

@@ -766,10 +766,10 @@ async function main() {
   console.table(cartItems.map((it) => ({ type: it.type, title: it.title, artist: it.artist, url: it.url })));
 
   // Probe discography early so we can show the player on label pages even when
-  // the cart is empty.
+  // the cart is empty. Release pages always get the player for their own tracks.
   const discoItems = probeDiscography();
 
-  if (cartItems.length === 0 && discoItems.length === 0) {
+  if (cartItems.length === 0 && discoItems.length === 0 && !isTrackOrAlbumPage()) {
     console.warn(
       '[bcp] No cart items detected. The cart may be empty, or the selectors need updating. ' +
         'Open DevTools, inspect the cart item DOM nodes, and update probeCart() in src/content.ts.'
@@ -1055,6 +1055,14 @@ async function main() {
     setCurrentPageStatus();
     const teardown = setupNativePlayerSync(player);
     window.addEventListener('pagehide', teardown, { once: true });
+  } else if (discoItems.length === 0) {
+    player.setPlaylistUnavailable(
+      'currentpage',
+      'Current page (nothing to play)',
+      isTrackOrAlbumPage()
+        ? 'No playable tracks could be read from this page.'
+        : 'This page has no tracks of its own. Open a release or label page to play it from here.'
+    );
   }
 
   // A label can have hundreds of releases, each needing a fetch on first load,
@@ -1097,6 +1105,19 @@ async function main() {
   };
 
   if (discoItems.length > 0) {
+    // On a label page the discography is the page's own music, so its tab shows
+    // before anything is fetched.
+    player.setPlaylistOnDemand(
+      'discography',
+      `Label discography (${discoItems.length} releases)`,
+      'Click to load and play every release on this page.',
+      () => {
+        void loadDiscography().then((loaded) => {
+          if (loaded) player.jumpTo('discography', 0);
+        });
+      }
+    );
+
     console.log('[bcp] Discography releases found:');
     console.table(discoItems.map((it) => ({ type: it.type, url: it.url })));
 
