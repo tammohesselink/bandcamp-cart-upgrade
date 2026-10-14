@@ -1092,9 +1092,9 @@ async function main() {
     }
     activeDiscoIndexMap = discoIndexMap;
     player.setPlaylist('discography', 'Label discography', discoTracks);
-    player.setPlaylistStatus('discography', `${discoTracks.length} tracks (${discoItems.length} releases)`, 'info');
+    player.setPlaylistStatus('discography', `${discoItems.length} releases (${discoTracks.length} tracks)`, 'info');
     if (discoBtn) {
-      discoBtn.textContent = `Play label discography (${discoTracks.length} tracks, ${discoItems.length} releases)`;
+      discoBtn.textContent = `Play label discography: ${discoItems.length} releases (${discoTracks.length} tracks)`;
       discoBtn.disabled = false;
     }
     return true;
@@ -1133,7 +1133,7 @@ async function main() {
   }
 
   if (discoBtn) {
-    discoBtn.textContent = `Play label discography (${discoItems.length} releases)`;
+    discoBtn.textContent = `Play label discography: ${discoItems.length} releases`;
     discoBtn.style.display = player.discographyButtonEnabled ? '' : 'none';
     player.onDiscographyButtonVisibilityChange = (show) => {
       discoBtn.style.display = show ? '' : 'none';
@@ -1223,7 +1223,7 @@ function refreshCartStatus(player: Player): void {
     player.setPlaylistStatus('cart', notes.join(' · '), 'warn');
   } else {
     const releaseCount = new Set(tracks.map((t) => t.releaseUrl)).size;
-    player.setPlaylistStatus('cart', `${tracks.length} tracks (${releaseCount} releases)`, 'info');
+    player.setPlaylistStatus('cart', `${releaseCount} releases (${tracks.length} tracks)`, 'info');
   }
 }
 
