@@ -149,10 +149,15 @@ export function openCartHistoryModal(deps: CartHistoryModalDeps): Promise<number
         const prepareTotal = toAdd.length;
         restoreProgress = { savedAt: snapshot.savedAt, phase: 'preparing', done: 0, total: prepareTotal };
         render();
-        await deps.prepareAdds(toAdd, (done) => {
-          restoreProgress = { savedAt: snapshot.savedAt, phase: 'preparing', done, total: prepareTotal };
-          render();
-        });
+        try {
+          await deps.prepareAdds(toAdd, (done) => {
+            restoreProgress = { savedAt: snapshot.savedAt, phase: 'preparing', done, total: prepareTotal };
+            render();
+          });
+        } catch (err) {
+          // Each add fetches what it still needs, so the restore can go on.
+          console.warn('[bcp] Could not prepare cart restore', err);
+        }
       }
 
       const total = toAdd.length + extra.length;

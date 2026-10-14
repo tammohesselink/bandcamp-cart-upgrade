@@ -20,6 +20,12 @@ export function isCacheEntryUsable(entry: CacheEntry, maxAgeMs: number, now = Da
   return now - entry.cachedAt <= maxAgeMs;
 }
 
+// Unplayable tracks can become playable (a pre-order is released, or the user
+// logs in), so a release with any is rechecked once it is older than an hour.
+export function needsPlayabilityRecheck(entry: CacheEntry, now = Date.now()): boolean {
+  return entry.tracks.some((t) => t.unplayable) && now - entry.cachedAt > LIVE_DATA_MAX_AGE_MS;
+}
+
 export function isStreamFresh(track: PlaylistTrack, now = Date.now()): boolean {
   return track.streamFetchedAt !== undefined && now - track.streamFetchedAt <= LIVE_DATA_MAX_AGE_MS;
 }
@@ -44,8 +50,8 @@ export async function readCache(url: string, maxAgeMs = TRACK_DETAILS_MAX_AGE_MS
 
 // Reads a whole playlist's entries in one storage call: per-item reads cost a
 // round trip each, which dominates load time for a large, fully cached cart.
-export async function readCacheBatch(urls: string[]): Promise<Map<string, PlaylistTrack[]>> {
-  const hits = new Map<string, PlaylistTrack[]>();
+export async function readCacheBatch(urls: string[]): Promise<Map<string, CacheEntry>> {
+  const hits = new Map<string, CacheEntry>();
   const keyToUrl = new Map(urls.map((url) => [cacheKey(url), url]));
   try {
     const all = await chrome.storage.local.get([...keyToUrl.keys()]);
@@ -54,7 +60,7 @@ export async function readCacheBatch(urls: string[]): Promise<Map<string, Playli
       const entry = all[key] as CacheEntry | undefined;
       if (!entry) continue;
       if (isCacheEntryUsable(entry, TRACK_DETAILS_MAX_AGE_MS)) {
-        hits.set(url, entry.tracks);
+        hits.set(url, entry);
       } else {
         expiredKeys.push(key);
       }

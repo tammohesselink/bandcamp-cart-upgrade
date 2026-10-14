@@ -164,6 +164,19 @@ describe('Player stream link refresh', () => {
     expect(playButton.textContent).toBe('▶');
   });
 
+  it('shows the play glyph again when the browser refuses to play after a refresh', async () => {
+    const player = new Player([expiredTrack(1)]);
+    refreshWith(player);
+    vi.spyOn(audioOf(player), 'play').mockRejectedValue(new Error('NotAllowedError'));
+    const playButton = player.wrapper.querySelector('.bcp-btn-play')!;
+
+    player.jumpTo('cart', 0);
+    await settle();
+
+    expect(playButton.querySelector('.bcp-spinner')).toBeNull();
+    expect(playButton.textContent).toBe('▶');
+  });
+
   it('does not start playback when pause is pressed while a link is being refreshed', async () => {
     const player = new Player([expiredTrack(1)]);
     let finishRefresh = () => {};

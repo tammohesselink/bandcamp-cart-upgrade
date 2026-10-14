@@ -66,6 +66,7 @@ export class Player {
   // waiting for a fresh stream link can tell it has been superseded.
   private playRequestId = 0;
   private playPending = false;
+  private playStarts = 0;
   // The track whose stream is in the audio element. It can differ from the
   // current track, e.g. after the playing release is removed from the cart.
   private sourceTrack: PlaylistTrack | null = null;
@@ -770,7 +771,10 @@ export class Player {
     if (refreshed || !isLoaded) {
       this.setSource(track, isLoaded ? this.audio.currentTime : 0);
     }
-    this.audio.play().catch(console.warn);
+    this.audio.play().catch((err: unknown) => {
+      console.warn(err);
+      if (this.audio.paused) this.setPlayButton('play');
+    });
   }
 
   private showUnplayable(track: PlaylistTrack, skip?: 1 | -1) {
@@ -803,6 +807,22 @@ export class Player {
     return !this.audio.paused;
   }
 
+  // Counts every start of playback, so a caller can tell whether the user
+  // started something while it was waiting.
+  get playStartCount(): number {
+    return this.playStarts;
+  }
+
+  // Re-reads which tracks are playable after their details were updated in place.
+  refreshTrackAvailability() {
+    this.updateQueueEl();
+    this.updateNavButtons();
+    const track = this.currentTrack();
+    if (track && this.audio.paused && !this.playPending) {
+      this.playPauseBtn.disabled = track.unplayable || !track.streamUrl;
+    }
+  }
+
   private setPlayButton(state: 'play' | 'pause' | 'loading') {
     if (state === 'loading') {
       const spinner = document.createElement('span');
@@ -825,6 +845,7 @@ export class Player {
 
   private bindAudioEvents() {
     this.audio.addEventListener('play', () => {
+      this.playStarts++;
       this.reflectPlaybackState(true);
       this.onPlaybackStart?.();
     });

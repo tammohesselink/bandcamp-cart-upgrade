@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { dedupeInFlight, mapWithConcurrency } from '../src/inflight';
+import { createLimiter, dedupeInFlight, mapWithConcurrency } from '../src/inflight';
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (err: unknown) => void } {
   let resolve!: (value: T) => void;
@@ -119,5 +119,79 @@ describe('mapWithConcurrency', () => {
 
     slow.resolve('slow');
     expect(await run).toEqual(['slow', 'fast', 'third']);
+  });
+});
+
+describe('mapWithConcurrency after a task rejects', () => {
+  it('starts no new tasks and rejects only after the running ones have finished', async () => {
+    const slow = deferred<string>();
+    const started: string[] = [];
+    const settled: string[] = [];
+    let rejected = false;
+
+    const run = mapWithConcurrency(
+      ['slow', 'fails', 'never'],
+      2,
+      (item) => {
+        started.push(item);
+        if (item === 'fails') return Promise.reject(new Error('boom'));
+        return slow.promise;
+      },
+      (result) => settled.push(result)
+    ).catch((err: Error) => {
+      rejected = true;
+      return err.message;
+    });
+
+    await new Promise((r) => setTimeout(r, 0));
+    const rejectedBeforeSlowFinished = rejected;
+    slow.resolve('slow');
+
+    expect(await run).toBe('boom');
+    expect(rejectedBeforeSlowFinished).toBe(false);
+    expect(started).toEqual(['slow', 'fails']);
+    expect(settled).toEqual([]);
+  });
+});
+
+describe('createLimiter', () => {
+  it('never runs more than the limit at once', async () => {
+    const limit = createLimiter(2);
+    let running = 0;
+    let peak = 0;
+    const task = async () => {
+      running++;
+      peak = Math.max(peak, running);
+      await new Promise((r) => setTimeout(r, 1));
+      running--;
+    };
+
+    await Promise.all(Array.from({ length: 6 }, () => limit('bulk', task)));
+
+    expect(peak).toBe(2);
+  });
+
+  it('starts a queued interactive task before queued bulk tasks', async () => {
+    const limit = createLimiter(1);
+    const first = deferred<void>();
+    const order: string[] = [];
+
+    const running = limit('bulk', () => first.promise);
+    const queued = [
+      limit('bulk', async () => { order.push('bulk'); }),
+      limit('interactive', async () => { order.push('interactive'); }),
+    ];
+    first.resolve();
+    await Promise.all([running, ...queued]);
+
+    expect(order).toEqual(['interactive', 'bulk']);
+  });
+
+  it('frees the slot when a task rejects', async () => {
+    const limit = createLimiter(1);
+
+    await expect(limit('bulk', () => Promise.reject(new Error('boom')))).rejects.toThrow('boom');
+
+    expect(await limit('bulk', async () => 'next')).toBe('next');
   });
 });

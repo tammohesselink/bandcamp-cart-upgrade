@@ -112,6 +112,24 @@ describe('openCartHistoryModal', () => {
     expect(calls).toEqual(['prepare 2', 'add Item b', 'add Item c']);
   });
 
+  it('carries on with the restore and can be closed when preparing the adds fails', async () => {
+    const target = snapshot([item('a'), item('b')], 1000);
+    const deps = makeDeps({
+      snapshots: [target],
+      initialItems: [item('a')],
+      prepareAdds: vi.fn().mockRejectedValue(new Error('offline')),
+    });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const closed = openCartHistoryModal(deps);
+
+    (snapshotRows()[0]!.querySelector('.bcp-snap-restore-all') as HTMLButtonElement).click();
+    await flush();
+    (modal().querySelector('.bcp-hcl') as HTMLButtonElement).click();
+
+    expect(deps.addItem).toHaveBeenCalledTimes(1);
+    expect(await closed).toBe(1);
+  });
+
   it('the master toggle expands every row and then collapses every row', async () => {
     const snapshots = [snapshot([item('a'), item('b')], 2000), snapshot([item('a')], 1000)];
     void openCartHistoryModal(makeDeps({ snapshots, initialItems: [item('a')] }));
