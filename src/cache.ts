@@ -17,10 +17,7 @@ export interface CacheEntry {
 
 export function isCacheEntryUsable(entry: CacheEntry, maxAgeMs: number, now = Date.now()): boolean {
   if (entry.tracks.length === 0) return false;
-  // Unplayable tracks can become playable after logging in, so recheck them as
-  // often as stream links.
-  const limit = entry.tracks.some((t) => t.unplayable) ? Math.min(maxAgeMs, LIVE_DATA_MAX_AGE_MS) : maxAgeMs;
-  return now - entry.cachedAt <= limit;
+  return now - entry.cachedAt <= maxAgeMs;
 }
 
 export function isStreamFresh(track: PlaylistTrack, now = Date.now()): boolean {

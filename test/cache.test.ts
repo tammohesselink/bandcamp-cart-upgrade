@@ -42,11 +42,11 @@ describe('isCacheEntryUsable', () => {
       expected: true,
     },
     {
-      name: 'rejects a release with unplayable tracks after an hour even for track details',
+      name: 'accepts a release with unplayable tracks cached three months ago',
       tracks: [track(), track({ unplayable: true, streamUrl: null })],
-      ageMs: 2 * 60 * MINUTE,
+      ageMs: 90 * DAY,
       maxAgeMs: TRACK_DETAILS_MAX_AGE_MS,
-      expected: false,
+      expected: true,
     },
     {
       name: 'rejects an entry without tracks',
