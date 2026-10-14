@@ -31,6 +31,7 @@ import {
   SEL_NATIVE_ROW_PLAY,
 } from './bandcamp-dom';
 import { sendBcpMessage } from './messages';
+import { mapWithConcurrency } from './inflight';
 
 console.log('[bcp] cart player loaded');
 
@@ -549,7 +550,7 @@ async function loadCartPlaylist(cartItems: CartItem[], player: Player): Promise<
       'cart',
       `Cart (loading ${progress})`,
       `Loading track info for your cart: ${done} of ${cartItems.length} releases done. ` +
-        'Releases loaded before come from the cache; new ones are fetched from Bandcamp one by one.',
+        'Releases loaded before come from the cache; new ones are fetched from Bandcamp a few at a time.',
       'loading'
     );
     if (player.currentPlaylistId === null) {
@@ -1417,6 +1418,10 @@ async function fetchTracksForUrl(url: string, maxAgeMs = TRACK_DETAILS_MAX_AGE_M
   return (await readCache(url, maxAgeMs)) ?? (await fetchRelease(url)).tracks;
 }
 
+// Enough parallel release-page fetches to fill a large cart quickly without
+// tripping Bandcamp's rate limiting.
+const RELEASE_FETCH_CONCURRENCY = 4;
+
 async function resolvePlaylist(
   items: CartItem[],
   onProgress: (done: number) => void
@@ -1425,18 +1430,24 @@ async function resolvePlaylist(
   const indexMap = new Map<string, number>();
   const problems = new Map<string, ItemProblem>();
   const cached = await readCacheBatch(items.map((item) => item.url));
-  let done = 0;
+  let done = cached.size;
+  onProgress(done);
+
+  const misses = items.filter((item) => !cached.has(item.url));
+  const fetched = await mapWithConcurrency(misses, RELEASE_FETCH_CONCURRENCY, (item) => fetchRelease(item.url), () => {
+    done++;
+    onProgress(done);
+  });
+  const fetchedByUrl = new Map(misses.map((item, i) => [item.url, fetched[i]!]));
 
   for (const item of items) {
-    const result = cached.has(item.url) ? { tracks: cached.get(item.url)! } : await fetchRelease(item.url);
+    const result = cached.has(item.url) ? { tracks: cached.get(item.url)! } : fetchedByUrl.get(item.url)!;
     if (result.tracks.length > 0) {
       indexMap.set(item.url, tracks.length);
       tracks.push(...result.tracks);
     } else {
       problems.set(item.url, result.problem ?? 'no-tracks');
     }
-    done++;
-    onProgress(done);
   }
 
   return { tracks, indexMap, problems };

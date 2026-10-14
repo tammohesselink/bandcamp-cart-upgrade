@@ -23,9 +23,12 @@ function bandcampOrigin(rawUrl: string): string | null {
 // worker is shared by all of them, so coalescing here gives one real fetch.
 const inFlightHtmlFetches = new Map<string, Promise<FetchResponse>>();
 
+// A stalled response would otherwise hold up every playlist load waiting on it.
+const RELEASE_FETCH_TIMEOUT_MS = 20_000;
+
 function fetchBandcampHtml(url: string): Promise<FetchResponse> {
   return dedupeInFlight(inFlightHtmlFetches, url, () =>
-    fetch(url, { credentials: 'include' })
+    fetch(url, { credentials: 'include', signal: AbortSignal.timeout(RELEASE_FETCH_TIMEOUT_MS) })
       .then(async (res) => (res.ok ? { html: await res.text() } : { error: `HTTP ${res.status}` }))
       .catch((err: unknown) => ({ error: String(err) }))
   );
