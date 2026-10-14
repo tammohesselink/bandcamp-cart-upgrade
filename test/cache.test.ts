@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   isCacheEntryUsable,
   isStreamFresh,
+  needsPlayabilityRecheck,
   LIVE_DATA_MAX_AGE_MS,
   TRACK_DETAILS_MAX_AGE_MS,
 } from '../src/cache';
@@ -42,11 +43,11 @@ describe('isCacheEntryUsable', () => {
       expected: true,
     },
     {
-      name: 'rejects a release with unplayable tracks after an hour even for track details',
+      name: 'accepts a release with unplayable tracks cached three months ago',
       tracks: [track(), track({ unplayable: true, streamUrl: null })],
-      ageMs: 2 * 60 * MINUTE,
+      ageMs: 90 * DAY,
       maxAgeMs: TRACK_DETAILS_MAX_AGE_MS,
-      expected: false,
+      expected: true,
     },
     {
       name: 'rejects an entry without tracks',
@@ -74,5 +75,30 @@ describe('isStreamFresh', () => {
     { name: 'treats a link with an unknown fetch time as expired', streamFetchedAt: undefined, expected: false },
   ])('$name', ({ streamFetchedAt, expected }) => {
     expect(isStreamFresh(track({ streamFetchedAt }), NOW)).toBe(expected);
+  });
+});
+
+describe('needsPlayabilityRecheck', () => {
+  it.each([
+    {
+      name: 'rechecks a release with an unplayable track cached over an hour ago',
+      tracks: [track(), track({ unplayable: true, streamUrl: null })],
+      ageMs: 61 * MINUTE,
+      expected: true,
+    },
+    {
+      name: 'does not recheck a release with an unplayable track cached within the hour',
+      tracks: [track({ unplayable: true, streamUrl: null })],
+      ageMs: 30 * MINUTE,
+      expected: false,
+    },
+    {
+      name: 'does not recheck a fully playable release however old',
+      tracks: [track()],
+      ageMs: 90 * DAY,
+      expected: false,
+    },
+  ])('$name', ({ tracks, ageMs, expected }) => {
+    expect(needsPlayabilityRecheck({ tracks, cachedAt: NOW - ageMs }, NOW)).toBe(expected);
   });
 });

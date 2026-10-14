@@ -56,8 +56,9 @@ export class Player {
 
   private queueVisible = false;
   private playerVisible = true;
-  // Playlists that can't be played (yet), shown as greyed-out tabs that explain why.
-  private unavailablePlaylists = new Map<PlaylistId, { label: string; reason: string; kind: StatusKind }>();
+  // Playlists that can't be played (yet), shown as greyed-out tabs that explain
+  // why, or as clickable tabs when they load on demand.
+  private unavailablePlaylists = new Map<PlaylistId, { label: string; reason: string; kind: StatusKind; onLoad?: () => void }>();
   private collapseBtn!: HTMLButtonElement;
   private seeking = false;
   private switchingPlaylist = false;
@@ -65,6 +66,7 @@ export class Player {
   // waiting for a fresh stream link can tell it has been superseded.
   private playRequestId = 0;
   private playPending = false;
+  private playStarts = 0;
   // The track whose stream is in the audio element. It can differ from the
   // current track, e.g. after the playing release is removed from the cart.
   private sourceTrack: PlaylistTrack | null = null;
@@ -157,6 +159,13 @@ export class Player {
   // to the playlist replaces it with the normal tab.
   setPlaylistUnavailable(id: PlaylistId, label: string, reason: string, kind: StatusKind = 'info') {
     this.unavailablePlaylists.set(id, { label, reason, kind });
+    this.updateHeader();
+  }
+
+  // Shows a clickable tab for a playlist that only loads when asked; `onLoad`
+  // runs on click and is expected to set or grey out the playlist.
+  setPlaylistOnDemand(id: PlaylistId, label: string, hint: string, onLoad: () => void) {
+    this.unavailablePlaylists.set(id, { label, reason: hint, kind: 'info', onLoad });
     this.updateHeader();
   }
 
@@ -437,6 +446,10 @@ export class Player {
       if (state && !(state.tracks.length === 0 && unavailable)) {
         tab.textContent = state.label;
         tab.addEventListener('click', () => this.selectPlaylist(id));
+      } else if (unavailable?.onLoad) {
+        tab.textContent = unavailable.label;
+        tab.title = unavailable.reason;
+        tab.addEventListener('click', unavailable.onLoad);
       } else if (unavailable) {
         // Not `disabled`: disabled buttons ignore clicks, and the click is how
         // the reason gets shown on touch devices.
@@ -681,7 +694,7 @@ export class Player {
     }
 
     if (track.unplayable || !track.streamUrl) {
-      this.playPauseBtn.textContent = '▶';
+      this.setPlayButton('play');
       this.playPauseBtn.disabled = true;
       return;
     }
@@ -717,7 +730,7 @@ export class Player {
     this.playRequestId++;
     if (!this.playPending) return;
     this.playPending = false;
-    this.playPauseBtn.textContent = '▶';
+    this.setPlayButton('play');
   }
 
   // Plays `track` (the current track by default), first fetching a fresh
@@ -738,7 +751,7 @@ export class Player {
 
     if (this.onRefreshStream && (options.forceRefresh || !isStreamFresh(track))) {
       this.playPending = true;
-      this.playPauseBtn.textContent = '…';
+      this.setPlayButton('loading');
       try {
         await this.onRefreshStream(track, !!options.forceRefresh);
         refreshed = true;
@@ -758,11 +771,14 @@ export class Player {
     if (refreshed || !isLoaded) {
       this.setSource(track, isLoaded ? this.audio.currentTime : 0);
     }
-    this.audio.play().catch(console.warn);
+    this.audio.play().catch((err: unknown) => {
+      console.warn(err);
+      if (this.audio.paused) this.setPlayButton('play');
+    });
   }
 
   private showUnplayable(track: PlaylistTrack, skip?: 1 | -1) {
-    this.playPauseBtn.textContent = '▶';
+    this.setPlayButton('play');
     const state = this.active();
     const index = state ? state.tracks.indexOf(track) : -1;
     if (index === -1) {
@@ -791,8 +807,36 @@ export class Player {
     return !this.audio.paused;
   }
 
+  // Counts every start of playback, so a caller can tell whether the user
+  // started something while it was waiting.
+  get playStartCount(): number {
+    return this.playStarts;
+  }
+
+  // Re-reads which tracks are playable after their details were updated in place.
+  refreshTrackAvailability() {
+    this.updateQueueEl();
+    this.updateNavButtons();
+    const track = this.currentTrack();
+    if (track && this.audio.paused && !this.playPending) {
+      this.playPauseBtn.disabled = track.unplayable || !track.streamUrl;
+    }
+  }
+
+  private setPlayButton(state: 'play' | 'pause' | 'loading') {
+    if (state === 'loading') {
+      const spinner = document.createElement('span');
+      spinner.className = 'bcp-spinner';
+      this.playPauseBtn.replaceChildren(spinner);
+      this.playPauseBtn.setAttribute('aria-label', 'Loading');
+    } else {
+      this.playPauseBtn.textContent = state === 'play' ? '▶' : '⏸';
+      this.playPauseBtn.setAttribute('aria-label', state === 'play' ? 'Play' : 'Pause');
+    }
+  }
+
   private reflectPlaybackState(playing: boolean) {
-    this.playPauseBtn.textContent = playing ? '⏸' : '▶';
+    this.setPlayButton(playing ? 'pause' : 'play');
     if ('mediaSession' in navigator) {
       navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
     }
@@ -801,6 +845,7 @@ export class Player {
 
   private bindAudioEvents() {
     this.audio.addEventListener('play', () => {
+      this.playStarts++;
       this.reflectPlaybackState(true);
       this.onPlaybackStart?.();
     });

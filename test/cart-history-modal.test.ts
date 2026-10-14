@@ -73,7 +73,61 @@ describe('openCartHistoryModal', () => {
 
     const row = snapshotRows()[0]!;
     expect(textOf(row.querySelector('.bcp-item-action'))).toBe('Add back');
-    expect(textOf(row.querySelector('.bcp-snap-restore-all'))).toBe('Restore cart completely');
+    expect(textOf(row.querySelector('.bcp-snap-restore-all'))).toBe('Restore this cart');
+  });
+
+  it('restores a collapsed row from its header without expanding it', async () => {
+    const target = snapshot([item('a'), item('b')], 1000);
+    const deps = makeDeps({ snapshots: [target], initialItems: [item('a')] });
+    void openCartHistoryModal(deps);
+
+    (snapshotRows()[0]!.querySelector('.bcp-snap-restore-all') as HTMLButtonElement).click();
+    await flush();
+
+    expect(deps.addItem).toHaveBeenCalledTimes(1);
+    expect(snapshotRows()[0]!.querySelector('.bcp-snap-items')).toBeNull();
+    expect(textOf(snapshotRows()[0]!.querySelector('.bcp-snap-same'))).toBe('current');
+  });
+
+  it('prepares every add before the first cart change of a complete restore', async () => {
+    const target = snapshot([item('a'), item('b'), item('c')], 1000);
+    const calls: string[] = [];
+    const deps = makeDeps({
+      snapshots: [target],
+      initialItems: [item('a')],
+      prepareAdds: vi.fn(async (items: SavedCartItem[], onProgress: (done: number) => void) => {
+        calls.push(`prepare ${items.length}`);
+        onProgress(items.length);
+      }),
+      addItem: vi.fn(async (added: SavedCartItem) => {
+        calls.push(`add ${added.title}`);
+        return true;
+      }),
+    });
+    void openCartHistoryModal(deps);
+
+    (snapshotRows()[0]!.querySelector('.bcp-snap-restore-all') as HTMLButtonElement).click();
+    await flush();
+
+    expect(calls).toEqual(['prepare 2', 'add Item b', 'add Item c']);
+  });
+
+  it('carries on with the restore and can be closed when preparing the adds fails', async () => {
+    const target = snapshot([item('a'), item('b')], 1000);
+    const deps = makeDeps({
+      snapshots: [target],
+      initialItems: [item('a')],
+      prepareAdds: vi.fn().mockRejectedValue(new Error('offline')),
+    });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const closed = openCartHistoryModal(deps);
+
+    (snapshotRows()[0]!.querySelector('.bcp-snap-restore-all') as HTMLButtonElement).click();
+    await flush();
+    (modal().querySelector('.bcp-hcl') as HTMLButtonElement).click();
+
+    expect(deps.addItem).toHaveBeenCalledTimes(1);
+    expect(await closed).toBe(1);
   });
 
   it('the master toggle expands every row and then collapses every row', async () => {
@@ -182,7 +236,7 @@ describe('openCartHistoryModal', () => {
     expect(row.querySelector('.bcp-add-count')).toBeNull();
     expect(textOf(row.querySelector('.bcp-extra-count'))).toBe('−1');
     expect(textOf(row.querySelector('.bcp-item-error'))).toBe('Remove failed');
-    expect(textOf(row.querySelector('.bcp-snap-restore-all'))).toBe('Restore cart completely');
+    expect(textOf(row.querySelector('.bcp-snap-restore-all'))).toBe('Restore this cart');
   });
 
   it('all action buttons are disabled while a mutation is in flight', async () => {
