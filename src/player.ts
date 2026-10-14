@@ -693,7 +693,7 @@ export class Player {
     }
 
     if (track.unplayable || !track.streamUrl) {
-      this.playPauseBtn.textContent = '▶';
+      this.setPlayButton('play');
       this.playPauseBtn.disabled = true;
       return;
     }
@@ -729,7 +729,7 @@ export class Player {
     this.playRequestId++;
     if (!this.playPending) return;
     this.playPending = false;
-    this.playPauseBtn.textContent = '▶';
+    this.setPlayButton('play');
   }
 
   // Plays `track` (the current track by default), first fetching a fresh
@@ -750,7 +750,7 @@ export class Player {
 
     if (this.onRefreshStream && (options.forceRefresh || !isStreamFresh(track))) {
       this.playPending = true;
-      this.playPauseBtn.textContent = '…';
+      this.setPlayButton('loading');
       try {
         await this.onRefreshStream(track, !!options.forceRefresh);
         refreshed = true;
@@ -774,7 +774,7 @@ export class Player {
   }
 
   private showUnplayable(track: PlaylistTrack, skip?: 1 | -1) {
-    this.playPauseBtn.textContent = '▶';
+    this.setPlayButton('play');
     const state = this.active();
     const index = state ? state.tracks.indexOf(track) : -1;
     if (index === -1) {
@@ -803,8 +803,20 @@ export class Player {
     return !this.audio.paused;
   }
 
+  private setPlayButton(state: 'play' | 'pause' | 'loading') {
+    if (state === 'loading') {
+      const spinner = document.createElement('span');
+      spinner.className = 'bcp-spinner';
+      this.playPauseBtn.replaceChildren(spinner);
+      this.playPauseBtn.setAttribute('aria-label', 'Loading');
+    } else {
+      this.playPauseBtn.textContent = state === 'play' ? '▶' : '⏸';
+      this.playPauseBtn.setAttribute('aria-label', state === 'play' ? 'Play' : 'Pause');
+    }
+  }
+
   private reflectPlaybackState(playing: boolean) {
-    this.playPauseBtn.textContent = playing ? '⏸' : '▶';
+    this.setPlayButton(playing ? 'pause' : 'play');
     if ('mediaSession' in navigator) {
       navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
     }

@@ -149,6 +149,21 @@ describe('Player stream link refresh', () => {
     expect(audioOf(player).src).toBe('https://t4.bcbits.com/stream/track-2-old');
   });
 
+  it('shows a spinner on the play button while a link is being refreshed and the play glyph after a pause', async () => {
+    const player = new Player([expiredTrack(1)]);
+    player.onRefreshStream = () => new Promise<void>(() => {});
+    const playButton = player.wrapper.querySelector('.bcp-btn-play')!;
+
+    player.jumpTo('cart', 0);
+    await settle();
+    const spinnerWhileRefreshing = playButton.querySelector('.bcp-spinner');
+    player.pause();
+
+    expect(spinnerWhileRefreshing).not.toBeNull();
+    expect(playButton.querySelector('.bcp-spinner')).toBeNull();
+    expect(playButton.textContent).toBe('▶');
+  });
+
   it('does not start playback when pause is pressed while a link is being refreshed', async () => {
     const player = new Player([expiredTrack(1)]);
     let finishRefresh = () => {};

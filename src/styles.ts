@@ -223,6 +223,22 @@ export const PLAYER_CSS = `
   color: #fff;
 }
 
+.bcp-spinner {
+  display: inline-block;
+  box-sizing: border-box;
+  width: 1em;
+  height: 1em;
+  vertical-align: middle;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: bcp-spin 0.8s linear infinite;
+}
+
+@keyframes bcp-spin {
+  to { transform: rotate(360deg); }
+}
+
 .bcp-seek-area {
   display: flex;
   align-items: center;
