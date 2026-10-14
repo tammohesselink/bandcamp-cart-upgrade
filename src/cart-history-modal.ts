@@ -9,6 +9,9 @@ export interface CartHistoryModalDeps {
   initialItems: SavedCartItem[];
   addItem(item: SavedCartItem, cartLengthHint: number): Promise<boolean>;
   removeItem(item: SavedCartItem): Promise<boolean>;
+  // Warms whatever addItem needs, so a full restore only waits on the cart
+  // changes themselves, which must run one at a time.
+  prepareAdds?(items: SavedCartItem[], onProgress: (done: number) => void): Promise<void>;
 }
 
 const HISTORY_STYLE_ID = 'bcp-cart-history-styles';
@@ -43,7 +46,7 @@ function ensureCartHistoryStyles(): void {
     .bcp-item-action.bcp-remove-action:hover:not(:disabled){background:#fbeceb}
     .bcp-item-action:disabled{opacity:.5;cursor:default}
     .bcp-item-error{font-size:11px;color:#c0392b;white-space:nowrap}
-    .bcp-snap-restore-all{margin-top:8px;padding:5px 12px;border-radius:4px;border:1px solid #1da0c3;color:#1da0c3;background:none;cursor:pointer;font-size:12px;font-family:inherit}
+    .bcp-snap-restore-all{padding:2px 8px;border-radius:3px;border:1px solid #1da0c3;color:#1da0c3;background:none;cursor:pointer;font-size:11px;font-family:inherit;white-space:nowrap}
     .bcp-snap-restore-all:hover:not(:disabled){background:#e8f7fb}
     .bcp-snap-restore-all:disabled{opacity:.5;cursor:default}
   `;
@@ -61,7 +64,7 @@ export function openCartHistoryModal(deps: CartHistoryModalDeps): Promise<number
   const itemErrors = new Map<string, string>();
   let busy = false;
   let changedCount = 0;
-  let restoreProgress: { savedAt: number; done: number; total: number } | null = null;
+  let restoreProgress: { savedAt: number; phase: 'preparing' | 'restoring'; done: number; total: number } | null = null;
 
   return new Promise((resolve) => {
     const backdrop = document.createElement('div');
@@ -142,8 +145,18 @@ export function openCartHistoryModal(deps: CartHistoryModalDeps): Promise<number
     ): Promise<void> {
       if (busy) return;
       busy = true;
+      if (deps.prepareAdds && toAdd.length > 0) {
+        const prepareTotal = toAdd.length;
+        restoreProgress = { savedAt: snapshot.savedAt, phase: 'preparing', done: 0, total: prepareTotal };
+        render();
+        await deps.prepareAdds(toAdd, (done) => {
+          restoreProgress = { savedAt: snapshot.savedAt, phase: 'preparing', done, total: prepareTotal };
+          render();
+        });
+      }
+
       const total = toAdd.length + extra.length;
-      restoreProgress = { savedAt: snapshot.savedAt, done: 0, total };
+      restoreProgress = { savedAt: snapshot.savedAt, phase: 'restoring', done: 0, total };
       render();
 
       for (const item of toAdd) {
@@ -156,7 +169,7 @@ export function openCartHistoryModal(deps: CartHistoryModalDeps): Promise<number
         } else {
           itemErrors.set(key, 'Add failed');
         }
-        restoreProgress = { savedAt: snapshot.savedAt, done: restoreProgress.done + 1, total };
+        restoreProgress = { savedAt: snapshot.savedAt, phase: 'restoring', done: restoreProgress.done + 1, total };
         render();
       }
       for (const item of extra) {
@@ -169,7 +182,7 @@ export function openCartHistoryModal(deps: CartHistoryModalDeps): Promise<number
         } else {
           itemErrors.set(key, 'Remove failed');
         }
-        restoreProgress = { savedAt: snapshot.savedAt, done: restoreProgress.done + 1, total };
+        restoreProgress = { savedAt: snapshot.savedAt, phase: 'restoring', done: restoreProgress.done + 1, total };
         render();
       }
 
@@ -266,25 +279,29 @@ export function openCartHistoryModal(deps: CartHistoryModalDeps): Promise<number
           headerRow.appendChild(diff);
         }
 
-        li.appendChild(headerRow);
-
-        if (isOpen && (hasDiff || isRestoringThis)) {
-          if (toAdd.length > 0 || extra.length > 0) {
-            const itemList = document.createElement('ul');
-            itemList.className = 'bcp-snap-items';
-            for (const item of toAdd) itemList.appendChild(renderItemRow(item, 'add'));
-            for (const item of extra) itemList.appendChild(renderItemRow(item, 'remove'));
-            li.appendChild(itemList);
-          }
-
+        // In the header so it stays in reach above a long list of items.
+        if (hasDiff || isRestoringThis) {
           const restoreAllBtn = document.createElement('button');
           restoreAllBtn.className = 'bcp-snap-restore-all';
           restoreAllBtn.textContent = isRestoringThis
-            ? `Restoring ${restoreProgress!.done} / ${restoreProgress!.total}…`
-            : 'Restore cart completely';
+            ? `${restoreProgress!.phase === 'preparing' ? 'Fetching prices' : 'Restoring'} ${restoreProgress!.done} / ${restoreProgress!.total}…`
+            : 'Restore this cart';
           restoreAllBtn.disabled = busy;
-          restoreAllBtn.addEventListener('click', () => void restoreCompletely(snapshot, toAdd, extra));
-          li.appendChild(restoreAllBtn);
+          restoreAllBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            void restoreCompletely(snapshot, toAdd, extra);
+          });
+          headerRow.appendChild(restoreAllBtn);
+        }
+
+        li.appendChild(headerRow);
+
+        if (isOpen && hasDiff) {
+          const itemList = document.createElement('ul');
+          itemList.className = 'bcp-snap-items';
+          for (const item of toAdd) itemList.appendChild(renderItemRow(item, 'add'));
+          for (const item of extra) itemList.appendChild(renderItemRow(item, 'remove'));
+          li.appendChild(itemList);
         }
 
         list.appendChild(li);

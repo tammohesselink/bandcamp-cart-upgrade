@@ -727,6 +727,13 @@ async function main() {
               if (ok) removeSidecartItem(item.url);
               return ok;
             },
+            prepareAdds: async (items, onProgress) => {
+              let done = 0;
+              await mapWithConcurrency(items, RELEASE_FETCH_CONCURRENCY, (item) => fetchTracksForUrl(item.url, LIVE_DATA_MAX_AGE_MS), () => {
+                done++;
+                onProgress(done);
+              });
+            },
           });
           if (changedCount > 0) location.reload();
         });
