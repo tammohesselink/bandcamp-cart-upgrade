@@ -3,7 +3,8 @@ import { PLAYER_CSS } from './styles';
 import { normalizeUrl } from './url';
 import { isStreamFresh } from './cache';
 
-type CartAddType = 'track' | 'release';
+// 'album' adds the album a single-track page belongs to (track.albumUrl).
+type CartAddType = 'track' | 'release' | 'album';
 
 const TEMPO_RANGES = [
   { label: '±6',   min: 0.94, max: 1.06 },
@@ -419,11 +420,14 @@ export class Player {
   // --- Private helpers -------------------------------------------------------
 
   // Returns the cart-item key for a track: pageUrl for single-track purchases
-  // (where Bandcamp stores the track page URL in the sidecart), releaseUrl for
-  // full-release purchases. This is the URL used as the key in cartUrls and is
-  // the unit of selection for partial checkout.
+  // (where Bandcamp stores the track page URL in the sidecart), albumUrl when a
+  // track page's album was added, releaseUrl for full-release purchases. This is
+  // the URL used as the key in cartUrls and is the unit of selection for partial
+  // checkout.
   private cartItemKeyFor(track: PlaylistTrack): string {
-    return this.cartUrls.has(normalizeUrl(track.pageUrl)) ? track.pageUrl : track.releaseUrl;
+    if (this.cartUrls.has(normalizeUrl(track.pageUrl))) return track.pageUrl;
+    if (track.albumUrl && this.cartUrls.has(normalizeUrl(track.albumUrl))) return track.albumUrl;
+    return track.releaseUrl;
   }
 
   // A track is "in cart" if its cart-item key appears in cartUrls.
@@ -1113,9 +1117,11 @@ export class Player {
     } else {
       // Always show both buttons so the layout is the same for every track.
       // A single-track release is added through "+ Track" (the track is the
-      // release), so "+ Release" is greyed out; an album track without a track
-      // id can only be bought as part of the release.
+      // release); its "+ Release" adds the album the track page links to, and is
+      // greyed out when there is none. An album track without a track id can
+      // only be bought as part of the release.
       const isAlbum = track.releaseType === 'album';
+      const canAddRelease = isAlbum || !!track.albumUrl;
       const trackAddType: 'track' | 'release' | null = !isAlbum
         ? 'release'
         : track.trackId !== null ? 'track' : null;
@@ -1139,11 +1145,11 @@ export class Player {
       }
 
       const addReleaseBtn = btn('+ Release', 'bcp-cart-action-btn');
-      if (isAlbum) {
+      if (canAddRelease) {
         addReleaseBtn.title = 'Add the full release to cart';
         addReleaseBtn.addEventListener('click', async () => {
           addReleaseBtn.disabled = true;
-          await this.onCartAdd?.(track, 'release');
+          await this.onCartAdd?.(track, isAlbum ? 'release' : 'album');
           addReleaseBtn.disabled = false;
         });
       } else {

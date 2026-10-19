@@ -475,3 +475,80 @@ describe('Player playlist tabs', () => {
     expect(tabNamed(player, 'Label discography')?.getAttribute('aria-disabled')).toBeNull();
   });
 });
+
+describe('Player cart buttons', () => {
+  async function playing(track: PlaylistTrack): Promise<Player> {
+    const player = new Player([track]);
+    player.jumpTo('cart', 0);
+    await settle();
+    return player;
+  }
+
+  function cartButton(player: Player, text: string): HTMLButtonElement {
+    const buttons = Array.from(player.wrapper.querySelectorAll<HTMLButtonElement>('.bcp-cart-action-btn'));
+    return buttons.find((b) => b.textContent === text)!;
+  }
+
+  it('offers both the track and its release for an album track', async () => {
+    const player = await playing(freshTrack(1));
+
+    expect(cartButton(player, '+ Track').classList.contains('bcp-disabled')).toBe(false);
+    expect(cartButton(player, '+ Release').classList.contains('bcp-disabled')).toBe(false);
+  });
+
+  it('greys out "+ Release" for a single-track release that is not on an album', async () => {
+    const player = await playing(freshTrack(1, {
+      releaseType: 'track',
+      releaseUrl: 'https://solardrift.bandcamp.com/track/track-1',
+      albumUrl: null,
+    }));
+
+    expect(cartButton(player, '+ Track').classList.contains('bcp-disabled')).toBe(false);
+    expect(cartButton(player, '+ Release').classList.contains('bcp-disabled')).toBe(true);
+  });
+
+  it('adds only the track from "+ Track" on a track page that is also on an album', async () => {
+    const player = await playing(freshTrack(1, {
+      releaseType: 'track',
+      releaseUrl: 'https://solardrift.bandcamp.com/track/track-1',
+      albumUrl: 'https://solardrift.bandcamp.com/album/echoes-of-the-void',
+    }));
+    const onCartAdd = vi.fn(async () => true);
+    player.onCartAdd = onCartAdd;
+
+    cartButton(player, '+ Track').click();
+    await settle();
+
+    expect(onCartAdd).toHaveBeenCalledWith(expect.objectContaining({ trackId: 1 }), 'release');
+  });
+
+  it('adds the album from a track page whose track is only sold with the album', async () => {
+    const player = await playing(freshTrack(1, {
+      releaseType: 'track',
+      releaseUrl: 'https://solardrift.bandcamp.com/track/track-1',
+      albumUrl: 'https://solardrift.bandcamp.com/album/echoes-of-the-void',
+      purchasable: false,
+    }));
+    const onCartAdd = vi.fn(async () => true);
+    player.onCartAdd = onCartAdd;
+
+    expect(cartButton(player, '+ Track').classList.contains('bcp-disabled')).toBe(true);
+    cartButton(player, '+ Release').click();
+    await settle();
+
+    expect(onCartAdd).toHaveBeenCalledWith(expect.objectContaining({ trackId: 1 }), 'album');
+  });
+
+  it('shows a track page as in the cart once its album was added', async () => {
+    const albumUrl = 'https://solardrift.bandcamp.com/album/echoes-of-the-void';
+    const player = await playing(freshTrack(1, {
+      releaseType: 'track',
+      releaseUrl: 'https://solardrift.bandcamp.com/track/track-1',
+      albumUrl,
+    }));
+
+    player.addCartUrl(albumUrl);
+
+    expect(player.wrapper.querySelector('.bcp-in-cart-badge')?.textContent).toBe('✓ In cart (full album)');
+  });
+});
