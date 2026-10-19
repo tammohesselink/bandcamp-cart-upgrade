@@ -1137,7 +1137,7 @@ async function main() {
       'discography',
       `Label discography (${discoItems.length} releases)`,
       'Click to load and play every release on this page.',
-      () => void playDiscographyWhenLoaded(() => 0)
+      () => void playDiscographyWhenLoaded(() => player.firstTrackIndex('discography'))
     );
 
     console.log('[bcp] Discography releases found:');
@@ -1152,7 +1152,7 @@ async function main() {
     player.onDiscographyButtonVisibilityChange = (show) => {
       discoBtn.style.display = show ? '' : 'none';
     };
-    discoBtn.addEventListener('click', () => void playDiscographyWhenLoaded(() => 0));
+    discoBtn.addEventListener('click', () => void playDiscographyWhenLoaded(() => player.firstTrackIndex('discography')));
   }
 
   player.onReloadPlaylist = async () => {

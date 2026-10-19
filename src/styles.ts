@@ -422,6 +422,14 @@ input[type=range].bcp-tempo {
   cursor: help;
 }
 
+.bcp-tab.bcp-reverse-btn {
+  margin-left: auto;
+}
+
+.bcp-tab.bcp-reverse-btn.bcp-tab-unavailable {
+  cursor: default;
+}
+
 .bcp-tab.bcp-tab-unavailable.bcp-tab-error,
 .bcp-tab.bcp-tab-unavailable.bcp-tab-warn {
   color: #a86a3d;

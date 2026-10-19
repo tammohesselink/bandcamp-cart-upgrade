@@ -27,6 +27,14 @@ interface PlaylistState {
   lastIndex: number;
   statusMsg: string;
   statusKind: StatusKind;
+  // Plays the releases last to first; tracks within a release keep their order.
+  reversed: boolean;
+  // Whether anything in the playlist was played; until then it sits on its
+  // first track in play order, which moves when the order is reversed.
+  started: boolean;
+  // The playing track was removed and lastIndex already points at the track
+  // that plays after it, so next() plays lastIndex itself.
+  nextIsCurrent: boolean;
 }
 
 export class Player {
@@ -56,6 +64,8 @@ export class Player {
   private preservesPitch = true;
   private tempoRangeIndex = 1;
   private showDiscographyButton = true;
+  // Saved reverse-order choice per playlist, applied when a playlist is set.
+  private reversedPlaylists: Partial<Record<PlaylistId, boolean>> = {};
   private statusEl!: HTMLElement;
   private queueToggleBtn!: HTMLButtonElement;
   private reloadBtn!: HTMLButtonElement;
@@ -141,7 +151,7 @@ export class Player {
 
     this.setupMediaSession();
 
-    chrome.storage.local.get(['tempoRangeIndex', 'preservesPitch', 'showDiscographyButton'], (result) => {
+    chrome.storage.local.get(['tempoRangeIndex', 'preservesPitch', 'showDiscographyButton', 'reversedPlaylists'], (result) => {
       if (typeof result['tempoRangeIndex'] === 'number') {
         this.tempoRangeIndex = result['tempoRangeIndex'] as number;
       }
@@ -151,6 +161,16 @@ export class Player {
       }
       if (typeof result['showDiscographyButton'] === 'boolean') {
         this.showDiscographyButton = result['showDiscographyButton'] as boolean;
+      }
+      const reversed = result['reversedPlaylists'];
+      if (reversed && typeof reversed === 'object') {
+        this.reversedPlaylists = reversed as Partial<Record<PlaylistId, boolean>>;
+        for (const [id, state] of this.playlists) {
+          this.applyReversed(id, state, !!this.reversedPlaylists[id]);
+        }
+        this.updateHeader();
+        this.updateQueueEl();
+        this.updateNavButtons();
       }
       this.updateTempoUI();
       if (!this.showDiscographyButton) {
@@ -187,8 +207,15 @@ export class Player {
   }
 
   setPlaylist(id: PlaylistId, label: string, tracks: PlaylistTrack[]) {
-    const isNew = !this.playlists.has(id);
-    this.playlists.set(id, { label, tracks, lastIndex: 0, statusMsg: '', statusKind: 'info' });
+    const previous = this.playlists.get(id);
+    const isNew = !previous;
+    // A reload replaces the playlist mid-playback; it still counts as played.
+    const state: PlaylistState = {
+      label, tracks, lastIndex: 0, statusMsg: '', statusKind: 'info',
+      reversed: !!this.reversedPlaylists[id], started: previous?.started ?? false, nextIsCurrent: false,
+    };
+    state.lastIndex = firstPlayable(state);
+    this.playlists.set(id, state);
     if (tracks.length > 0) this.unavailablePlaylists.delete(id);
     this.updateHeader();
     if (isNew && this.playlists.size === 1) {
@@ -317,14 +344,22 @@ export class Player {
     if (toAdd.length === 0) return null;
     const startIndex = state.tracks.length;
     state.tracks.push(...toAdd);
-    if (this.unavailablePlaylists.delete(id)) this.updateHeader();
+    this.unavailablePlaylists.delete(id);
+    // The reverse button depends on how many releases there are.
+    this.updateHeader();
     if (this.activeId === id) {
       // Selecting an empty playlist leaves the bar blank, so load its first
       // track now, unless a removed track is still playing.
-      if (startIndex === 0 && this.audio.paused) this.loadTrack(0, true);
+      if (startIndex === 0 && this.audio.paused) this.loadTrack(firstPlayable(state), true);
       else this.updateQueueEl();
     }
     return startIndex;
+  }
+
+  // The track a playlist starts from: its first playable one in play order.
+  firstTrackIndex(id: PlaylistId): number | undefined {
+    const state = this.playlists.get(id);
+    return state && state.tracks.length > 0 ? firstPlayable(state) : undefined;
   }
 
   getPlaylistTracks(id: PlaylistId): PlaylistTrack[] {
@@ -377,22 +412,10 @@ export class Player {
     const state = this.playlists.get(id);
     if (!state) return;
     const normalized = normalizeUrl(releaseUrl);
-    const removedBefore = state.tracks
-      .slice(0, state.lastIndex)
-      .filter((t) => normalizeUrl(t.releaseUrl) === normalized).length;
-    const currentRemoved =
-      normalizeUrl(state.tracks[state.lastIndex]?.releaseUrl ?? '') === normalized;
-    state.tracks = state.tracks.filter((t) => normalizeUrl(t.releaseUrl) !== normalized);
-    // Adjust lastIndex so next() advances to the right track after the audio ends.
-    // When the current track is removed, step back one extra so next() lands on
-    // the first surviving track after the removed section.
-    const adjustment = currentRemoved ? removedBefore + 1 : removedBefore;
-    state.lastIndex = Math.min(
-      Math.max(0, state.lastIndex - adjustment),
-      Math.max(0, state.tracks.length - 1)
-    );
+    this.removeTracks(state, (t) => normalizeUrl(t.releaseUrl) === normalized);
     if (this.activeId === id) {
       // Don't touch the audio — let the current stream finish naturally.
+      this.updateHeader();
       this.updateQueueEl();
       this.updateNavButtons();
     }
@@ -404,20 +427,54 @@ export class Player {
     const normalized = normalizeUrl(pageUrl);
     const idx = state.tracks.findIndex((t) => normalizeUrl(t.pageUrl) === normalized);
     if (idx === -1) return;
-    const isCurrentTrack = idx === state.lastIndex;
-    state.tracks.splice(idx, 1);
-    if (idx < state.lastIndex) {
-      state.lastIndex = Math.max(0, state.lastIndex - 1);
-    } else if (isCurrentTrack) {
-      state.lastIndex = Math.min(state.lastIndex, Math.max(0, state.tracks.length - 1));
-    }
+    this.removeTracks(state, (t) => t === state.tracks[idx]);
     if (this.activeId === id) {
+      this.updateHeader();
       this.updateQueueEl();
       this.updateNavButtons();
     }
   }
 
   // --- Private helpers -------------------------------------------------------
+
+  // Removes the matching tracks and moves lastIndex so next() continues where
+  // it would have: when the current track goes, lastIndex moves to the first
+  // survivor after it in play order, which next() then plays.
+  private removeTracks(state: PlaylistState, removed: (track: PlaylistTrack) => boolean) {
+    const current = state.tracks[state.lastIndex];
+    let anchor = current;
+    if (current && removed(current)) {
+      const order = playOrder(state);
+      const position = order.indexOf(state.lastIndex);
+      const following = order.slice(position + 1).map((i) => state.tracks[i]!).find((t) => !removed(t));
+      if (following) {
+        anchor = following;
+        state.nextIsCurrent = true;
+      } else {
+        const kept = state.tracks.filter((t) => !removed(t));
+        const keptOrder = playOrder({ ...state, tracks: kept });
+        anchor = kept[keptOrder[keptOrder.length - 1]!];
+        state.nextIsCurrent = false;
+      }
+    }
+    state.tracks = state.tracks.filter((t) => !removed(t));
+    state.lastIndex = Math.max(0, anchor ? state.tracks.indexOf(anchor) : 0);
+  }
+
+  // Sets the playlist's order. One that has not played yet moves to the first
+  // track of its new order, so it starts from the right end.
+  private applyReversed(id: PlaylistId, state: PlaylistState, reversed: boolean) {
+    if (state.reversed === reversed) return;
+    state.reversed = reversed;
+    if (state.started || state.tracks.length === 0) return;
+    const first = firstPlayable(state);
+    if (id === this.activeId) {
+      // Never pull the bar away from a track that is playing or about to.
+      if (!this.audio.paused || this.playPending) return;
+      this.loadTrack(first, true);
+    }
+    else state.lastIndex = first;
+  }
 
   // Returns the cart-item key for a track: pageUrl for single-track purchases
   // (where Bandcamp stores the track page URL in the sidecart), albumUrl when a
@@ -482,6 +539,22 @@ export class Player {
         tab.addEventListener('click', () => this.showToast(unavailable.reason, unavailable.kind));
       }
       tabs.appendChild(tab);
+    }
+
+    const state = this.active();
+    if (state && state.tracks.length > 0) {
+      const reverseBtn = btn('⇅ Reverse', 'bcp-tab bcp-reverse-btn');
+      reverseBtn.setAttribute('aria-pressed', String(state.reversed));
+      if (state.reversed) reverseBtn.classList.add('bcp-tab-active');
+      if (releaseBlocks(state.tracks).length > 1) {
+        reverseBtn.title = 'Play releases last to first (tracks within a release keep their order)';
+        reverseBtn.addEventListener('click', () => this.toggleReversed());
+      } else {
+        reverseBtn.classList.add('bcp-tab-unavailable');
+        reverseBtn.setAttribute('aria-disabled', 'true');
+        reverseBtn.title = 'Only one release';
+      }
+      tabs.appendChild(reverseBtn);
     }
 
     this.headerEl.appendChild(tabs);
@@ -631,13 +704,14 @@ export class Player {
     this.queueEl.innerHTML = '';
     if (!state) return;
 
-    state.tracks.forEach((track, i) => {
+    playOrder(state).forEach((i, position) => {
+      const track = state.tracks[i]!;
       const item = el('div', 'bcp-queue-item');
       if (i === state.lastIndex) item.classList.add('bcp-active');
       if (track.unplayable) item.classList.add('bcp-unplayable');
 
       const num = el('div', 'bcp-queue-num');
-      num.textContent = String(i + 1);
+      num.textContent = String(position + 1);
 
       const text = el('div', 'bcp-queue-text');
       const title = el('div', 'bcp-queue-title');
@@ -676,6 +750,7 @@ export class Player {
     this.cancelPendingPlay();
 
     state.lastIndex = index;
+    state.nextIsCurrent = false;
     const track = state.tracks[index];
     if (!track) return;
 
@@ -781,6 +856,8 @@ export class Player {
   }): Promise<void> {
     const track = options.track ?? this.currentTrack();
     if (!track?.streamUrl || track.unplayable) return;
+    const state = this.active();
+    if (state) state.started = true;
     const isLoaded = track === this.sourceTrack;
     // A newer link for the playing track would only interrupt it.
     if (isLoaded && !this.audio.paused && !options.forceRefresh) return;
@@ -827,7 +904,7 @@ export class Player {
     }
     this.loadTrack(index, true);
     if (!skip) return;
-    const nextIndex = this.nextPlayable(index + skip, skip);
+    const nextIndex = this.stepPlayable(index, skip);
     if (nextIndex === -1) return;
     this.loadTrack(nextIndex);
     void this.startPlayback({ skip });
@@ -944,11 +1021,11 @@ export class Player {
     const state = this.active();
     if (!state) return [];
     const upcoming: PlaylistTrack[] = [];
-    let index = state.lastIndex;
+    let index = this.nextIndex(state);
     while (upcoming.length < PRELOAD_AHEAD) {
-      index = this.nextPlayable(index + 1, 1);
       if (index === -1) break;
       upcoming.push(state.tracks[index]!);
+      index = this.stepPlayable(index, 1);
     }
     return upcoming;
   }
@@ -1035,7 +1112,7 @@ export class Player {
   private next() {
     const state = this.active();
     if (!state) return;
-    const nextIndex = this.nextPlayable(state.lastIndex + 1, 1);
+    const nextIndex = this.nextIndex(state);
     if (nextIndex !== -1) {
       this.loadTrack(nextIndex);
       void this.startPlayback({ skip: 1 });
@@ -1045,22 +1122,50 @@ export class Player {
   private prev() {
     const state = this.active();
     if (!state) return;
-    const prevIndex = this.nextPlayable(state.lastIndex - 1, -1);
+    const prevIndex = this.stepPlayable(state.lastIndex, -1);
     if (prevIndex !== -1) {
       this.loadTrack(prevIndex);
       void this.startPlayback({ skip: -1 });
     }
   }
 
-  private nextPlayable(start: number, dir: 1 | -1): number {
+  // The track next() plays, or -1 when there is none.
+  private nextIndex(state: PlaylistState): number {
+    if (state.nextIsCurrent && !state.tracks[state.lastIndex]?.unplayable) return state.lastIndex;
+    return this.stepPlayable(state.lastIndex, 1);
+  }
+
+  // The index of the first playable track after (dir 1) or before (dir -1)
+  // `fromIndex` in play order, or -1 when there is none.
+  private stepPlayable(fromIndex: number, dir: 1 | -1): number {
     const state = this.active();
     if (!state) return -1;
-    let i = start;
-    while (i >= 0 && i < state.tracks.length) {
-      if (!state.tracks[i]!.unplayable) return i;
-      i += dir;
+    const order = playOrder(state);
+    let position = order.indexOf(fromIndex) + dir;
+    while (position >= 0 && position < order.length) {
+      const index = order[position]!;
+      if (!state.tracks[index]!.unplayable) return index;
+      position += dir;
     }
     return -1;
+  }
+
+  private toggleReversed() {
+    const state = this.active();
+    if (!state || this.activeId === null) return;
+    const id = this.activeId;
+    this.applyReversed(id, state, !state.reversed);
+    this.reversedPlaylists = { ...this.reversedPlaylists, [id]: state.reversed };
+    // Read before writing, so a choice made in another tab is kept.
+    chrome.storage.local.get('reversedPlaylists', (result) => {
+      const saved = (result['reversedPlaylists'] ?? {}) as Partial<Record<PlaylistId, boolean>>;
+      chrome.storage.local.set({ reversedPlaylists: { ...saved, [id]: state.reversed } });
+    });
+    this.clearPreloaded();
+    if (!this.audio.paused) void this.preloadUpcoming();
+    this.updateHeader();
+    this.updateQueueEl();
+    this.updateNavButtons();
   }
 
   private updateNavButtons() {
@@ -1070,8 +1175,8 @@ export class Player {
       this.nextBtn.disabled = true;
       return;
     }
-    this.prevBtn.disabled = this.nextPlayable(state.lastIndex - 1, -1) === -1;
-    this.nextBtn.disabled = this.nextPlayable(state.lastIndex + 1, 1) === -1;
+    this.prevBtn.disabled = this.stepPlayable(state.lastIndex, -1) === -1;
+    this.nextBtn.disabled = this.nextIndex(state) === -1;
   }
 
   private toggleQueue() {
@@ -1214,6 +1319,32 @@ export class Player {
   }
 
 
+}
+
+// Runs of consecutive tracks from the same release, as lists of track indices.
+function releaseBlocks(tracks: PlaylistTrack[]): number[][] {
+  const blocks: number[][] = [];
+  let previousRelease: string | null = null;
+  tracks.forEach((track, i) => {
+    const release = normalizeUrl(track.releaseUrl);
+    if (release === previousRelease) blocks[blocks.length - 1]!.push(i);
+    else blocks.push([i]);
+    previousRelease = release;
+  });
+  return blocks;
+}
+
+// Track indices in the order they play: as listed, or with the releases
+// reversed while each release still plays from its first track.
+function playOrder(state: Pick<PlaylistState, 'tracks' | 'reversed'>): number[] {
+  if (!state.reversed) return state.tracks.map((_, i) => i);
+  return releaseBlocks(state.tracks).reverse().flat();
+}
+
+// The first playable track in play order, or the first track when none is.
+function firstPlayable(state: Pick<PlaylistState, 'tracks' | 'reversed'>): number {
+  const order = playOrder(state);
+  return order.find((i) => !state.tracks[i]!.unplayable) ?? order[0] ?? 0;
 }
 
 function injectStyles() {
