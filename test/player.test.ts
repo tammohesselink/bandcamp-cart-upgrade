@@ -297,6 +297,24 @@ describe('Player preloading upcoming tracks', () => {
     expect(preloadedOf(player).size).toBe(0);
   });
 
+  it('retries a failed preload refresh once some time has passed', async () => {
+    const player = new Player([freshTrack(1), expiredTrack(2)]);
+    const refresh = vi.fn(async () => {});
+    player.onRefreshStream = refresh;
+    player.jumpTo('cart', 0);
+    await settle();
+    audioOf(player).dispatchEvent(new Event('playing'));
+    await settle();
+
+    const now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now + 11 * 60 * 1000);
+    audioOf(player).dispatchEvent(new Event('playing'));
+    await settle();
+    clock.mockRestore();
+
+    expect(refresh).toHaveBeenCalledTimes(2);
+  });
+
   it('loads the link afresh when its buffered element failed', async () => {
     const player = new Player([freshTrack(1), freshTrack(2)]);
     refreshWith(player);

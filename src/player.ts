@@ -17,6 +17,8 @@ type StatusKind = 'loading' | 'error' | 'warn' | 'info';
 // How many upcoming tracks get a fresh stream link and start buffering while
 // the current one plays.
 const PRELOAD_AHEAD = 4;
+// How long preloading leaves a track alone after its refresh failed.
+const PRELOAD_RETRY_AFTER_MS = 10 * 60 * 1000;
 
 interface PlaylistState {
   label: string;
@@ -82,9 +84,9 @@ export class Player {
   // once superseded.
   private preloadRunId = 0;
   // Tracks whose preload refresh still left a stale link (e.g. the release page
-  // is gone). Retrying on every 'playing' event would hammer Bandcamp; playing
-  // the track still refreshes it.
-  private preloadRefreshFailed = new WeakSet<PlaylistTrack>();
+  // is gone), mapped to when preloading may try again. Retrying on every
+  // 'playing' event would hammer Bandcamp; playing the track still refreshes it.
+  private preloadRetryAt = new WeakMap<PlaylistTrack, number>();
 
   private announcer!: HTMLElement;
   private cartUrls = new Set<string>();
@@ -895,14 +897,15 @@ export class Player {
     const upcoming = this.upcomingTracks();
     let refreshed = false;
     for (const track of upcoming) {
-      if (!this.onRefreshStream || isStreamFresh(track) || this.preloadRefreshFailed.has(track)) continue;
+      if (!this.onRefreshStream || isStreamFresh(track)) continue;
+      if (Date.now() < (this.preloadRetryAt.get(track) ?? 0)) continue;
       try {
         await this.onRefreshStream(track, false, true);
         refreshed = true;
       } catch (err) {
         console.warn('[bcp] Could not preload stream link', err);
       }
-      if (!isStreamFresh(track)) this.preloadRefreshFailed.add(track);
+      if (!isStreamFresh(track)) this.preloadRetryAt.set(track, Date.now() + PRELOAD_RETRY_AFTER_MS);
       if (runId !== this.preloadRunId) return;
     }
     if (refreshed) {
