@@ -1,4 +1,16 @@
+import type { CartSnapshot } from './types';
+import {
+  CART_HISTORY_KEY,
+  buildHistoryExport,
+  mergeSnapshots,
+  parseHistoryExport,
+  type CartHistory,
+} from './cart-history';
+
 const SETTINGS_KEY = 'bcp_settings_v1';
+// Chrome closes the action popup as soon as a file picker opens, so importing happens
+// in a tab that shows this same page.
+const IMPORT_TAB_PARAM = 'import';
 
 interface BcpSettings {
   showCartHistoryBtn: boolean;
@@ -45,6 +57,105 @@ function addToggle(container: HTMLElement, label: string, checked: boolean, onCh
   container.appendChild(row);
 }
 
+async function loadSnapshots(): Promise<CartSnapshot[]> {
+  const result = await chrome.storage.local.get(CART_HISTORY_KEY);
+  const entry = result[CART_HISTORY_KEY] as CartHistory | undefined;
+  return entry?.snapshots ?? [];
+}
+
+function setStatus(statusEl: HTMLElement, message: string, isError = false): void {
+  statusEl.textContent = message;
+  statusEl.classList.toggle('error', isError);
+}
+
+function addButton(container: HTMLElement, label: string, onClick: () => void): HTMLButtonElement {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'action-button';
+  button.textContent = label;
+  button.addEventListener('click', onClick);
+  container.appendChild(button);
+  return button;
+}
+
+async function exportHistory(statusEl: HTMLElement): Promise<void> {
+  const snapshots = await loadSnapshots();
+  if (snapshots.length === 0) {
+    setStatus(statusEl, 'No cart history to export yet.', true);
+    return;
+  }
+  const json = JSON.stringify(buildHistoryExport(snapshots), null, 2);
+  const blobUrl = URL.createObjectURL(new Blob([json], { type: 'application/json' }));
+  const link = document.createElement('a');
+  link.href = blobUrl;
+  link.download = `bandcamp-cart-history-${new Date().toISOString().slice(0, 10)}.json`;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+  setStatus(statusEl, `Exported ${snapshots.length} cart snapshot${snapshots.length === 1 ? '' : 's'}.`);
+}
+
+async function importHistory(file: File, statusEl: HTMLElement): Promise<void> {
+  let imported: CartSnapshot[];
+  try {
+    imported = parseHistoryExport(await file.text());
+  } catch (error) {
+    setStatus(statusEl, error instanceof Error ? error.message : 'Could not read file.', true);
+    return;
+  }
+  const existing = await loadSnapshots();
+  const merged = mergeSnapshots(existing, imported);
+  const history: CartHistory = { snapshots: merged, updatedAt: Date.now() };
+  await chrome.storage.local.set({ [CART_HISTORY_KEY]: history });
+  const added = merged.length - existing.length;
+  setStatus(
+    statusEl,
+    `Imported ${added} new cart snapshot${added === 1 ? '' : 's'} (${merged.length} in history). ` +
+      'Reload any open Bandcamp tabs to see them.'
+  );
+}
+
+function addHistoryTransfer(container: HTMLElement): void {
+  const isImportTab = new URLSearchParams(location.search).has(IMPORT_TAB_PARAM);
+
+  const heading = document.createElement('h2');
+  heading.textContent = 'Cart history';
+
+  const description = document.createElement('p');
+  description.className = 'section-description';
+  description.textContent = 'Move your cart history to another browser: export it here, then import the file there.';
+
+  const buttons = document.createElement('div');
+  buttons.className = 'action-buttons';
+
+  const statusEl = document.createElement('p');
+  statusEl.className = 'status';
+
+  const fileInput = document.createElement('input');
+  fileInput.type = 'file';
+  fileInput.accept = 'application/json,.json';
+  fileInput.hidden = true;
+  fileInput.addEventListener('change', () => {
+    const file = fileInput.files?.[0];
+    if (file) importHistory(file, statusEl).catch((error) => setStatus(statusEl, String(error), true));
+    fileInput.value = '';
+  });
+
+  addButton(buttons, 'Export', () => {
+    exportHistory(statusEl).catch((error) => setStatus(statusEl, String(error), true));
+  });
+  addButton(buttons, 'Import', () => {
+    if (isImportTab) {
+      fileInput.click();
+    } else {
+      chrome.tabs.create({ url: chrome.runtime.getURL(`popup.html?${IMPORT_TAB_PARAM}`) });
+      window.close();
+    }
+  });
+
+  container.append(heading, description, buttons, fileInput, statusEl);
+  if (isImportTab) setStatus(statusEl, 'Click Import and choose an exported cart history file.');
+}
+
 async function init(): Promise<void> {
   const [settings, showDisco] = await Promise.all([
     loadSettings(),
@@ -60,6 +171,8 @@ async function init(): Promise<void> {
   addToggle(container, 'Show play button on top of label pages', showDisco, (v) => {
     chrome.storage.local.set({ showDiscographyButton: v });
   });
+
+  addHistoryTransfer(document.getElementById('history-transfer')!);
 }
 
 init().catch(console.error);

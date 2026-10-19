@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import type { SavedCartItem, CartSnapshot } from '../src/types';
-import { addSnapshotIfChanged, diffSnapshot } from '../src/cart-history';
+import {
+  addSnapshotIfChanged,
+  buildHistoryExport,
+  diffSnapshot,
+  mergeSnapshots,
+  parseHistoryExport,
+} from '../src/cart-history';
 
 function item(slug: string, title = `Item ${slug}`, purchaseType?: 'track' | 'album'): SavedCartItem {
   return { url: `https://a.bandcamp.com/album/${slug}`, title, purchaseType };
@@ -105,5 +111,60 @@ describe('diffSnapshot', () => {
     const snap = snapshot([{ url: 'https://a.bandcamp.com/album/FOO/', title: 'Foo' }]);
     const { toAdd } = diffSnapshot(snap, [{ url: 'https://a.bandcamp.com/album/foo', title: 'Foo' }]);
     expect(toAdd).toHaveLength(0);
+  });
+});
+
+// --- export / import ---------------------------------------------------------
+
+describe('parseHistoryExport', () => {
+  it('round-trips an export', () => {
+    const snapshots = [snapshot([item('a', 'A', 'album')], 2000), snapshot([item('b')], 1000)];
+    const text = JSON.stringify(buildHistoryExport(snapshots));
+    expect(parseHistoryExport(text)).toEqual(JSON.parse(JSON.stringify(snapshots)));
+  });
+
+  it('rejects invalid JSON', () => {
+    expect(() => parseHistoryExport('not json')).toThrow('not valid JSON');
+  });
+
+  it('rejects JSON that is not a history export', () => {
+    expect(() => parseHistoryExport(JSON.stringify({ snapshots: [] }))).toThrow('not a Bandcamp Cart Player');
+    expect(() => parseHistoryExport('null')).toThrow('not a Bandcamp Cart Player');
+  });
+
+  it('rejects an unsupported version', () => {
+    const data = { ...buildHistoryExport([]), version: 2 };
+    expect(() => parseHistoryExport(JSON.stringify(data))).toThrow('Unsupported export version');
+  });
+
+  it('rejects malformed snapshots', () => {
+    const data = { ...buildHistoryExport([]), snapshots: [{ savedAt: 1, items: [{ url: 5 }] }] };
+    expect(() => parseHistoryExport(JSON.stringify(data))).toThrow('malformed');
+  });
+});
+
+describe('mergeSnapshots', () => {
+  it('keeps duplicates once and orders newest first', () => {
+    const shared = snapshot([item('a'), item('b')], 2000);
+    const existing = [shared, snapshot([item('c')], 1000)];
+    const imported = [snapshot([item('d')], 3000), snapshot([item('b'), item('a')], 2000)];
+    const merged = mergeSnapshots(existing, imported);
+    expect(merged.map((s) => s.savedAt)).toEqual([3000, 2000, 1000]);
+  });
+
+  it('keeps snapshots saved at the same time with different items', () => {
+    const merged = mergeSnapshots([snapshot([item('a')], 1000)], [snapshot([item('b')], 1000)]);
+    expect(merged).toHaveLength(2);
+  });
+
+  it('drops empty snapshots', () => {
+    expect(mergeSnapshots([], [snapshot([], 1000)])).toHaveLength(0);
+  });
+
+  it('caps the merged history at 60 snapshots', () => {
+    const imported = Array.from({ length: 70 }, (_, i) => snapshot([item(`s${i}`)], i));
+    const merged = mergeSnapshots([], imported);
+    expect(merged).toHaveLength(60);
+    expect(merged[0]!.savedAt).toBe(69);
   });
 });

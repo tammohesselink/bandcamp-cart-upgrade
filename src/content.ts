@@ -2,7 +2,7 @@ import type { CartItem, PlaylistTrack, SavedCartItem, CartSnapshot } from './typ
 import { parseTralbum } from './bandcamp';
 import { Player } from './player';
 import { probeCart, probeDiscography, injectDiscographyButton, injectRestoreCartButton, injectRemovePurchasedButton } from './probe';
-import { addSnapshotIfChanged } from './cart-history';
+import { addSnapshotIfChanged, CART_HISTORY_KEY, type CartHistory } from './cart-history';
 import { openCartHistoryModal } from './cart-history-modal';
 import { normalizeUrl } from './url';
 import { formatTimestamp } from './format';
@@ -105,13 +105,6 @@ async function loadSettings(): Promise<BcpSettings> {
 }
 
 // --- Cart history storage ----------------------------------------------------
-
-const CART_HISTORY_KEY = 'bcp_cart_history_v1';
-
-interface CartHistory {
-  snapshots: CartSnapshot[];
-  updatedAt: number;
-}
 
 async function loadSnapshots(): Promise<CartSnapshot[]> {
   try {

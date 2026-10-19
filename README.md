@@ -8,6 +8,7 @@ A Chrome extension that embeds a persistent playlist player into your Bandcamp c
 - **Label discography player** — on a label's `/music` page, loads and plays the full discography
 - **Play buttons** — injects ▶ buttons on each cart item and discography grid item
 - **Cart management** — add/remove releases from your cart directly in the player
+- **Cart history export/import** — move your cart history to another browser or laptop: click Export in the extension popup, then Import the JSON file there (imported snapshots are merged with the existing history)
 - **Caching** — track details are cached for six months; stream links are refreshed when a track is about to play if they are more than an hour old
 
 ## Development
