@@ -1041,8 +1041,8 @@ async function main() {
 
   // Refreshes every loaded copy of the release's tracks, so the rest of an
   // album plays without another fetch.
-  player.onRefreshStream = async (track, force) => {
-    const fresh = await fetchTracksForUrl(track.releaseUrl, force ? 0 : LIVE_DATA_MAX_AGE_MS);
+  player.onRefreshStream = async (track, force, bulk = false) => {
+    const fresh = await fetchTracksForUrl(track.releaseUrl, force ? 0 : LIVE_DATA_MAX_AGE_MS, { bulk });
     // `track` may no longer be in any playlist, e.g. after its release was removed mid-play.
     applyFreshStreams(fresh, [track, ...allPlaylistTracks(player)]);
   };

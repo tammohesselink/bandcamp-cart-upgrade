@@ -14,6 +14,12 @@ const TEMPO_RANGES = [
 
 type StatusKind = 'loading' | 'error' | 'warn' | 'info';
 
+// How many upcoming tracks get a fresh stream link and start buffering while
+// the current one plays.
+const PRELOAD_AHEAD = 4;
+// How long preloading leaves a track alone after its refresh failed.
+const PRELOAD_RETRY_AFTER_MS = 10 * 60 * 1000;
+
 interface PlaylistState {
   label: string;
   tracks: PlaylistTrack[];
@@ -71,6 +77,16 @@ export class Player {
   // current track, e.g. after the playing release is removed from the cart.
   private sourceTrack: PlaylistTrack | null = null;
   private streamRetriedFor: PlaylistTrack | null = null;
+  // Upcoming tracks buffering in standby audio elements, keyed by stream link,
+  // so skipping ahead swaps one in instead of starting a cold load.
+  private preloaded = new Map<string, HTMLAudioElement>();
+  // Bumped by every preload run and playlist switch, so an older run stops
+  // once superseded.
+  private preloadRunId = 0;
+  // Tracks whose preload refresh still left a stale link (e.g. the release page
+  // is gone), mapped to when preloading may try again. Retrying on every
+  // 'playing' event would hammer Bandcamp; playing the track still refreshes it.
+  private preloadRetryAt = new WeakMap<PlaylistTrack, number>();
 
   private announcer!: HTMLElement;
   private cartUrls = new Set<string>();
@@ -87,11 +103,12 @@ export class Player {
   onDiscographyButtonVisibilityChange?: (show: boolean) => void;
   onReloadPlaylist?: () => Promise<void>;
   onShowCache?: () => Promise<void> | void;
-  // Updates the track's streamUrl in place; `force` skips any cached copy.
-  onRefreshStream?: (track: PlaylistTrack, force: boolean) => Promise<void>;
+  // Updates the track's streamUrl in place; `force` skips any cached copy and
+  // `bulk` queues the fetch behind ones the user is waiting on.
+  onRefreshStream?: (track: PlaylistTrack, force: boolean, bulk?: boolean) => Promise<void>;
 
   constructor(initialPlaylist: PlaylistTrack[]) {
-    this.audio = new Audio();
+    this.audio = this.createAudio();
     this.audio.preservesPitch = this.preservesPitch;
 
     injectStyles();
@@ -121,7 +138,6 @@ export class Player {
       document.body.style.paddingBottom = this.wrapper.offsetHeight + 'px';
     }).observe(this.wrapper);
 
-    this.bindAudioEvents();
     this.setupMediaSession();
 
     chrome.storage.local.get(['tempoRangeIndex', 'preservesPitch', 'showDiscographyButton'], (result) => {
@@ -200,6 +216,7 @@ export class Player {
       this.currentTimeEl.textContent = '0:00';
       this.seekBar.value = '0';
     }
+    if (this.activeId !== id) this.clearPreloaded();
     this.activeId = id;
     this.updateHeader();
     this.updateQueueEl();
@@ -350,6 +367,7 @@ export class Player {
   destroy() {
     this.audio.pause();
     this.audio.src = '';
+    this.clearPreloaded();
     this.wrapper.remove();
     document.body.style.paddingBottom = '';
   }
@@ -662,8 +680,11 @@ export class Player {
     // Only reload when the stream URL actually changes. Keeping the same src
     // preserves the current playback position across pause/resume cycles (e.g.
     // when the native Bandcamp player triggers a play event for a track the
-    // bottom player already has loaded mid-way through).
-    const needsReload = !track.streamUrl || track.unplayable || track.streamUrl !== this.audio.src;
+    // bottom player already has loaded mid-way through). The loaded track also
+    // counts as unchanged when a refresh gave it a new link, e.g. while
+    // preloading another track of its release, so it isn't restarted.
+    const isLoaded = track === this.sourceTrack || track.streamUrl === this.audio.src;
+    const needsReload = !track.streamUrl || track.unplayable || !isLoaded;
 
     this.artworkEl.src = track.artworkUrl || '';
     this.titleEl.textContent = track.trackTitle || '(untitled)';
@@ -718,8 +739,21 @@ export class Player {
   }
 
   private setSource(track: PlaylistTrack, startAt = 0) {
-    this.audio.src = track.streamUrl ?? '';
-    this.audio.load();
+    const url = track.streamUrl ?? '';
+    const standby = this.preloaded.get(url);
+    this.preloaded.delete(url);
+    if (standby && !standby.error) {
+      const previous = this.audio;
+      this.audio = standby;
+      previous.pause();
+      unloadAudio(previous);
+      // Its 'loadedmetadata' fired while it was on standby, so it was ignored.
+      if (isFinite(standby.duration)) this.totalTimeEl.textContent = fmtTime(standby.duration);
+    } else {
+      if (standby) unloadAudio(standby);
+      this.audio.src = url;
+      this.audio.load();
+    }
     this.audio.currentTime = startAt;
     this.audio.playbackRate = this.playbackRate;
     this.audio.preservesPitch = this.preservesPitch;
@@ -843,36 +877,109 @@ export class Player {
     this.onPlayStateChange?.(playing);
   }
 
-  private bindAudioEvents() {
-    this.audio.addEventListener('play', () => {
+  // Every element is bound once; only the one currently in `this.audio`
+  // reacts, so standby elements buffering upcoming tracks stay silent.
+  private createAudio(): HTMLAudioElement {
+    const audio = new Audio();
+    const on = (type: keyof HTMLMediaElementEventMap, listener: () => void) => {
+      audio.addEventListener(type, () => {
+        if (audio === this.audio) listener();
+      });
+    };
+    this.bindAudioEvents(on);
+    return audio;
+  }
+
+  // Fetches fresh links for the next few tracks and starts buffering them, so
+  // skipping ahead waits on neither a release-page fetch nor a cold stream.
+  private async preloadUpcoming() {
+    const runId = ++this.preloadRunId;
+    const upcoming = this.upcomingTracks();
+    let refreshed = false;
+    for (const track of upcoming) {
+      if (!this.onRefreshStream || isStreamFresh(track)) continue;
+      if (Date.now() < (this.preloadRetryAt.get(track) ?? 0)) continue;
+      try {
+        await this.onRefreshStream(track, false, true);
+        refreshed = true;
+      } catch (err) {
+        console.warn('[bcp] Could not preload stream link', err);
+      }
+      if (!isStreamFresh(track)) this.preloadRetryAt.set(track, Date.now() + PRELOAD_RETRY_AFTER_MS);
+      if (runId !== this.preloadRunId) return;
+    }
+    if (refreshed) {
+      this.updateQueueEl();
+      this.updateNavButtons();
+    }
+
+    const wanted = upcoming
+      .filter((t) => !t.unplayable && t.streamUrl && (!this.onRefreshStream || isStreamFresh(t)))
+      .map((t) => t.streamUrl!);
+    for (const [url, standby] of this.preloaded) {
+      if (wanted.includes(url)) continue;
+      unloadAudio(standby);
+      this.preloaded.delete(url);
+    }
+    for (const url of wanted) {
+      if (this.preloaded.has(url) || url === this.audio.src) continue;
+      const standby = this.createAudio();
+      standby.preload = 'auto';
+      standby.src = url;
+      this.preloaded.set(url, standby);
+    }
+  }
+
+  private clearPreloaded() {
+    this.preloadRunId++;
+    for (const standby of this.preloaded.values()) unloadAudio(standby);
+    this.preloaded.clear();
+  }
+
+  private upcomingTracks(): PlaylistTrack[] {
+    const state = this.active();
+    if (!state) return [];
+    const upcoming: PlaylistTrack[] = [];
+    let index = state.lastIndex;
+    while (upcoming.length < PRELOAD_AHEAD) {
+      index = this.nextPlayable(index + 1, 1);
+      if (index === -1) break;
+      upcoming.push(state.tracks[index]!);
+    }
+    return upcoming;
+  }
+
+  private bindAudioEvents(on: (type: keyof HTMLMediaElementEventMap, listener: () => void) => void) {
+    on('play', () => {
       this.playStarts++;
       this.reflectPlaybackState(true);
       this.onPlaybackStart?.();
     });
 
-    this.audio.addEventListener('pause', () => {
+    on('pause', () => {
       this.reflectPlaybackState(false);
     });
 
-    this.audio.addEventListener('timeupdate', () => {
+    on('timeupdate', () => {
       if (this.seeking || !isFinite(this.audio.duration)) return;
       this.currentTimeEl.textContent = fmtTime(this.audio.currentTime);
       this.seekBar.value = String((this.audio.currentTime / this.audio.duration) * 100);
     });
 
-    this.audio.addEventListener('loadedmetadata', () => {
+    on('loadedmetadata', () => {
       this.totalTimeEl.textContent = fmtTime(this.audio.duration);
     });
 
-    this.audio.addEventListener('ended', () => {
+    on('ended', () => {
       this.next();
     });
 
-    this.audio.addEventListener('playing', () => {
+    on('playing', () => {
       this.streamRetriedFor = null;
+      void this.preloadUpcoming();
     });
 
-    this.audio.addEventListener('error', () => {
+    on('error', () => {
       if (!this.audio.getAttribute('src')) return;
       console.warn('[bcp] Audio error for track', this.active()?.lastIndex, this.audio.error);
       // The link may have expired mid-session; fetch a fresh one once before
@@ -1130,6 +1237,12 @@ function btn(text: string, className: string): HTMLButtonElement {
   b.textContent = text;
   b.className = className;
   return b;
+}
+
+function unloadAudio(audio: HTMLAudioElement) {
+  audio.pause();
+  audio.removeAttribute('src');
+  audio.load();
 }
 
 function fmtTime(seconds: number): string {
