@@ -1,8 +1,8 @@
-import type { CartItem, PlaylistTrack, SavedCartItem, CartSnapshot } from './types';
+import type { CartItem, PlaylistTrack, SavedCartItem } from './types';
 import { parseTralbum } from './bandcamp';
 import { Player } from './player';
 import { probeCart, probeDiscography, injectDiscographyButton, injectRestoreCartButton, injectRemovePurchasedButton } from './probe';
-import { addSnapshotIfChanged } from './cart-history';
+import { addSnapshotIfChanged, loadSnapshots, saveSnapshots } from './cart-history';
 import { openCartHistoryModal } from './cart-history-modal';
 import { normalizeUrl } from './url';
 import { formatTimestamp } from './format';
@@ -102,29 +102,6 @@ async function loadSettings(): Promise<BcpSettings> {
   } catch {
     return { showCartHistoryBtn: true };
   }
-}
-
-// --- Cart history storage ----------------------------------------------------
-
-const CART_HISTORY_KEY = 'bcp_cart_history_v1';
-
-interface CartHistory {
-  snapshots: CartSnapshot[];
-  updatedAt: number;
-}
-
-async function loadSnapshots(): Promise<CartSnapshot[]> {
-  try {
-    const result = await chrome.storage.local.get(CART_HISTORY_KEY);
-    const entry = result[CART_HISTORY_KEY] as CartHistory | undefined;
-    return entry?.snapshots ?? [];
-  } catch {
-    return [];
-  }
-}
-
-function saveSnapshots(snapshots: CartSnapshot[]): void {
-  chrome.storage.local.set({ [CART_HISTORY_KEY]: { snapshots, updatedAt: Date.now() } }).catch(() => {});
 }
 
 // --- Pending-purchase storage -------------------------------------------------
@@ -711,7 +688,7 @@ async function main() {
   if (!chrome.extension.inIncognitoContext) {
     const liveItems: SavedCartItem[] = cartItems.map((i) => ({ url: i.url, title: i.title, purchaseType: i.purchaseType }));
     const snapshots = addSnapshotIfChanged(await loadSnapshots(), liveItems);
-    saveSnapshots(snapshots);
+    saveSnapshots(snapshots).catch(() => {});
 
     if (settings.showCartHistoryBtn && snapshots.length > 0) {
       const btn = injectRestoreCartButton(snapshots.length);
