@@ -592,9 +592,10 @@ describe('Player reverse order', () => {
     stubStorage();
     const player = new Player(threeReleases());
     reverseButton(player).click();
-    player.jumpTo('cart', 5);
+    player.wrapper.querySelector<HTMLButtonElement>('.bcp-btn-play')!.click();
     await settle();
 
+    expect(audioOf(player).src).toBe('https://t4.bcbits.com/stream/track-6-old');
     const played = [currentTitle(player)];
     while (!nextButton(player).disabled) {
       nextButton(player).click();
@@ -692,6 +693,64 @@ describe('Player reverse order', () => {
     player.selectPlaylist('discography');
     expect(reverseButton(player).getAttribute('aria-pressed')).toBe('true');
     expect(queueTitles(player)[0]).toBe('Track 6');
+  });
+
+  it('starts a playlist saved as reversed from its last release', () => {
+    stubStorage({ reversedPlaylists: { cart: true, discography: true } });
+    const player = new Player(threeReleases());
+    player.setPlaylist('discography', 'Label discography', threeReleases());
+
+    expect(currentTitle(player)).toBe('Track 6');
+    expect(player.firstTrackIndex('discography')).toBe(5);
+  });
+
+  it('keeps the chosen track when reversing after something has played', async () => {
+    stubStorage();
+    const player = new Player(threeReleases());
+    player.jumpTo('cart', 0);
+    await settle();
+    player.pause();
+
+    reverseButton(player).click();
+
+    expect(currentTitle(player)).toBe('Track 1');
+  });
+
+  it('continues with the next release when the release playing first is removed', async () => {
+    stubStorage();
+    const tracks = threeReleases();
+    const player = new Player(tracks);
+    reverseButton(player).click();
+    player.jumpTo('cart', 5);
+    await settle();
+
+    player.removeTracksByReleaseUrl('cart', tracks[5]!.releaseUrl);
+    audioOf(player).dispatchEvent(new Event('ended'));
+
+    expect(currentTitle(player)).toBe('Track 3');
+  });
+
+  it('goes back to the track before a removed one', async () => {
+    stubStorage();
+    const tracks = threeReleases();
+    const player = new Player(tracks);
+    player.jumpTo('cart', 2);
+    await settle();
+
+    player.removeTracksByReleaseUrl('cart', tracks[2]!.releaseUrl);
+    player.wrapper.querySelector<HTMLButtonElement>('button[title="Previous"]')!.click();
+
+    expect(currentTitle(player)).toBe('Track 2');
+  });
+
+  it('keeps a choice saved by another tab when saving its own', () => {
+    const set = stubStorage({ reversedPlaylists: { discography: true } });
+    const player = new Player(threeReleases());
+    (player as unknown as { reversedPlaylists: object }).reversedPlaylists = {};
+
+    reverseButton(player).click();
+
+    expect(set).toHaveBeenLastCalledWith({ reversedPlaylists: { discography: true, cart: true } });
   });
 
   it('greys out the button for a playlist with a single release', () => {
