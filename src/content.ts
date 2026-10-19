@@ -804,7 +804,16 @@ async function main() {
   };
 
   // Wire up cart mutation callbacks.
-  player.onCartAdd = async (track, addType) => {
+  player.onCartAdd = async (pageTrack, requestedAddType) => {
+    // "+ Release" on a single-track page adds the album the track belongs to,
+    // as a release add of the album's copy of the track.
+    const track = requestedAddType === 'album' ? await albumTrackFor(pageTrack) : pageTrack;
+    const addType = requestedAddType === 'album' ? 'release' : requestedAddType;
+    if (track === null) {
+      player.showToast('Could not load the album, please try again', 'error');
+      return;
+    }
+
     const tralbumId = addType === 'track' ? track.trackId : track.releaseId;
     const tralbumType = addType === 'track' ? 't' : (track.releaseType === 'track' ? 't' : 'a');
 
@@ -879,7 +888,16 @@ async function main() {
     }
   };
 
-  player.onCartRemove = async (track, cartItemUrl) => {
+  player.onCartRemove = async (pageTrack, cartItemUrl) => {
+    // A single-track page's album sits in the cart under the album's url and id.
+    const isAlbumOfTrackPage = !!pageTrack.albumUrl &&
+      normalizeUrl(cartItemUrl) === normalizeUrl(pageTrack.albumUrl);
+    const track = isAlbumOfTrackPage ? await albumTrackFor(pageTrack) : pageTrack;
+    if (track === null) {
+      player.setStatus('Remove failed: could not load the album', 'error');
+      return;
+    }
+
     // cartItemUrl tells us what the cart holds: track.pageUrl for individual track
     // purchases, track.releaseUrl for album/release purchases. The tralbumId and
     // type must match what was passed to the original add call.
@@ -1427,6 +1445,14 @@ async function fetchRelease(url: string, { bulk = false } = {}): Promise<{ track
     console.warn('[bcp] Failed to fetch', url, err);
     return { tracks: [], problem: 'fetch-failed' };
   }
+}
+
+// The album's copy of a single-track page's track, which carries the album's
+// id and url. Null when the album page could not be loaded.
+async function albumTrackFor(track: PlaylistTrack): Promise<PlaylistTrack | null> {
+  if (!track.albumUrl) return null;
+  const albumTracks = await fetchTracksForUrl(track.albumUrl, LIVE_DATA_MAX_AGE_MS);
+  return albumTracks.find((t) => t.trackId === track.trackId) ?? albumTracks[0] ?? null;
 }
 
 async function fetchTracksForUrl(url: string, maxAgeMs = TRACK_DETAILS_MAX_AGE_MS, { bulk = false } = {}): Promise<PlaylistTrack[]> {

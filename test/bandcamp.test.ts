@@ -263,3 +263,29 @@ describe('parseTralbum — invalid HTML', () => {
     );
   });
 });
+
+describe('parseTralbum — album a track page belongs to', () => {
+  it('reads it from the "Buy the Full Digital Album" link', () => {
+    const tracks = parseTralbum(
+      fixture('track-album-only.html'),
+      'https://oddysee.bandcamp.com/track/7th-element'
+    );
+    expect(tracks[0]!.albumUrl).toBe('https://oddysee.bandcamp.com/album/7th-element');
+  });
+
+  it('reads it from TralbumData when the page has album_url', () => {
+    const html = fixture('single-track.html').replace(
+      '"tralbum_type"',
+      '"album_url": "/album/night-sessions", "tralbum_type"'
+    );
+    const tracks = parseTralbum(html, 'https://solardrift.bandcamp.com/track/nightfall');
+    expect(tracks[0]!.albumUrl).toBe('https://solardrift.bandcamp.com/album/night-sessions');
+  });
+
+  it('is null for a single-track release that is not on an album, and for album pages', () => {
+    const single = parseTralbum(fixture('single-track.html'), 'https://solardrift.bandcamp.com/track/nightfall');
+    const album = parseTralbum(fixture('album.html'), 'https://solardrift.bandcamp.com/album/echoes-of-the-void');
+    expect(single[0]!.albumUrl).toBeNull();
+    for (const t of album) expect(t.albumUrl).toBeNull();
+  });
+});

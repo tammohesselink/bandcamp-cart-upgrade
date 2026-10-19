@@ -29,6 +29,13 @@ export function parseTralbum(html: string, pageUrl: string): PlaylistTrack[] {
     htmlHasIdOrClassToken(scanned, 'buyAlbumLink') &&
     !htmlHasClassTokens(scanned, ['buyItem', 'digital']);
 
+  // A track page that belongs to an album links to it, both in TralbumData
+  // and in the "Buy the Full Digital Album" link.
+  const albumHref = releaseType === 'track'
+    ? (data.album_url ?? extractIdHref(scanned, 'buyAlbumLink'))
+    : null;
+  const albumUrl = albumHref ? resolveUrl(albumHref, pageUrl) : null;
+
   return (data.trackinfo ?? []).map((t) => {
     // Per-track minimum price: prefer minimum_price (PWYW floor) when > 0,
     // fall back to fixed price field. 0 means "no individual minimum set"
@@ -57,6 +64,7 @@ export function parseTralbum(html: string, pageUrl: string): PlaylistTrack[] {
       trackMinPrice,
       currency: null,
       purchasable: !albumOnly,
+      albumUrl,
     };
   });
 }
@@ -162,6 +170,16 @@ function htmlHasIdOrClassToken(html: string, token: string): boolean {
   return idRe.test(html) || htmlHasClassTokens(html, [token]);
 }
 
+// The href of the element with `id="token"`, or null.
+function extractIdHref(html: string, token: string): string | null {
+  const tagRe = new RegExp(`<a\\b[^>]*\\sid\\s*=\\s*(?:"${token}"|'${token}')[^>]*>`, 'i');
+  const tag = tagRe.exec(html)?.[0];
+  if (!tag) return null;
+  const hrefMatch = /\shref\s*=\s*(?:"([^"]*)"|'([^']*)')/i.exec(tag);
+  const href = hrefMatch?.[1] ?? hrefMatch?.[2] ?? '';
+  return href ? decodeHtmlEntities(href) : null;
+}
+
 // True if some single class attribute in `html` contains every token in
 // `tokens` (order-independent, e.g. class="buyItem digital").
 function htmlHasClassTokens(html: string, tokens: string[]): boolean {
@@ -227,6 +245,14 @@ function extractJsonContaining(source: string, markerPos: number): unknown | nul
     }
   }
   return null;
+}
+
+function resolveUrl(href: string, base: string): string | null {
+  try {
+    return new URL(href, base).href;
+  } catch {
+    return null;
+  }
 }
 
 function safeOrigin(url: string): string {
