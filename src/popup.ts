@@ -1,10 +1,11 @@
 import type { CartSnapshot } from './types';
 import {
-  CART_HISTORY_KEY,
   buildHistoryExport,
+  countNewSnapshots,
+  loadSnapshots,
   mergeSnapshots,
   parseHistoryExport,
-  type CartHistory,
+  saveSnapshots,
 } from './cart-history';
 
 const SETTINGS_KEY = 'bcp_settings_v1';
@@ -57,15 +58,9 @@ function addToggle(container: HTMLElement, label: string, checked: boolean, onCh
   container.appendChild(row);
 }
 
-async function loadSnapshots(): Promise<CartSnapshot[]> {
-  const result = await chrome.storage.local.get(CART_HISTORY_KEY);
-  const entry = result[CART_HISTORY_KEY] as CartHistory | undefined;
-  return entry?.snapshots ?? [];
-}
-
-function setStatus(statusEl: HTMLElement, message: string, isError = false): void {
-  statusEl.textContent = message;
-  statusEl.classList.toggle('error', isError);
+function setStatus(statusElement: HTMLElement, message: string, isError = false): void {
+  statusElement.textContent = message;
+  statusElement.classList.toggle('error', isError);
 }
 
 function addButton(container: HTMLElement, label: string, onClick: () => void): HTMLButtonElement {
@@ -78,10 +73,10 @@ function addButton(container: HTMLElement, label: string, onClick: () => void): 
   return button;
 }
 
-async function exportHistory(statusEl: HTMLElement): Promise<void> {
+async function exportHistory(statusElement: HTMLElement): Promise<void> {
   const snapshots = await loadSnapshots();
   if (snapshots.length === 0) {
-    setStatus(statusEl, 'No cart history to export yet.', true);
+    setStatus(statusElement, 'No cart history to export yet.', true);
     return;
   }
   const json = JSON.stringify(buildHistoryExport(snapshots), null, 2);
@@ -91,24 +86,23 @@ async function exportHistory(statusEl: HTMLElement): Promise<void> {
   link.download = `bandcamp-cart-history-${new Date().toISOString().slice(0, 10)}.json`;
   link.click();
   setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
-  setStatus(statusEl, `Exported ${snapshots.length} cart snapshot${snapshots.length === 1 ? '' : 's'}.`);
+  setStatus(statusElement, `Exported ${snapshots.length} cart snapshot${snapshots.length === 1 ? '' : 's'}.`);
 }
 
-async function importHistory(file: File, statusEl: HTMLElement): Promise<void> {
+async function importHistory(file: File, statusElement: HTMLElement): Promise<void> {
   let imported: CartSnapshot[];
   try {
     imported = parseHistoryExport(await file.text());
   } catch (error) {
-    setStatus(statusEl, error instanceof Error ? error.message : 'Could not read file.', true);
+    setStatus(statusElement, error instanceof Error ? error.message : 'Could not read file.', true);
     return;
   }
   const existing = await loadSnapshots();
   const merged = mergeSnapshots(existing, imported);
-  const history: CartHistory = { snapshots: merged, updatedAt: Date.now() };
-  await chrome.storage.local.set({ [CART_HISTORY_KEY]: history });
-  const added = merged.length - existing.length;
+  await saveSnapshots(merged);
+  const added = countNewSnapshots(existing, merged);
   setStatus(
-    statusEl,
+    statusElement,
     `Imported ${added} new cart snapshot${added === 1 ? '' : 's'} (${merged.length} in history). ` +
       'Reload any open Bandcamp tabs to see them.'
   );
@@ -127,8 +121,8 @@ function addHistoryTransfer(container: HTMLElement): void {
   const buttons = document.createElement('div');
   buttons.className = 'action-buttons';
 
-  const statusEl = document.createElement('p');
-  statusEl.className = 'status';
+  const statusElement = document.createElement('p');
+  statusElement.className = 'status';
 
   const fileInput = document.createElement('input');
   fileInput.type = 'file';
@@ -136,24 +130,26 @@ function addHistoryTransfer(container: HTMLElement): void {
   fileInput.hidden = true;
   fileInput.addEventListener('change', () => {
     const file = fileInput.files?.[0];
-    if (file) importHistory(file, statusEl).catch((error) => setStatus(statusEl, String(error), true));
+    if (file) importHistory(file, statusElement).catch((error) => setStatus(statusElement, String(error), true));
     fileInput.value = '';
   });
 
   addButton(buttons, 'Export', () => {
-    exportHistory(statusEl).catch((error) => setStatus(statusEl, String(error), true));
+    exportHistory(statusElement).catch((error) => setStatus(statusElement, String(error), true));
   });
   addButton(buttons, 'Import', () => {
     if (isImportTab) {
       fileInput.click();
     } else {
-      chrome.tabs.create({ url: chrome.runtime.getURL(`popup.html?${IMPORT_TAB_PARAM}`) });
-      window.close();
+      chrome.tabs
+        .create({ url: chrome.runtime.getURL(`popup.html?${IMPORT_TAB_PARAM}`) })
+        .then(() => window.close())
+        .catch((error) => setStatus(statusElement, String(error), true));
     }
   });
 
-  container.append(heading, description, buttons, fileInput, statusEl);
-  if (isImportTab) setStatus(statusEl, 'Click Import and choose an exported cart history file.');
+  container.append(heading, description, buttons, fileInput, statusElement);
+  if (isImportTab) setStatus(statusElement, 'Click Import and choose an exported cart history file.');
 }
 
 async function init(): Promise<void> {

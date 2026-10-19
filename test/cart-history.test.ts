@@ -3,6 +3,7 @@ import type { SavedCartItem, CartSnapshot } from '../src/types';
 import {
   addSnapshotIfChanged,
   buildHistoryExport,
+  countNewSnapshots,
   diffSnapshot,
   mergeSnapshots,
   parseHistoryExport,
@@ -166,5 +167,22 @@ describe('mergeSnapshots', () => {
     const merged = mergeSnapshots([], imported);
     expect(merged).toHaveLength(60);
     expect(merged[0]!.savedAt).toBe(69);
+  });
+});
+
+// --- countNewSnapshots -------------------------------------------------------
+
+describe('countNewSnapshots', () => {
+  it('counts imported snapshots even when the cap drops older ones', () => {
+    const existing = Array.from({ length: 60 }, (_, i) => snapshot([item(`old${i}`)], i));
+    const imported = Array.from({ length: 10 }, (_, i) => snapshot([item(`new${i}`)], 1000 + i));
+    const merged = mergeSnapshots(existing, imported);
+    expect(merged).toHaveLength(60);
+    expect(countNewSnapshots(existing, merged)).toBe(10);
+  });
+
+  it('returns zero when every imported snapshot already exists', () => {
+    const existing = [snapshot([item('a')], 1000)];
+    expect(countNewSnapshots(existing, mergeSnapshots(existing, existing))).toBe(0);
   });
 });

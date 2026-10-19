@@ -117,3 +117,27 @@ export function mergeSnapshots(existing: CartSnapshot[], imported: CartSnapshot[
   }
   return [...byIdentity.values()].sort((a, b) => b.savedAt - a.savedAt).slice(0, MAX_SNAPSHOTS);
 }
+
+// Number of snapshots in the merged history that were not in the existing history. Not simply
+// the difference in length: the cap can drop old snapshots while newer ones are imported.
+export function countNewSnapshots(existing: CartSnapshot[], merged: CartSnapshot[]): number {
+  const existingIdentities = new Set(existing.map(snapshotIdentity));
+  return merged.filter((snapshot) => !existingIdentities.has(snapshotIdentity(snapshot))).length;
+}
+
+// --- Storage -------------------------------------------------------------------
+
+export async function loadSnapshots(): Promise<CartSnapshot[]> {
+  try {
+    const result = await chrome.storage.local.get(CART_HISTORY_KEY);
+    const entry = result[CART_HISTORY_KEY] as CartHistory | undefined;
+    return entry?.snapshots ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export async function saveSnapshots(snapshots: CartSnapshot[]): Promise<void> {
+  const history: CartHistory = { snapshots, updatedAt: Date.now() };
+  await chrome.storage.local.set({ [CART_HISTORY_KEY]: history });
+}
