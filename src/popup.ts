@@ -80,12 +80,12 @@ async function exportHistory(statusElement: HTMLElement): Promise<void> {
     return;
   }
   const json = JSON.stringify(buildHistoryExport(snapshots), null, 2);
-  const blobUrl = URL.createObjectURL(new Blob([json], { type: 'application/json' }));
+  // A data URL carries the file contents itself, so the download survives the popup closing
+  // (for example when Chrome's "Ask where to save" dialog takes focus). A blob URL would not.
   const link = document.createElement('a');
-  link.href = blobUrl;
+  link.href = `data:application/json;charset=utf-8,${encodeURIComponent(json)}`;
   link.download = `bandcamp-cart-history-${new Date().toISOString().slice(0, 10)}.json`;
   link.click();
-  setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
   setStatus(statusElement, `Exported ${snapshots.length} cart snapshot${snapshots.length === 1 ? '' : 's'}.`);
 }
 
