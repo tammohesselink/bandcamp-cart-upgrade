@@ -78,8 +78,13 @@ export class Player {
   // Upcoming tracks buffering in standby audio elements, keyed by stream link,
   // so skipping ahead swaps one in instead of starting a cold load.
   private preloaded = new Map<string, HTMLAudioElement>();
-  // Bumped by every preload run, so an older run stops once superseded.
+  // Bumped by every preload run and playlist switch, so an older run stops
+  // once superseded.
   private preloadRunId = 0;
+  // Tracks whose preload refresh still left a stale link (e.g. the release page
+  // is gone). Retrying on every 'playing' event would hammer Bandcamp; playing
+  // the track still refreshes it.
+  private preloadRefreshFailed = new WeakSet<PlaylistTrack>();
 
   private announcer!: HTMLElement;
   private cartUrls = new Set<string>();
@@ -96,8 +101,9 @@ export class Player {
   onDiscographyButtonVisibilityChange?: (show: boolean) => void;
   onReloadPlaylist?: () => Promise<void>;
   onShowCache?: () => Promise<void> | void;
-  // Updates the track's streamUrl in place; `force` skips any cached copy.
-  onRefreshStream?: (track: PlaylistTrack, force: boolean) => Promise<void>;
+  // Updates the track's streamUrl in place; `force` skips any cached copy and
+  // `bulk` queues the fetch behind ones the user is waiting on.
+  onRefreshStream?: (track: PlaylistTrack, force: boolean, bulk?: boolean) => Promise<void>;
 
   constructor(initialPlaylist: PlaylistTrack[]) {
     this.audio = this.createAudio();
@@ -208,6 +214,7 @@ export class Player {
       this.currentTimeEl.textContent = '0:00';
       this.seekBar.value = '0';
     }
+    if (this.activeId !== id) this.clearPreloaded();
     this.activeId = id;
     this.updateHeader();
     this.updateQueueEl();
@@ -356,11 +363,9 @@ export class Player {
 
   /** Stop audio, remove injected UI, and reset the body padding. */
   destroy() {
-    this.preloadRunId++;
     this.audio.pause();
     this.audio.src = '';
-    for (const standby of this.preloaded.values()) unloadAudio(standby);
-    this.preloaded.clear();
+    this.clearPreloaded();
     this.wrapper.remove();
     document.body.style.paddingBottom = '';
   }
@@ -673,8 +678,11 @@ export class Player {
     // Only reload when the stream URL actually changes. Keeping the same src
     // preserves the current playback position across pause/resume cycles (e.g.
     // when the native Bandcamp player triggers a play event for a track the
-    // bottom player already has loaded mid-way through).
-    const needsReload = !track.streamUrl || track.unplayable || track.streamUrl !== this.audio.src;
+    // bottom player already has loaded mid-way through). The loaded track also
+    // counts as unchanged when a refresh gave it a new link, e.g. while
+    // preloading another track of its release, so it isn't restarted.
+    const isLoaded = track === this.sourceTrack || track.streamUrl === this.audio.src;
+    const needsReload = !track.streamUrl || track.unplayable || !isLoaded;
 
     this.artworkEl.src = track.artworkUrl || '';
     this.titleEl.textContent = track.trackTitle || '(untitled)';
@@ -737,6 +745,8 @@ export class Player {
       this.audio = standby;
       previous.pause();
       unloadAudio(previous);
+      // Its 'loadedmetadata' fired while it was on standby, so it was ignored.
+      if (isFinite(standby.duration)) this.totalTimeEl.textContent = fmtTime(standby.duration);
     } else {
       if (standby) unloadAudio(standby);
       this.audio.src = url;
@@ -885,13 +895,14 @@ export class Player {
     const upcoming = this.upcomingTracks();
     let refreshed = false;
     for (const track of upcoming) {
-      if (!this.onRefreshStream || isStreamFresh(track)) continue;
+      if (!this.onRefreshStream || isStreamFresh(track) || this.preloadRefreshFailed.has(track)) continue;
       try {
-        await this.onRefreshStream(track, false);
+        await this.onRefreshStream(track, false, true);
         refreshed = true;
       } catch (err) {
         console.warn('[bcp] Could not preload stream link', err);
       }
+      if (!isStreamFresh(track)) this.preloadRefreshFailed.add(track);
       if (runId !== this.preloadRunId) return;
     }
     if (refreshed) {
@@ -914,6 +925,12 @@ export class Player {
       standby.src = url;
       this.preloaded.set(url, standby);
     }
+  }
+
+  private clearPreloaded() {
+    this.preloadRunId++;
+    for (const standby of this.preloaded.values()) unloadAudio(standby);
+    this.preloaded.clear();
   }
 
   private upcomingTracks(): PlaylistTrack[] {

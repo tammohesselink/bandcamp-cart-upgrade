@@ -251,6 +251,113 @@ describe('Player preloading upcoming tracks', () => {
     expect(preloadedOf(player).size).toBe(0);
   });
 
+  it('keeps playing a track when preloading the rest of its release gives it a new link', async () => {
+    const tracks = [expiredTrack(1), expiredTrack(2)];
+    tracks[0]!.streamFetchedAt = Date.now();
+    const player = new Player(tracks);
+    // Like the real refetch, a refresh updates every track of the release.
+    const refresh = vi.fn(async () => {
+      for (const track of player.getPlaylistTracks('cart')) {
+        track.streamUrl = track.streamUrl!.replace('-old', '-new');
+        track.streamFetchedAt = Date.now();
+      }
+    });
+    player.onRefreshStream = refresh;
+    player.jumpTo('cart', 0);
+    await settle();
+    const playing = audioOf(player);
+    playing.currentTime = 90;
+    playing.dispatchEvent(new Event('playing'));
+    await settle();
+
+    player.jumpTo('cart', 0);
+    await settle();
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(audioOf(player)).toBe(playing);
+    expect(audioOf(player).src).toBe('https://t4.bcbits.com/stream/track-1-old');
+    expect(audioOf(player).currentTime).toBe(90);
+  });
+
+  it('does not retry a preload refresh that left the link stale', async () => {
+    const player = new Player([freshTrack(1), expiredTrack(2)]);
+    // The release page could not be fetched, so nothing changes.
+    const refresh = vi.fn(async () => {});
+    player.onRefreshStream = refresh;
+    player.jumpTo('cart', 0);
+    await settle();
+
+    audioOf(player).dispatchEvent(new Event('playing'));
+    await settle();
+    audioOf(player).dispatchEvent(new Event('playing'));
+    await settle();
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(refresh).toHaveBeenCalledWith(expect.anything(), false, true);
+    expect(preloadedOf(player).size).toBe(0);
+  });
+
+  it('loads the link afresh when its buffered element failed', async () => {
+    const player = new Player([freshTrack(1), freshTrack(2)]);
+    refreshWith(player);
+    player.jumpTo('cart', 0);
+    await settle();
+    audioOf(player).dispatchEvent(new Event('playing'));
+    await settle();
+    const buffered = preloadedOf(player).get('https://t4.bcbits.com/stream/track-2-old')!;
+    Object.defineProperty(buffered, 'error', { value: { code: 2 } });
+    const first = audioOf(player);
+
+    first.dispatchEvent(new Event('ended'));
+    await settle();
+
+    expect(audioOf(player)).toBe(first);
+    expect(audioOf(player).src).toBe('https://t4.bcbits.com/stream/track-2-old');
+    expect(buffered.getAttribute('src')).toBeNull();
+  });
+
+  it('applies the tempo to a buffered element when it is swapped in', async () => {
+    const player = new Player([freshTrack(1), freshTrack(2)]);
+    refreshWith(player);
+    player.jumpTo('cart', 0);
+    await settle();
+    (player as unknown as { playbackRate: number }).playbackRate = 1.08;
+    audioOf(player).dispatchEvent(new Event('playing'));
+    await settle();
+
+    audioOf(player).dispatchEvent(new Event('ended'));
+    await settle();
+
+    expect(audioOf(player).src).toBe('https://t4.bcbits.com/stream/track-2-old');
+    expect(audioOf(player).playbackRate).toBe(1.08);
+  });
+
+  it('drops buffered tracks when switching playlist or tearing down', async () => {
+    const player = new Player([freshTrack(1), freshTrack(2)]);
+    refreshWith(player);
+    player.setPlaylist('discography', 'Label discography', [freshTrack(10)]);
+    player.jumpTo('cart', 0);
+    await settle();
+    audioOf(player).dispatchEvent(new Event('playing'));
+    await settle();
+    const buffered = preloadedOf(player).get('https://t4.bcbits.com/stream/track-2-old')!;
+
+    player.selectPlaylist('discography');
+
+    expect(preloadedOf(player).size).toBe(0);
+    expect(buffered.getAttribute('src')).toBeNull();
+
+    player.jumpTo('cart', 0);
+    await settle();
+    audioOf(player).dispatchEvent(new Event('playing'));
+    await settle();
+    const rebuffered = preloadedOf(player).get('https://t4.bcbits.com/stream/track-2-old')!;
+    player.destroy();
+
+    expect(preloadedOf(player).size).toBe(0);
+    expect(rebuffered.getAttribute('src')).toBeNull();
+  });
+
   it('ignores events from elements that are only buffering', async () => {
     const player = new Player([freshTrack(1), freshTrack(2), freshTrack(3)]);
     refreshWith(player);
