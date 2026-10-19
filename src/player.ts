@@ -207,10 +207,12 @@ export class Player {
   }
 
   setPlaylist(id: PlaylistId, label: string, tracks: PlaylistTrack[]) {
-    const isNew = !this.playlists.has(id);
+    const previous = this.playlists.get(id);
+    const isNew = !previous;
+    // A reload replaces the playlist mid-playback; it still counts as played.
     const state: PlaylistState = {
       label, tracks, lastIndex: 0, statusMsg: '', statusKind: 'info',
-      reversed: !!this.reversedPlaylists[id], started: false, nextIsCurrent: false,
+      reversed: !!this.reversedPlaylists[id], started: previous?.started ?? false, nextIsCurrent: false,
     };
     state.lastIndex = firstPlayable(state);
     this.playlists.set(id, state);
@@ -466,7 +468,11 @@ export class Player {
     state.reversed = reversed;
     if (state.started || state.tracks.length === 0) return;
     const first = firstPlayable(state);
-    if (id === this.activeId) this.loadTrack(first, true);
+    if (id === this.activeId) {
+      // Never pull the bar away from a track that is playing or about to.
+      if (!this.audio.paused || this.playPending) return;
+      this.loadTrack(first, true);
+    }
     else state.lastIndex = first;
   }
 

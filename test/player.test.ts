@@ -704,6 +704,32 @@ describe('Player reverse order', () => {
     expect(player.firstTrackIndex('discography')).toBe(5);
   });
 
+  it('moves to the last release when the saved choice arrives after the playlist loaded', () => {
+    let deliver: ((result: object) => void) | undefined;
+    (globalThis as unknown as { chrome: unknown }).chrome = {
+      storage: { local: { get: (_keys: unknown, callback?: (result: object) => void) => { deliver = callback; }, set: vi.fn() } },
+    };
+    const player = new Player(threeReleases());
+    expect(currentTitle(player)).toBe('Track 1');
+
+    deliver!({ reversedPlaylists: { cart: true } });
+
+    expect(currentTitle(player)).toBe('Track 6');
+  });
+
+  it('keeps playing when reversing after the playlist was reloaded mid-track', async () => {
+    stubStorage();
+    const player = new Player(threeReleases());
+    player.jumpTo('cart', 3);
+    await settle();
+    player.setPlaylist('cart', 'Cart', threeReleases());
+
+    reverseButton(player).click();
+
+    expect(audioOf(player).src).toBe('https://t4.bcbits.com/stream/track-4-old');
+    expect(audioOf(player).paused).toBe(false);
+  });
+
   it('keeps the chosen track when reversing after something has played', async () => {
     stubStorage();
     const player = new Player(threeReleases());
