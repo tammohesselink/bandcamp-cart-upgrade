@@ -199,6 +199,73 @@ describe('Player stream link refresh', () => {
   });
 });
 
+function preloadedOf(player: Player): Map<string, HTMLAudioElement> {
+  return (player as unknown as { preloaded: Map<string, HTMLAudioElement> }).preloaded;
+}
+
+describe('Player preloading upcoming tracks', () => {
+  it('refreshes the links of the next four playable tracks and buffers them while a track plays', async () => {
+    const player = new Player([
+      freshTrack(1),
+      expiredTrack(2),
+      freshTrack(3, { unplayable: true, streamUrl: null }),
+      freshTrack(4),
+      expiredTrack(5),
+      freshTrack(6),
+      freshTrack(7),
+    ]);
+    const refresh = refreshWith(player);
+    player.jumpTo('cart', 0);
+    await settle();
+
+    audioOf(player).dispatchEvent(new Event('playing'));
+    await settle();
+
+    expect(refresh.mock.calls.map(([track]) => track.trackTitle)).toEqual(['Track 2', 'Track 5']);
+    expect([...preloadedOf(player).keys()]).toEqual([
+      'https://t4.bcbits.com/stream/track-2-new',
+      'https://t4.bcbits.com/stream/track-4-old',
+      'https://t4.bcbits.com/stream/track-5-new',
+      'https://t4.bcbits.com/stream/track-6-old',
+    ]);
+    expect(preloadedOf(player).get('https://t4.bcbits.com/stream/track-2-new')!.preload).toBe('auto');
+  });
+
+  it('plays the next track from its buffered element without refetching its link', async () => {
+    const player = new Player([freshTrack(1), expiredTrack(2)]);
+    const refresh = refreshWith(player);
+    player.jumpTo('cart', 0);
+    await settle();
+    audioOf(player).dispatchEvent(new Event('playing'));
+    await settle();
+    const buffered = preloadedOf(player).get('https://t4.bcbits.com/stream/track-2-new')!;
+    const first = audioOf(player);
+
+    first.dispatchEvent(new Event('ended'));
+    await settle();
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(audioOf(player)).toBe(buffered);
+    expect(audioOf(player).paused).toBe(false);
+    expect(first.getAttribute('src')).toBeNull();
+    expect(preloadedOf(player).size).toBe(0);
+  });
+
+  it('ignores events from elements that are only buffering', async () => {
+    const player = new Player([freshTrack(1), freshTrack(2), freshTrack(3)]);
+    refreshWith(player);
+    player.jumpTo('cart', 0);
+    await settle();
+    audioOf(player).dispatchEvent(new Event('playing'));
+    await settle();
+
+    preloadedOf(player).get('https://t4.bcbits.com/stream/track-2-old')!.dispatchEvent(new Event('ended'));
+    await settle();
+
+    expect(audioOf(player).src).toBe('https://t4.bcbits.com/stream/track-1-old');
+  });
+});
+
 describe('Player with a removed track still loaded', () => {
   it('moves on to the next track when the removed track can no longer stream', async () => {
     const otherRelease = 'https://solardrift.bandcamp.com/album/other';
