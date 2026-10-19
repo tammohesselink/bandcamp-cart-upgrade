@@ -1111,55 +1111,47 @@ export class Player {
       badge.textContent = inCartAsAlbum ? '✓ In cart (full album)' : '✓ In cart';
       this.cartActionsEl.append(badge, removeBtn);
     } else {
-      if (track.releaseType === 'album' && track.trackId !== null) {
-        const addTrackBtn = btn('+ Track', 'bcp-cart-action-btn');
-        if (track.purchasable) {
-          addTrackBtn.title = 'Add this track to cart';
-          addTrackBtn.addEventListener('click', async () => {
-            addTrackBtn.disabled = true;
-            const ok = await this.onCartAdd?.(track, 'track');
-            if (ok === false) {
-              addTrackBtn.classList.add('bcp-disabled');
-              addTrackBtn.title = 'Only full release for sale';
-            } else {
-              addTrackBtn.disabled = false;
-            }
-          });
-        } else {
-          addTrackBtn.classList.add('bcp-disabled');
-          addTrackBtn.title = 'Only full release for sale';
-        }
+      // Always show both buttons so the layout is the same for every track.
+      // A single-track release is added through "+ Track" (the track is the
+      // release), so "+ Release" is greyed out; an album track without a track
+      // id can only be bought as part of the release.
+      const isAlbum = track.releaseType === 'album';
+      const trackAddType: 'track' | 'release' | null = !isAlbum
+        ? 'release'
+        : track.trackId !== null ? 'track' : null;
 
-        const addReleaseBtn = btn('+ Release', 'bcp-cart-action-btn');
+      const addTrackBtn = btn('+ Track', 'bcp-cart-action-btn');
+      if (trackAddType !== null && track.purchasable) {
+        addTrackBtn.title = 'Add this track to cart';
+        addTrackBtn.addEventListener('click', async () => {
+          addTrackBtn.disabled = true;
+          const ok = await this.onCartAdd?.(track, trackAddType);
+          if (ok === false) {
+            addTrackBtn.classList.add('bcp-disabled');
+            addTrackBtn.title = 'Only full release for sale';
+          } else {
+            addTrackBtn.disabled = false;
+          }
+        });
+      } else {
+        addTrackBtn.classList.add('bcp-disabled');
+        addTrackBtn.title = 'Only full release for sale';
+      }
+
+      const addReleaseBtn = btn('+ Release', 'bcp-cart-action-btn');
+      if (isAlbum) {
         addReleaseBtn.title = 'Add the full release to cart';
         addReleaseBtn.addEventListener('click', async () => {
           addReleaseBtn.disabled = true;
           await this.onCartAdd?.(track, 'release');
           addReleaseBtn.disabled = false;
         });
-
-        this.cartActionsEl.append(addTrackBtn, addReleaseBtn);
       } else {
-        const addCartBtn = btn('+ Cart', 'bcp-cart-action-btn');
-        if (track.purchasable) {
-          addCartBtn.title = 'Add to cart';
-          addCartBtn.addEventListener('click', async () => {
-            addCartBtn.disabled = true;
-            const ok = await this.onCartAdd?.(track, 'release');
-            if (ok === false) {
-              addCartBtn.classList.add('bcp-disabled');
-              addCartBtn.title = 'Only full release for sale';
-            } else {
-              addCartBtn.disabled = false;
-            }
-          });
-        } else {
-          addCartBtn.classList.add('bcp-disabled');
-          addCartBtn.title = 'Only full release for sale';
-        }
-
-        this.cartActionsEl.append(addCartBtn);
+        addReleaseBtn.classList.add('bcp-disabled');
+        addReleaseBtn.title = 'Single-track release: use + Track';
       }
+
+      this.cartActionsEl.append(addTrackBtn, addReleaseBtn);
     }
   }
 
