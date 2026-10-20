@@ -255,6 +255,42 @@ function resolveUrl(href: string, base: string): string | null {
   }
 }
 
+// Fan-written text (comments, about/credits, lyrics) can quote the ownership
+// phrases verbatim, so those sections are stripped before text matching.
+const USER_CONTENT_CLASSES = ['tralbumData', 'lyricsText', 'collected-by', 'comment'];
+const OWNED_PATTERNS = [/you\s+own\s+this/i, /already\s+in\s+your\s+collection/i];
+
+// Drops <script>/<style> blocks and the fan-written sections above, so a
+// quoted ownership phrase inside them can't match. Best-effort: a class
+// token's open tag is matched to its first same-named closing tag, which can
+// under-strip deeply nested markup — an acceptable trade for avoiding a full
+// DOM parse on every release fetch (see parseTralbum's note on content-script
+// performance).
+function stripUserContent(html: string): string {
+  let out = stripHtmlComments(html)
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '');
+  for (const token of USER_CONTENT_CLASSES) {
+    const re = new RegExp(
+      `<(\\w+)\\b[^>]*\\bclass\\s*=\\s*(?:"[^"]*\\b${token}\\b[^"]*"|'[^']*\\b${token}\\b[^']*')[^>]*>[\\s\\S]*?<\\/\\1>`,
+      'gi'
+    );
+    out = out.replace(re, '');
+  }
+  return out;
+}
+
+// The fetch must carry the fan's session cookies; a logged-out page never
+// reports ownership. The tralbum is_purchased flag is authoritative when
+// present (true or false) — the rendered "you own this" buy panel is only a
+// fallback for pages where Bandcamp doesn't set the flag at all (null/undefined).
+export function isReleaseOwned(html: string): boolean {
+  const isPurchased = extractTralbumData(html)?.is_purchased;
+  if (isPurchased != null) return isPurchased;
+
+  return OWNED_PATTERNS.some((pattern) => pattern.test(stripUserContent(html)));
+}
+
 function safeOrigin(url: string): string {
   try {
     return new URL(url).origin;

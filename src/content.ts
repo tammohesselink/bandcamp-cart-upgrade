@@ -1,7 +1,7 @@
 import type { CartItem, PlaylistTrack, SavedCartItem } from './types';
-import { parseTralbum } from './bandcamp';
+import { parseTralbum, isReleaseOwned } from './bandcamp';
 import { Player } from './player';
-import { probeCart, probeDiscography, injectDiscographyButton, injectRestoreCartButton, injectRemovePurchasedButton } from './probe';
+import { probeCart, probeDiscography, injectDiscographyButton, injectRestoreCartButton, injectRemovePurchasedButton, injectRemoveAlreadyOwnedButton } from './probe';
 import { addSnapshotIfChanged, loadSnapshots, saveSnapshots } from './cart-history';
 import { openCartHistoryModal } from './cart-history-modal';
 import { normalizeUrl } from './url';
@@ -66,6 +66,11 @@ let activeDiscoIndexMap: Map<string, number> = new Map();
 // req=del needs this id (assigned when the item entered the cart), not the tralbum id.
 // Populated from cart_data.items in cart operation responses.
 let cartLineItemIds = new Map<string, number>();
+
+// True while a bulk cart-cleanup flow (already-owned check, pending-purchase
+// removal, or history restore) is running. They all mutate the same cart and
+// each reloads the page when done, so two running at once would race.
+let cartCleanupInFlight = false;
 
 function updateCartLineItemIds(items: Record<string, unknown>[]): void {
   for (const item of items) {
@@ -308,7 +313,15 @@ async function removeCartItem(item: SavedCartItem): Promise<boolean> {
 
     const track = tracks[0]!;
     const isTrackItem = item.purchaseType === 'track';
-    tralbumId = isTrackItem ? (track.trackId ?? track.releaseId) : track.releaseId;
+    if (isTrackItem) {
+      tralbumId = track.trackId ?? track.releaseId;
+    } else {
+      // Album purchases can link to one of the album's own track pages, so the
+      // fetched "release page" can really be a track page whose own releaseId
+      // is the track's, not the album's — resolve the album's copy instead.
+      const albumTrack = track.releaseType === 'track' ? await albumTrackFor(track) : null;
+      tralbumId = albumTrack?.releaseId ?? track.releaseId;
+    }
     if (tralbumId === null) {
       console.error('[bcp] cart-remove: no tralbum id for', item.url, track);
       return false;
@@ -505,15 +518,124 @@ function setupRemovePurchasedButton(items: SavedCartItem[]): void {
   const btn = injectRemovePurchasedButton(items.length);
   if (!btn) return;
   btn.addEventListener('click', async () => {
-    if (!await showRemovePurchasedConfirm(items)) return;
-    btn.disabled = true;
-    for (let i = 0; i < items.length; i++) {
-      const label = items[i]!.title || items[i]!.url;
-      btn.textContent = `Removing "${label}" (${i + 1} / ${items.length})…`;
-      await removeCartItem(items[i]!);
+    if (cartCleanupInFlight) {
+      alert('Another cart cleanup is already in progress — please wait for it to finish.');
+      return;
     }
-    clearPendingPurchase();
-    location.reload();
+    if (!await showRemovePurchasedConfirm(items)) return;
+    cartCleanupInFlight = true;
+    btn.disabled = true;
+    try {
+      for (let i = 0; i < items.length; i++) {
+        const label = items[i]!.title || items[i]!.url;
+        btn.textContent = `Removing "${label}" (${i + 1} / ${items.length})…`;
+        await removeCartItem(items[i]!);
+      }
+      clearPendingPurchase();
+      location.reload();
+    } finally {
+      cartCleanupInFlight = false;
+    }
+  });
+}
+
+// Album purchases can link to one of the album's track pages; owning just
+// that track doesn't mean owning the album, so those are checked on the album
+// page. Returns null when the release page couldn't be fetched.
+async function isCartItemOwned(item: CartItem): Promise<boolean | null> {
+  const html = await fetchRawHtml(item.url);
+  if (html === null) return null;
+  if (item.purchaseType === 'album') {
+    const albumUrl = parseTralbum(html, item.url)[0]?.albumUrl;
+    if (albumUrl) {
+      const albumHtml = await fetchRawHtml(albumUrl);
+      return albumHtml === null ? null : isReleaseOwned(albumHtml);
+    }
+  }
+  return isReleaseOwned(html);
+}
+
+// Checks every cart item against Bandcamp's own ownership state and removes
+// whichever ones the fan already owns. Catches purchases the extension never
+// saw — e.g. checking the same cart out in a separate anonymous window.
+function setupRemoveAlreadyOwnedButton(): void {
+  const btn = injectRemoveAlreadyOwnedButton();
+  if (!btn) return;
+  const idleLabel = btn.textContent ?? 'Remove already purchased items from cart';
+  const reset = () => {
+    btn.disabled = false;
+    btn.textContent = idleLabel;
+  };
+  btn.addEventListener('click', async () => {
+    if (cartCleanupInFlight) {
+      alert('Another cart cleanup is already in progress — please wait for it to finish.');
+      return;
+    }
+    cartCleanupInFlight = true;
+    btn.disabled = true;
+
+    try {
+      let owned: CartItem[];
+      let uncheckedNote: string;
+      try {
+        // Re-probed on click: items can be added to the sidecart without a reload.
+        const cartItems = probeCart();
+        const ownedItems: CartItem[] = [];
+        const unchecked: CartItem[] = [];
+        for (let i = 0; i < cartItems.length; i++) {
+          const item = cartItems[i]!;
+          btn.textContent = `Checking "${item.title || item.url}" (${i + 1} / ${cartItems.length})…`;
+          const isOwned = await isCartItemOwned(item);
+          if (isOwned === null) unchecked.push(item);
+          else if (isOwned) ownedItems.push(item);
+        }
+        owned = ownedItems;
+        uncheckedNote = unchecked.length > 0
+          ? `\n\nCould not check ${unchecked.length} item${unchecked.length !== 1 ? 's' : ''}: ${unchecked.map((i) => i.title || i.url).join(', ')}`
+          : '';
+      } catch (err) {
+        console.error('[bcp] remove already owned: checking cart failed', err);
+        reset();
+        alert('Checking the cart for already-purchased items failed. See the console for details.');
+        return;
+      }
+
+      if (owned.length === 0) {
+        reset();
+        alert(`No already-purchased items found in your cart.${uncheckedNote}`);
+        return;
+      }
+
+      const toRemove: SavedCartItem[] = owned.map((i) => ({ url: i.url, title: i.title, artist: i.artist, purchaseType: i.purchaseType }));
+      if (!await showRemovePurchasedConfirm(toRemove)) {
+        reset();
+        return;
+      }
+
+      try {
+        const failed: SavedCartItem[] = [];
+        for (let i = 0; i < toRemove.length; i++) {
+          const item = toRemove[i]!;
+          btn.textContent = `Removing "${item.title || item.url}" (${i + 1} / ${toRemove.length})…`;
+          if (!await removeCartItem(item)) failed.push(item);
+        }
+        if (failed.length > 0 || uncheckedNote) {
+          const failedNote = failed.length > 0
+            ? `\n\nCould not remove: ${failed.map((i) => i.title || i.url).join(', ')}`
+            : '';
+          alert(`Removed ${toRemove.length - failed.length} of ${toRemove.length} already-purchased items.${failedNote}${uncheckedNote}`);
+        }
+        location.reload();
+      } catch (err) {
+        // Some items may already be gone from the live cart even though this threw —
+        // reload so the sidecart reflects the real cart state instead of a stale one.
+        console.error('[bcp] remove already owned: removing items failed', err);
+        alert('Removing already-purchased items from the cart failed partway through. Reloading to show the current cart state — see the console for details.');
+        location.reload();
+      }
+    } finally {
+      cartCleanupInFlight = false;
+    }
   });
 }
 
@@ -686,6 +808,8 @@ async function main() {
   const settings = await loadSettings();
 
   if (!chrome.extension.inIncognitoContext) {
+    setupRemoveAlreadyOwnedButton();
+
     const liveItems: SavedCartItem[] = cartItems.map((i) => ({ url: i.url, title: i.title, purchaseType: i.purchaseType }));
     const snapshots = addSnapshotIfChanged(await loadSnapshots(), liveItems);
     saveSnapshots(snapshots).catch(() => {});
@@ -694,40 +818,49 @@ async function main() {
       const btn = injectRestoreCartButton(snapshots.length);
       if (btn) {
         btn.addEventListener('click', async () => {
-          const modalInitialItems: SavedCartItem[] = probeCart().map((i) => ({ url: i.url, title: i.title, purchaseType: i.purchaseType }));
-          // Filled by prepareAdds and used once by the matching add; a later
-          // single "Add back" fetches a fresh copy.
-          const preparedTracks = new Map<string, PlaylistTrack[]>();
-          const changedCount = await openCartHistoryModal({
-            snapshots,
-            initialItems: modalInitialItems,
-            addItem: async (item, cartLengthHint) => {
-              const prepared = preparedTracks.get(item.url);
-              preparedTracks.delete(item.url);
-              const ok = await addCartItem(item, cartLengthHint, prepared);
-              if (ok) addSidecartItem(item.url, item.title, null, item.purchaseType === 'track' ? 'track' : 'release');
-              return ok;
-            },
-            removeItem: async (item) => {
-              const ok = await removeCartItem(item);
-              if (ok) removeSidecartItem(item.url);
-              return ok;
-            },
-            prepareAdds: async (items, onProgress) => {
-              let done = 0;
-              await mapWithConcurrency(
-                items,
-                RELEASE_FETCH_CONCURRENCY,
-                (item) => fetchTracksForUrl(item.url, LIVE_DATA_MAX_AGE_MS, { bulk: true }),
-                (tracks, item) => {
-                  preparedTracks.set(item.url, tracks);
-                  done++;
-                  onProgress(done);
-                }
-              );
-            },
-          });
-          if (changedCount > 0) location.reload();
+          if (cartCleanupInFlight) {
+            alert('Another cart cleanup is already in progress — please wait for it to finish.');
+            return;
+          }
+          cartCleanupInFlight = true;
+          try {
+            const modalInitialItems: SavedCartItem[] = probeCart().map((i) => ({ url: i.url, title: i.title, purchaseType: i.purchaseType }));
+            // Filled by prepareAdds and used once by the matching add; a later
+            // single "Add back" fetches a fresh copy.
+            const preparedTracks = new Map<string, PlaylistTrack[]>();
+            const changedCount = await openCartHistoryModal({
+              snapshots,
+              initialItems: modalInitialItems,
+              addItem: async (item, cartLengthHint) => {
+                const prepared = preparedTracks.get(item.url);
+                preparedTracks.delete(item.url);
+                const ok = await addCartItem(item, cartLengthHint, prepared);
+                if (ok) addSidecartItem(item.url, item.title, null, item.purchaseType === 'track' ? 'track' : 'release');
+                return ok;
+              },
+              removeItem: async (item) => {
+                const ok = await removeCartItem(item);
+                if (ok) removeSidecartItem(item.url);
+                return ok;
+              },
+              prepareAdds: async (items, onProgress) => {
+                let done = 0;
+                await mapWithConcurrency(
+                  items,
+                  RELEASE_FETCH_CONCURRENCY,
+                  (item) => fetchTracksForUrl(item.url, LIVE_DATA_MAX_AGE_MS, { bulk: true }),
+                  (tracks, item) => {
+                    preparedTracks.set(item.url, tracks);
+                    done++;
+                    onProgress(done);
+                  }
+                );
+              },
+            });
+            if (changedCount > 0) location.reload();
+          } finally {
+            cartCleanupInFlight = false;
+          }
         });
       }
     }
@@ -1444,6 +1577,22 @@ async function fetchRelease(url: string, { bulk = false } = {}): Promise<{ track
   } catch (err) {
     console.warn('[bcp] Failed to fetch', url, err);
     return { tracks: [], problem: 'fetch-failed' };
+  }
+}
+
+// Bypasses the track-metadata cache: ownership can change between visits to
+// the same release page, so a stale cached fetch would miss a fresh purchase.
+async function fetchRawHtml(url: string): Promise<string | null> {
+  try {
+    const response = await sendBcpMessage({ type: 'fetch', url });
+    if (response.error) {
+      console.error('[bcp] fetchRawHtml: fetch error for', url, response.error);
+      return null;
+    }
+    return response.html ?? null;
+  } catch (err) {
+    console.error('[bcp] fetchRawHtml: exception for', url, err);
+    return null;
   }
 }
 

@@ -127,6 +127,27 @@ export function injectRemovePurchasedButton(count: number): HTMLButtonElement | 
   return button;
 }
 
+// Always-available button (unlike injectRemovePurchasedButton above, which only
+// appears after the extension's own private-checkout flow) that lets the fan
+// check the cart against Bandcamp's own ownership state. Covers items bought
+// through a checkout the extension didn't initiate — e.g. checking out the
+// same cart in a separate anonymous/incognito window.
+export function injectRemoveAlreadyOwnedButton(): HTMLButtonElement | null {
+  const anchor = document.getElementById('sidecart')
+    ?? document.querySelector('#sidecartReveal')
+    ?? document.getElementById('sidecartBody');
+  if (!anchor) return null;
+
+  const existing = document.querySelector<HTMLButtonElement>('.bcp-remove-owned-btn');
+  if (existing) return existing;
+
+  const button = document.createElement('button');
+  button.className = 'buttonLink bcp-remove-owned-btn';
+  button.textContent = 'Remove already purchased items from cart';
+  anchor.insertAdjacentElement('afterend', button);
+  return button;
+}
+
 
 // --- Discography DOM probe ---------------------------------------------------
 

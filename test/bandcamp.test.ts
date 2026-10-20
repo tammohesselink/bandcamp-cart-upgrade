@@ -1,7 +1,7 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { describe, it, expect } from 'vitest';
-import { parseTralbum } from '../src/bandcamp';
+import { parseTralbum, isReleaseOwned } from '../src/bandcamp';
 
 function fixture(name: string): string {
   return readFileSync(join(__dirname, 'fixtures', name), 'utf-8');
@@ -263,6 +263,82 @@ describe('parseTralbum — invalid HTML', () => {
     );
   });
 });
+
+describe('isReleaseOwned', () => {
+  const cases: Array<{ name: string; html: string; expected: boolean }> = [
+    {
+      name: 'detects "you own this" in the buy panel',
+      html: '<div class="tralbumInfo"><p>you own this</p></div>',
+      expected: true,
+    },
+    {
+      name: 'is case-insensitive',
+      html: '<p>You Own This Digital Album</p>',
+      expected: true,
+    },
+    {
+      name: 'tolerates extra whitespace between words',
+      html: '<p>you  own   this</p>',
+      expected: true,
+    },
+    {
+      name: 'detects the "already in your collection" fallback phrasing',
+      html: '<p>Already in your collection</p>',
+      expected: true,
+    },
+    {
+      name: 'returns false for a normal unpurchased buy panel',
+      html: '<li class="buyItem digital">Buy Digital Album $7</li>',
+      expected: false,
+    },
+    {
+      name: 'returns false for an empty page',
+      html: '',
+      expected: false,
+    },
+    {
+      name: 'detects the tralbum is_purchased flag',
+      html: tralbumPage({ is_purchased: true }),
+      expected: true,
+    },
+    {
+      name: 'returns false when the tralbum is_purchased flag is null',
+      html: tralbumPage({ is_purchased: null }),
+      expected: false,
+    },
+    {
+      name: 'trusts an explicit is_purchased:false over a stray ownership phrase elsewhere on the page',
+      html: tralbumPage({ is_purchased: false }) + '<p>you own this</p>',
+      expected: false,
+    },
+    {
+      name: 'ignores the phrase in a fan comment',
+      html: '<div class="collected-by"><div class="comment">If you own this on vinyl, get the digital too</div></div>',
+      expected: false,
+    },
+    {
+      name: 'ignores the phrase in the release about text',
+      html: '<div class="tralbumData tralbum-about">Already in your collection? Grab the remix EP</div>',
+      expected: false,
+    },
+    {
+      name: 'ignores the phrase inside a script',
+      html: '<script>var strings = { owned: "You own this" };</script>',
+      expected: false,
+    },
+  ];
+
+  for (const { name, html, expected } of cases) {
+    it(name, () => {
+      expect(isReleaseOwned(html)).toBe(expected);
+    });
+  }
+});
+
+function tralbumPage(data: Record<string, unknown>): string {
+  const attr = JSON.stringify(data).replace(/"/g, '&quot;');
+  return `<script data-tralbum="${attr}"></script>`;
+}
 
 describe('parseTralbum — album a track page belongs to', () => {
   it('reads it from the "Buy the Full Digital Album" link', () => {
