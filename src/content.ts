@@ -49,6 +49,11 @@ let activeDiscoIndexMap: Map<string, number> = new Map();
 // Populated from cart_data.items in cart operation responses.
 let cartLineItemIds = new Map<string, number>();
 
+// True while a bulk cart-cleanup flow (already-owned check, pending-purchase
+// removal, or history restore) is running. They all mutate the same cart and
+// each reloads the page when done, so two running at once would race.
+let cartCleanupInFlight = false;
+
 function updateCartLineItemIds(items: Record<string, unknown>[]): void {
   for (const item of items) {
     // cart_data.items shape: { id: <lineItemId>, item_id: <tralbumId>, item_type, url, ... }
@@ -452,6 +457,20 @@ async function addCartItem(item: SavedCartItem, cartLengthHint: number): Promise
   return false;
 }
 
+// Album purchases can link to one of the album's own track pages (see the
+// CartItem.purchaseType comment in types.ts), so the fetched "release page"
+// for such an item is really a track page — its own releaseId is the
+// track's, not the album's. Redirect to the album page to get the id that
+// req=del actually needs to remove.
+async function resolveAlbumReleaseId(url: string, track: PlaylistTrack): Promise<number | null> {
+  if (track.releaseType !== 'track') return track.releaseId;
+  const html = await fetchRawHtml(url);
+  const albumUrl = html ? findAlbumUrl(html, url) : null;
+  if (!albumUrl) return track.releaseId;
+  const albumTracks = await fetchTracksForUrl(albumUrl);
+  return albumTracks[0]?.releaseId ?? track.releaseId;
+}
+
 async function removeCartItem(item: SavedCartItem): Promise<boolean> {
   let lineItemId: number | null = cartLineItemIds.get(normalizeUrl(item.url)) ?? null;
   let tralbumId: number | null = null;
@@ -469,7 +488,9 @@ async function removeCartItem(item: SavedCartItem): Promise<boolean> {
 
     const track = tracks[0]!;
     const isTrackItem = item.purchaseType === 'track';
-    tralbumId = isTrackItem ? (track.trackId ?? track.releaseId) : track.releaseId;
+    tralbumId = isTrackItem
+      ? (track.trackId ?? track.releaseId)
+      : await resolveAlbumReleaseId(item.url, track);
     if (tralbumId === null) {
       console.error('[bcp] cart-remove: no tralbum id for', item.url, track);
       return false;
@@ -663,15 +684,24 @@ function setupRemovePurchasedButton(items: SavedCartItem[]): void {
   const btn = injectRemovePurchasedButton(items.length);
   if (!btn) return;
   btn.addEventListener('click', async () => {
-    if (!await showRemovePurchasedConfirm(items)) return;
-    btn.disabled = true;
-    for (let i = 0; i < items.length; i++) {
-      const label = items[i]!.title || items[i]!.url;
-      btn.textContent = `Removing "${label}" (${i + 1} / ${items.length})…`;
-      await removeCartItem(items[i]!);
+    if (cartCleanupInFlight) {
+      alert('Another cart cleanup is already in progress — please wait for it to finish.');
+      return;
     }
-    clearPendingPurchase();
-    location.reload();
+    if (!await showRemovePurchasedConfirm(items)) return;
+    cartCleanupInFlight = true;
+    btn.disabled = true;
+    try {
+      for (let i = 0; i < items.length; i++) {
+        const label = items[i]!.title || items[i]!.url;
+        btn.textContent = `Removing "${label}" (${i + 1} / ${items.length})…`;
+        await removeCartItem(items[i]!);
+      }
+      clearPendingPurchase();
+      location.reload();
+    } finally {
+      cartCleanupInFlight = false;
+    }
   });
 }
 
@@ -703,104 +733,124 @@ function setupRemoveAlreadyOwnedButton(): void {
     btn.textContent = idleLabel;
   };
   btn.addEventListener('click', async () => {
+    if (cartCleanupInFlight) {
+      alert('Another cart cleanup is already in progress — please wait for it to finish.');
+      return;
+    }
+    cartCleanupInFlight = true;
     btn.disabled = true;
 
-    let owned: CartItem[];
-    let uncheckedNote: string;
     try {
-      // Re-probed on click: items can be added to the sidecart without a reload.
-      const cartItems = probeCart();
-      const ownedItems: CartItem[] = [];
-      const unchecked: CartItem[] = [];
-      for (let i = 0; i < cartItems.length; i++) {
-        const item = cartItems[i]!;
-        btn.textContent = `Checking "${item.title || item.url}" (${i + 1} / ${cartItems.length})…`;
-        const isOwned = await isCartItemOwned(item);
-        if (isOwned === null) unchecked.push(item);
-        else if (isOwned) ownedItems.push(item);
-      }
-      owned = ownedItems;
-      uncheckedNote = unchecked.length > 0
-        ? `\n\nCould not check ${unchecked.length} item${unchecked.length !== 1 ? 's' : ''}: ${unchecked.map((i) => i.title || i.url).join(', ')}`
-        : '';
-    } catch (err) {
-      console.error('[bcp] remove already owned: checking cart failed', err);
-      reset();
-      alert('Checking the cart for already-purchased items failed. See the console for details.');
-      return;
-    }
-
-    if (owned.length === 0) {
-      reset();
-      alert(`No already-purchased items found in your cart.${uncheckedNote}`);
-      return;
-    }
-
-    const toRemove: SavedCartItem[] = owned.map((i) => ({ url: i.url, title: i.title, artist: i.artist, purchaseType: i.purchaseType }));
-    if (!await showRemovePurchasedConfirm(toRemove)) {
-      reset();
-      return;
-    }
-
-    try {
-      const failed: SavedCartItem[] = [];
-      for (let i = 0; i < toRemove.length; i++) {
-        const item = toRemove[i]!;
-        btn.textContent = `Removing "${item.title || item.url}" (${i + 1} / ${toRemove.length})…`;
-        if (!await removeCartItem(item)) failed.push(item);
-      }
-      if (failed.length > 0 || uncheckedNote) {
-        const failedNote = failed.length > 0
-          ? `\n\nCould not remove: ${failed.map((i) => i.title || i.url).join(', ')}`
+      let owned: CartItem[];
+      let uncheckedNote: string;
+      try {
+        // Re-probed on click: items can be added to the sidecart without a reload.
+        const cartItems = probeCart();
+        const ownedItems: CartItem[] = [];
+        const unchecked: CartItem[] = [];
+        for (let i = 0; i < cartItems.length; i++) {
+          const item = cartItems[i]!;
+          btn.textContent = `Checking "${item.title || item.url}" (${i + 1} / ${cartItems.length})…`;
+          const isOwned = await isCartItemOwned(item);
+          if (isOwned === null) unchecked.push(item);
+          else if (isOwned) ownedItems.push(item);
+        }
+        owned = ownedItems;
+        uncheckedNote = unchecked.length > 0
+          ? `\n\nCould not check ${unchecked.length} item${unchecked.length !== 1 ? 's' : ''}: ${unchecked.map((i) => i.title || i.url).join(', ')}`
           : '';
-        alert(`Removed ${toRemove.length - failed.length} of ${toRemove.length} already-purchased items.${failedNote}${uncheckedNote}`);
+      } catch (err) {
+        console.error('[bcp] remove already owned: checking cart failed', err);
+        reset();
+        alert('Checking the cart for already-purchased items failed. See the console for details.');
+        return;
       }
-      location.reload();
-    } catch (err) {
-      console.error('[bcp] remove already owned: removing items failed', err);
-      reset();
-      alert('Removing already-purchased items from the cart failed. See the console for details.');
+
+      if (owned.length === 0) {
+        reset();
+        alert(`No already-purchased items found in your cart.${uncheckedNote}`);
+        return;
+      }
+
+      const toRemove: SavedCartItem[] = owned.map((i) => ({ url: i.url, title: i.title, artist: i.artist, purchaseType: i.purchaseType }));
+      if (!await showRemovePurchasedConfirm(toRemove)) {
+        reset();
+        return;
+      }
+
+      try {
+        const failed: SavedCartItem[] = [];
+        for (let i = 0; i < toRemove.length; i++) {
+          const item = toRemove[i]!;
+          btn.textContent = `Removing "${item.title || item.url}" (${i + 1} / ${toRemove.length})…`;
+          if (!await removeCartItem(item)) failed.push(item);
+        }
+        if (failed.length > 0 || uncheckedNote) {
+          const failedNote = failed.length > 0
+            ? `\n\nCould not remove: ${failed.map((i) => i.title || i.url).join(', ')}`
+            : '';
+          alert(`Removed ${toRemove.length - failed.length} of ${toRemove.length} already-purchased items.${failedNote}${uncheckedNote}`);
+        }
+        location.reload();
+      } catch (err) {
+        // Some items may already be gone from the live cart even though this threw —
+        // reload so the sidecart reflects the real cart state instead of a stale one.
+        console.error('[bcp] remove already owned: removing items failed', err);
+        alert('Removing already-purchased items from the cart failed partway through. Reloading to show the current cart state — see the console for details.');
+        location.reload();
+      }
+    } finally {
+      cartCleanupInFlight = false;
     }
   });
 }
 
 async function doRestore(button: HTMLButtonElement, toAdd: SavedCartItem[], toRemove: SavedCartItem[]): Promise<void> {
-  button.disabled = true;
-  let changed = 0;
-  const errors: string[] = [];
-  const total = toAdd.length + toRemove.length;
-
-  for (let i = 0; i < toAdd.length; i++) {
-    button.textContent = `Restoring ${i + 1} / ${total}…`;
-    const ok = await addCartItem(toAdd[i]!, probeCart().length + i);
-    if (ok) {
-      changed++;
-    } else {
-      errors.push(`Could not restore: ${toAdd[i]!.title || toAdd[i]!.url}`);
-    }
-  }
-
-  for (let i = 0; i < toRemove.length; i++) {
-    button.textContent = `Restoring ${toAdd.length + i + 1} / ${total}…`;
-    const ok = await removeCartItem(toRemove[i]!);
-    if (ok) {
-      changed++;
-    } else {
-      errors.push(`Remove failed: ${toRemove[i]!.title || toRemove[i]!.url}`);
-    }
-  }
-
-  if (changed === 0 && total > 0) {
-    button.disabled = false;
-    button.textContent = 'Restore failed';
-    const summary = errors.length > 0
-      ? errors.slice(0, 3).join('\n') + (errors.length > 3 ? `\n…and ${errors.length - 3} more` : '')
-      : 'No changes could be made. Check the DevTools console for details.';
-    alert(`Cart restore failed:\n\n${summary}`);
+  if (cartCleanupInFlight) {
+    alert('Another cart cleanup is already in progress — please wait for it to finish.');
     return;
   }
+  cartCleanupInFlight = true;
+  button.disabled = true;
+  try {
+    let changed = 0;
+    const errors: string[] = [];
+    const total = toAdd.length + toRemove.length;
 
-  location.reload();
+    for (let i = 0; i < toAdd.length; i++) {
+      button.textContent = `Restoring ${i + 1} / ${total}…`;
+      const ok = await addCartItem(toAdd[i]!, probeCart().length + i);
+      if (ok) {
+        changed++;
+      } else {
+        errors.push(`Could not restore: ${toAdd[i]!.title || toAdd[i]!.url}`);
+      }
+    }
+
+    for (let i = 0; i < toRemove.length; i++) {
+      button.textContent = `Restoring ${toAdd.length + i + 1} / ${total}…`;
+      const ok = await removeCartItem(toRemove[i]!);
+      if (ok) {
+        changed++;
+      } else {
+        errors.push(`Remove failed: ${toRemove[i]!.title || toRemove[i]!.url}`);
+      }
+    }
+
+    if (changed === 0 && total > 0) {
+      button.disabled = false;
+      button.textContent = 'Restore failed';
+      const summary = errors.length > 0
+        ? errors.slice(0, 3).join('\n') + (errors.length > 3 ? `\n…and ${errors.length - 3} more` : '')
+        : 'No changes could be made. Check the DevTools console for details.';
+      alert(`Cart restore failed:\n\n${summary}`);
+      return;
+    }
+
+    location.reload();
+  } finally {
+    cartCleanupInFlight = false;
+  }
 }
 
 main().catch(console.error);
