@@ -258,6 +258,11 @@ describe('isReleaseOwned', () => {
       expected: false,
     },
     {
+      name: 'trusts an explicit is_purchased:false over a stray ownership phrase elsewhere on the page',
+      html: tralbumPage({ is_purchased: false }) + '<p>you own this</p>',
+      expected: false,
+    },
+    {
       name: 'ignores the phrase in a fan comment',
       html: '<div class="collected-by"><div class="comment">If you own this on vinyl, get the digital too</div></div>',
       expected: false,

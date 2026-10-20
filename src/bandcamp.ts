@@ -168,11 +168,13 @@ const USER_CONTENT_SELECTOR = 'script, style, .tralbumData, .lyricsText, .collec
 const OWNED_PATTERNS = [/you\s+own\s+this/i, /already\s+in\s+your\s+collection/i];
 
 // The fetch must carry the fan's session cookies; a logged-out page never
-// reports ownership. The tralbum is_purchased flag is checked first, with the
-// rendered "you own this" buy panel as a fallback.
+// reports ownership. The tralbum is_purchased flag is authoritative when
+// present (true or false) — the rendered "you own this" buy panel is only a
+// fallback for pages where Bandcamp doesn't set the flag at all (null/undefined).
 export function isReleaseOwned(html: string): boolean {
   const doc = new DOMParser().parseFromString(html, 'text/html');
-  if (extractTralbumData(doc)?.is_purchased) return true;
+  const isPurchased = extractTralbumData(doc)?.is_purchased;
+  if (isPurchased != null) return isPurchased;
 
   doc.querySelectorAll(USER_CONTENT_SELECTOR).forEach((el) => el.remove());
   const text = doc.body?.textContent ?? '';

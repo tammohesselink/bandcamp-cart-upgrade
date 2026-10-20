@@ -704,34 +704,45 @@ function setupRemoveAlreadyOwnedButton(): void {
   };
   btn.addEventListener('click', async () => {
     btn.disabled = true;
+
+    let owned: CartItem[];
+    let uncheckedNote: string;
     try {
       // Re-probed on click: items can be added to the sidecart without a reload.
       const cartItems = probeCart();
-      const owned: CartItem[] = [];
+      const ownedItems: CartItem[] = [];
       const unchecked: CartItem[] = [];
       for (let i = 0; i < cartItems.length; i++) {
         const item = cartItems[i]!;
         btn.textContent = `Checking "${item.title || item.url}" (${i + 1} / ${cartItems.length})…`;
         const isOwned = await isCartItemOwned(item);
         if (isOwned === null) unchecked.push(item);
-        else if (isOwned) owned.push(item);
+        else if (isOwned) ownedItems.push(item);
       }
-      const uncheckedNote = unchecked.length > 0
+      owned = ownedItems;
+      uncheckedNote = unchecked.length > 0
         ? `\n\nCould not check ${unchecked.length} item${unchecked.length !== 1 ? 's' : ''}: ${unchecked.map((i) => i.title || i.url).join(', ')}`
         : '';
+    } catch (err) {
+      console.error('[bcp] remove already owned: checking cart failed', err);
+      reset();
+      alert('Checking the cart for already-purchased items failed. See the console for details.');
+      return;
+    }
 
-      if (owned.length === 0) {
-        reset();
-        alert(`No already-purchased items found in your cart.${uncheckedNote}`);
-        return;
-      }
+    if (owned.length === 0) {
+      reset();
+      alert(`No already-purchased items found in your cart.${uncheckedNote}`);
+      return;
+    }
 
-      const toRemove: SavedCartItem[] = owned.map((i) => ({ url: i.url, title: i.title, artist: i.artist, purchaseType: i.purchaseType }));
-      if (!await showRemovePurchasedConfirm(toRemove)) {
-        reset();
-        return;
-      }
+    const toRemove: SavedCartItem[] = owned.map((i) => ({ url: i.url, title: i.title, artist: i.artist, purchaseType: i.purchaseType }));
+    if (!await showRemovePurchasedConfirm(toRemove)) {
+      reset();
+      return;
+    }
 
+    try {
       const failed: SavedCartItem[] = [];
       for (let i = 0; i < toRemove.length; i++) {
         const item = toRemove[i]!;
@@ -746,9 +757,9 @@ function setupRemoveAlreadyOwnedButton(): void {
       }
       location.reload();
     } catch (err) {
-      console.error('[bcp] remove already owned: failed', err);
+      console.error('[bcp] remove already owned: removing items failed', err);
       reset();
-      alert('Checking the cart for already-purchased items failed. See the console for details.');
+      alert('Removing already-purchased items from the cart failed. See the console for details.');
     }
   });
 }
@@ -953,7 +964,7 @@ async function main() {
   const settings = await loadSettings();
 
   if (!chrome.extension.inIncognitoContext) {
-    if (cartItems.length > 0) setupRemoveAlreadyOwnedButton();
+    setupRemoveAlreadyOwnedButton();
 
     const liveItems: SavedCartItem[] = cartItems.map((i) => ({ url: i.url, title: i.title, purchaseType: i.purchaseType }));
     const snapshots = addSnapshotIfChanged(await loadSnapshots(), liveItems);
