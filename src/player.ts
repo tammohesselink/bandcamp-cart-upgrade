@@ -1,8 +1,10 @@
 import type { PlaylistId, PlaylistTrack } from './types';
 import { PLAYER_CSS } from './styles';
 import { normalizeUrl } from './url';
+import { isStreamFresh } from './cache';
 
-type CartAddType = 'track' | 'release';
+// 'album' adds the album a single-track page belongs to (track.albumUrl).
+type CartAddType = 'track' | 'release' | 'album';
 
 const TEMPO_RANGES = [
   { label: '±6',   min: 0.94, max: 1.06 },
@@ -13,12 +15,26 @@ const TEMPO_RANGES = [
 
 type StatusKind = 'loading' | 'error' | 'warn' | 'info';
 
+// How many upcoming tracks get a fresh stream link and start buffering while
+// the current one plays.
+const PRELOAD_AHEAD = 4;
+// How long preloading leaves a track alone after its refresh failed.
+const PRELOAD_RETRY_AFTER_MS = 10 * 60 * 1000;
+
 interface PlaylistState {
   label: string;
   tracks: PlaylistTrack[];
   lastIndex: number;
   statusMsg: string;
   statusKind: StatusKind;
+  // Plays the releases last to first; tracks within a release keep their order.
+  reversed: boolean;
+  // Whether anything in the playlist was played; until then it sits on its
+  // first track in play order, which moves when the order is reversed.
+  started: boolean;
+  // The playing track was removed and lastIndex already points at the track
+  // that plays after it, so next() plays lastIndex itself.
+  nextIsCurrent: boolean;
 }
 
 export class Player {
@@ -48,6 +64,8 @@ export class Player {
   private preservesPitch = true;
   private tempoRangeIndex = 1;
   private showDiscographyButton = true;
+  // Saved reverse-order choice per playlist, applied when a playlist is set.
+  private reversedPlaylists: Partial<Record<PlaylistId, boolean>> = {};
   private statusEl!: HTMLElement;
   private queueToggleBtn!: HTMLButtonElement;
   private reloadBtn!: HTMLButtonElement;
@@ -55,11 +73,33 @@ export class Player {
 
   private queueVisible = false;
   private playerVisible = true;
-  private discographyExpected = false;
+  // Playlists that can't be played (yet), shown as greyed-out tabs that explain
+  // why, or as clickable tabs when they load on demand.
+  private unavailablePlaylists = new Map<PlaylistId, { label: string; reason: string; kind: StatusKind; onLoad?: () => void }>();
   private collapseBtn!: HTMLButtonElement;
   private seeking = false;
   private switchingPlaylist = false;
+  // Bumped by every play, pause and track change, so a play that is still
+  // waiting for a fresh stream link can tell it has been superseded.
+  private playRequestId = 0;
+  private playPending = false;
+  private playStarts = 0;
+  // The track whose stream is in the audio element. It can differ from the
+  // current track, e.g. after the playing release is removed from the cart.
+  private sourceTrack: PlaylistTrack | null = null;
+  private streamRetriedFor: PlaylistTrack | null = null;
+  // Upcoming tracks buffering in standby audio elements, keyed by stream link,
+  // so skipping ahead swaps one in instead of starting a cold load.
+  private preloaded = new Map<string, HTMLAudioElement>();
+  // Bumped by every preload run and playlist switch, so an older run stops
+  // once superseded.
+  private preloadRunId = 0;
+  // Tracks whose preload refresh still left a stale link (e.g. the release page
+  // is gone), mapped to when preloading may try again. Retrying on every
+  // 'playing' event would hammer Bandcamp; playing the track still refreshes it.
+  private preloadRetryAt = new WeakMap<PlaylistTrack, number>();
 
+  private announcer!: HTMLElement;
   private cartUrls = new Set<string>();
   private cartActionsEl!: HTMLElement;
 
@@ -74,9 +114,12 @@ export class Player {
   onDiscographyButtonVisibilityChange?: (show: boolean) => void;
   onReloadPlaylist?: () => Promise<void>;
   onShowCache?: () => Promise<void> | void;
+  // Updates the track's streamUrl in place; `force` skips any cached copy and
+  // `bulk` queues the fetch behind ones the user is waiting on.
+  onRefreshStream?: (track: PlaylistTrack, force: boolean, bulk?: boolean) => Promise<void>;
 
   constructor(initialPlaylist: PlaylistTrack[]) {
-    this.audio = new Audio();
+    this.audio = this.createAudio();
     this.audio.preservesPitch = this.preservesPitch;
 
     injectStyles();
@@ -98,14 +141,17 @@ export class Player {
     this.wrapper.appendChild(this.headerEl);
     this.wrapper.appendChild(this.bar);
 
+    this.announcer = el('div', 'bcp-visually-hidden');
+    this.announcer.setAttribute('role', 'status');
+    this.wrapper.appendChild(this.announcer);
+
     new ResizeObserver(() => {
       document.body.style.paddingBottom = this.wrapper.offsetHeight + 'px';
     }).observe(this.wrapper);
 
-    this.bindAudioEvents();
     this.setupMediaSession();
 
-    chrome.storage.local.get(['tempoRangeIndex', 'preservesPitch', 'showDiscographyButton'], (result) => {
+    chrome.storage.local.get(['tempoRangeIndex', 'preservesPitch', 'showDiscographyButton', 'reversedPlaylists'], (result) => {
       if (typeof result['tempoRangeIndex'] === 'number') {
         this.tempoRangeIndex = result['tempoRangeIndex'] as number;
       }
@@ -115,6 +161,16 @@ export class Player {
       }
       if (typeof result['showDiscographyButton'] === 'boolean') {
         this.showDiscographyButton = result['showDiscographyButton'] as boolean;
+      }
+      const reversed = result['reversedPlaylists'];
+      if (reversed && typeof reversed === 'object') {
+        this.reversedPlaylists = reversed as Partial<Record<PlaylistId, boolean>>;
+        for (const [id, state] of this.playlists) {
+          this.applyReversed(id, state, !!this.reversedPlaylists[id]);
+        }
+        this.updateHeader();
+        this.updateQueueEl();
+        this.updateNavButtons();
       }
       this.updateTempoUI();
       if (!this.showDiscographyButton) {
@@ -135,14 +191,32 @@ export class Player {
     return this.showDiscographyButton;
   }
 
-  expectDiscography() {
-    this.discographyExpected = true;
+  // Shows a greyed-out tab for a playlist that is loading, failed to load or
+  // is empty; hovering or clicking it shows `reason`. Setting or adding tracks
+  // to the playlist replaces it with the normal tab.
+  setPlaylistUnavailable(id: PlaylistId, label: string, reason: string, kind: StatusKind = 'info') {
+    this.unavailablePlaylists.set(id, { label, reason, kind });
+    this.updateHeader();
+  }
+
+  // Shows a clickable tab for a playlist that only loads when asked; `onLoad`
+  // runs on click and is expected to set or grey out the playlist.
+  setPlaylistOnDemand(id: PlaylistId, label: string, hint: string, onLoad: () => void) {
+    this.unavailablePlaylists.set(id, { label, reason: hint, kind: 'info', onLoad });
     this.updateHeader();
   }
 
   setPlaylist(id: PlaylistId, label: string, tracks: PlaylistTrack[]) {
-    const isNew = !this.playlists.has(id);
-    this.playlists.set(id, { label, tracks, lastIndex: 0, statusMsg: '', statusKind: 'info' });
+    const previous = this.playlists.get(id);
+    const isNew = !previous;
+    // A reload replaces the playlist mid-playback; it still counts as played.
+    const state: PlaylistState = {
+      label, tracks, lastIndex: 0, statusMsg: '', statusKind: 'info',
+      reversed: !!this.reversedPlaylists[id], started: previous?.started ?? false, nextIsCurrent: false,
+    };
+    state.lastIndex = firstPlayable(state);
+    this.playlists.set(id, state);
+    if (tracks.length > 0) this.unavailablePlaylists.delete(id);
     this.updateHeader();
     if (isNew && this.playlists.size === 1) {
       this.selectPlaylist(id);
@@ -170,6 +244,7 @@ export class Player {
       this.currentTimeEl.textContent = '0:00';
       this.seekBar.value = '0';
     }
+    if (this.activeId !== id) this.clearPreloaded();
     this.activeId = id;
     this.updateHeader();
     this.updateQueueEl();
@@ -188,12 +263,17 @@ export class Player {
       this.selectPlaylist(id, silent);
     }
     this.loadTrack(index, silent);
-    this.audio.play().catch(console.warn);
+    void this.startPlayback({});
   }
 
   showToast(msg: string, kind: StatusKind = 'info') {
     const toast = el('div', `bcp-toast bcp-toast-${kind}`);
+    toast.setAttribute('aria-hidden', 'true');
     toast.textContent = msg;
+    // Screen readers announce changes to an existing live region, not a newly
+    // added element, so the message also goes to the player's persistent one.
+    this.announcer.textContent = '';
+    setTimeout(() => { this.announcer.textContent = msg; }, 50);
     document.body.appendChild(toast);
     // Force reflow so the CSS transition has a starting state to animate from.
     toast.getBoundingClientRect();
@@ -264,8 +344,22 @@ export class Player {
     if (toAdd.length === 0) return null;
     const startIndex = state.tracks.length;
     state.tracks.push(...toAdd);
-    if (this.activeId === id) this.updateQueueEl();
+    this.unavailablePlaylists.delete(id);
+    // The reverse button depends on how many releases there are.
+    this.updateHeader();
+    if (this.activeId === id) {
+      // Selecting an empty playlist leaves the bar blank, so load its first
+      // track now, unless a removed track is still playing.
+      if (startIndex === 0 && this.audio.paused) this.loadTrack(firstPlayable(state), true);
+      else this.updateQueueEl();
+    }
     return startIndex;
+  }
+
+  // The track a playlist starts from: its first playable one in play order.
+  firstTrackIndex(id: PlaylistId): number | undefined {
+    const state = this.playlists.get(id);
+    return state && state.tracks.length > 0 ? firstPlayable(state) : undefined;
   }
 
   getPlaylistTracks(id: PlaylistId): PlaylistTrack[] {
@@ -273,11 +367,12 @@ export class Player {
   }
 
   pause() {
+    this.cancelPendingPlay();
     this.audio.pause();
   }
 
   play() {
-    this.audio.play().catch(console.warn);
+    void this.startPlayback({ track: this.sourceTrack ?? undefined });
   }
 
   getActiveTrack(id: PlaylistId): PlaylistTrack | null {
@@ -308,6 +403,7 @@ export class Player {
   destroy() {
     this.audio.pause();
     this.audio.src = '';
+    this.clearPreloaded();
     this.wrapper.remove();
     document.body.style.paddingBottom = '';
   }
@@ -316,22 +412,10 @@ export class Player {
     const state = this.playlists.get(id);
     if (!state) return;
     const normalized = normalizeUrl(releaseUrl);
-    const removedBefore = state.tracks
-      .slice(0, state.lastIndex)
-      .filter((t) => normalizeUrl(t.releaseUrl) === normalized).length;
-    const currentRemoved =
-      normalizeUrl(state.tracks[state.lastIndex]?.releaseUrl ?? '') === normalized;
-    state.tracks = state.tracks.filter((t) => normalizeUrl(t.releaseUrl) !== normalized);
-    // Adjust lastIndex so next() advances to the right track after the audio ends.
-    // When the current track is removed, step back one extra so next() lands on
-    // the first surviving track after the removed section.
-    const adjustment = currentRemoved ? removedBefore + 1 : removedBefore;
-    state.lastIndex = Math.min(
-      Math.max(0, state.lastIndex - adjustment),
-      Math.max(0, state.tracks.length - 1)
-    );
+    this.removeTracks(state, (t) => normalizeUrl(t.releaseUrl) === normalized);
     if (this.activeId === id) {
       // Don't touch the audio — let the current stream finish naturally.
+      this.updateHeader();
       this.updateQueueEl();
       this.updateNavButtons();
     }
@@ -343,14 +427,9 @@ export class Player {
     const normalized = normalizeUrl(pageUrl);
     const idx = state.tracks.findIndex((t) => normalizeUrl(t.pageUrl) === normalized);
     if (idx === -1) return;
-    const isCurrentTrack = idx === state.lastIndex;
-    state.tracks.splice(idx, 1);
-    if (idx < state.lastIndex) {
-      state.lastIndex = Math.max(0, state.lastIndex - 1);
-    } else if (isCurrentTrack) {
-      state.lastIndex = Math.min(state.lastIndex, Math.max(0, state.tracks.length - 1));
-    }
+    this.removeTracks(state, (t) => t === state.tracks[idx]);
     if (this.activeId === id) {
+      this.updateHeader();
       this.updateQueueEl();
       this.updateNavButtons();
     }
@@ -358,12 +437,54 @@ export class Player {
 
   // --- Private helpers -------------------------------------------------------
 
+  // Removes the matching tracks and moves lastIndex so next() continues where
+  // it would have: when the current track goes, lastIndex moves to the first
+  // survivor after it in play order, which next() then plays.
+  private removeTracks(state: PlaylistState, removed: (track: PlaylistTrack) => boolean) {
+    const current = state.tracks[state.lastIndex];
+    let anchor = current;
+    if (current && removed(current)) {
+      const order = playOrder(state);
+      const position = order.indexOf(state.lastIndex);
+      const following = order.slice(position + 1).map((i) => state.tracks[i]!).find((t) => !removed(t));
+      if (following) {
+        anchor = following;
+        state.nextIsCurrent = true;
+      } else {
+        const kept = state.tracks.filter((t) => !removed(t));
+        const keptOrder = playOrder({ ...state, tracks: kept });
+        anchor = kept[keptOrder[keptOrder.length - 1]!];
+        state.nextIsCurrent = false;
+      }
+    }
+    state.tracks = state.tracks.filter((t) => !removed(t));
+    state.lastIndex = Math.max(0, anchor ? state.tracks.indexOf(anchor) : 0);
+  }
+
+  // Sets the playlist's order. One that has not played yet moves to the first
+  // track of its new order, so it starts from the right end.
+  private applyReversed(id: PlaylistId, state: PlaylistState, reversed: boolean) {
+    if (state.reversed === reversed) return;
+    state.reversed = reversed;
+    if (state.started || state.tracks.length === 0) return;
+    const first = firstPlayable(state);
+    if (id === this.activeId) {
+      // Never pull the bar away from a track that is playing or about to.
+      if (!this.audio.paused || this.playPending) return;
+      this.loadTrack(first, true);
+    }
+    else state.lastIndex = first;
+  }
+
   // Returns the cart-item key for a track: pageUrl for single-track purchases
-  // (where Bandcamp stores the track page URL in the sidecart), releaseUrl for
-  // full-release purchases. This is the URL used as the key in cartUrls and is
-  // the unit of selection for partial checkout.
+  // (where Bandcamp stores the track page URL in the sidecart), albumUrl when a
+  // track page's album was added, releaseUrl for full-release purchases. This is
+  // the URL used as the key in cartUrls and is the unit of selection for partial
+  // checkout.
   private cartItemKeyFor(track: PlaylistTrack): string {
-    return this.cartUrls.has(normalizeUrl(track.pageUrl)) ? track.pageUrl : track.releaseUrl;
+    if (this.cartUrls.has(normalizeUrl(track.pageUrl))) return track.pageUrl;
+    if (track.albumUrl && this.cartUrls.has(normalizeUrl(track.albumUrl))) return track.albumUrl;
+    return track.releaseUrl;
   }
 
   // A track is "in cart" if its cart-item key appears in cartUrls.
@@ -392,24 +513,48 @@ export class Player {
     label.textContent = 'Playlist type:';
     tabs.appendChild(label);
 
-    const entries: [PlaylistId, string][] = [
-      ['currentpage', 'Current page'],
-      ['discography', 'Label discography'],
-      ['cart', 'Cart'],
-    ];
+    const ids: PlaylistId[] = ['currentpage', 'discography', 'cart'];
 
-    for (const [id, label] of entries) {
+    for (const id of ids) {
       const state = this.playlists.get(id);
-      if (!state && (id !== 'discography' || !this.discographyExpected)) continue;
+      const unavailable = this.unavailablePlaylists.get(id);
+      if (!state && !unavailable) continue;
       const tab = document.createElement('button');
       tab.className = 'bcp-tab' + (id === this.activeId ? ' bcp-tab-active' : '');
-      tab.textContent = state?.label ?? label;
-      if (state) {
+      // An emptied playlist (e.g. every cart item removed) shows its reason too.
+      if (state && !(state.tracks.length === 0 && unavailable)) {
+        tab.textContent = state.label;
         tab.addEventListener('click', () => this.selectPlaylist(id));
-      } else {
-        tab.disabled = true;
+      } else if (unavailable?.onLoad) {
+        tab.textContent = unavailable.label;
+        tab.title = unavailable.reason;
+        tab.addEventListener('click', unavailable.onLoad);
+      } else if (unavailable) {
+        // Not `disabled`: disabled buttons ignore clicks, and the click is how
+        // the reason gets shown on touch devices.
+        tab.textContent = unavailable.label;
+        tab.title = unavailable.reason;
+        tab.classList.add('bcp-tab-unavailable', `bcp-tab-${unavailable.kind}`);
+        tab.setAttribute('aria-disabled', 'true');
+        tab.addEventListener('click', () => this.showToast(unavailable.reason, unavailable.kind));
       }
       tabs.appendChild(tab);
+    }
+
+    const state = this.active();
+    if (state && state.tracks.length > 0) {
+      const reverseBtn = btn('⇅ Reverse', 'bcp-tab bcp-reverse-btn');
+      reverseBtn.setAttribute('aria-pressed', String(state.reversed));
+      if (state.reversed) reverseBtn.classList.add('bcp-tab-active');
+      if (releaseBlocks(state.tracks).length > 1) {
+        reverseBtn.title = 'Play releases last to first (tracks within a release keep their order)';
+        reverseBtn.addEventListener('click', () => this.toggleReversed());
+      } else {
+        reverseBtn.classList.add('bcp-tab-unavailable');
+        reverseBtn.setAttribute('aria-disabled', 'true');
+        reverseBtn.title = 'Only one release';
+      }
+      tabs.appendChild(reverseBtn);
     }
 
     this.headerEl.appendChild(tabs);
@@ -559,13 +704,14 @@ export class Player {
     this.queueEl.innerHTML = '';
     if (!state) return;
 
-    state.tracks.forEach((track, i) => {
+    playOrder(state).forEach((i, position) => {
+      const track = state.tracks[i]!;
       const item = el('div', 'bcp-queue-item');
       if (i === state.lastIndex) item.classList.add('bcp-active');
       if (track.unplayable) item.classList.add('bcp-unplayable');
 
       const num = el('div', 'bcp-queue-num');
-      num.textContent = String(i + 1);
+      num.textContent = String(position + 1);
 
       const text = el('div', 'bcp-queue-text');
       const title = el('div', 'bcp-queue-title');
@@ -590,7 +736,7 @@ export class Player {
       } else {
         item.addEventListener('click', () => {
           this.loadTrack(i);
-          this.audio.play().catch(console.warn);
+          void this.startPlayback({});
         });
       }
 
@@ -601,8 +747,10 @@ export class Player {
   private loadTrack(index: number, silent = false) {
     const state = this.active();
     if (!state) return;
+    this.cancelPendingPlay();
 
     state.lastIndex = index;
+    state.nextIsCurrent = false;
     const track = state.tracks[index];
     if (!track) return;
 
@@ -611,8 +759,11 @@ export class Player {
     // Only reload when the stream URL actually changes. Keeping the same src
     // preserves the current playback position across pause/resume cycles (e.g.
     // when the native Bandcamp player triggers a play event for a track the
-    // bottom player already has loaded mid-way through).
-    const needsReload = !track.streamUrl || track.unplayable || track.streamUrl !== this.audio.src;
+    // bottom player already has loaded mid-way through). The loaded track also
+    // counts as unchanged when a refresh gave it a new link, e.g. while
+    // preloading another track of its release, so it isn't restarted.
+    const isLoaded = track === this.sourceTrack || track.streamUrl === this.audio.src;
+    const needsReload = !track.streamUrl || track.unplayable || !isLoaded;
 
     this.artworkEl.src = track.artworkUrl || '';
     this.titleEl.textContent = track.trackTitle || '(untitled)';
@@ -643,18 +794,120 @@ export class Player {
     }
 
     if (track.unplayable || !track.streamUrl) {
-      this.playPauseBtn.textContent = '▶';
+      this.setPlayButton('play');
       this.playPauseBtn.disabled = true;
       return;
     }
 
     this.playPauseBtn.disabled = false;
-    if (needsReload) {
-      this.audio.src = track.streamUrl;
+    if (!needsReload) {
+      this.sourceTrack = track;
+    } else if (!this.onRefreshStream || isStreamFresh(track)) {
+      this.setSource(track);
+    } else {
+      // startPlayback fetches a fresh link first; loading this one could only fail.
+      this.audio.removeAttribute('src');
       this.audio.load();
-      this.audio.playbackRate = this.playbackRate;
-      this.audio.preservesPitch = this.preservesPitch;
+      this.sourceTrack = null;
     }
+  }
+
+  private currentTrack(): PlaylistTrack | null {
+    const state = this.active();
+    return state?.tracks[state.lastIndex] ?? null;
+  }
+
+  private setSource(track: PlaylistTrack, startAt = 0) {
+    const url = track.streamUrl ?? '';
+    const standby = this.preloaded.get(url);
+    this.preloaded.delete(url);
+    if (standby && !standby.error) {
+      const previous = this.audio;
+      this.audio = standby;
+      previous.pause();
+      unloadAudio(previous);
+      // Its 'loadedmetadata' fired while it was on standby, so it was ignored.
+      if (isFinite(standby.duration)) this.totalTimeEl.textContent = fmtTime(standby.duration);
+    } else {
+      if (standby) unloadAudio(standby);
+      this.audio.src = url;
+      this.audio.load();
+    }
+    this.audio.currentTime = startAt;
+    this.audio.playbackRate = this.playbackRate;
+    this.audio.preservesPitch = this.preservesPitch;
+    this.sourceTrack = track;
+  }
+
+  private cancelPendingPlay() {
+    this.playRequestId++;
+    if (!this.playPending) return;
+    this.playPending = false;
+    this.setPlayButton('play');
+  }
+
+  // Plays `track` (the current track by default), first fetching a fresh
+  // stream link when the one we have may have expired. `skip` is the direction
+  // to move in when the refresh shows the track can no longer be streamed.
+  private async startPlayback(options: {
+    track?: PlaylistTrack;
+    forceRefresh?: boolean;
+    skip?: 1 | -1;
+  }): Promise<void> {
+    const track = options.track ?? this.currentTrack();
+    if (!track?.streamUrl || track.unplayable) return;
+    const state = this.active();
+    if (state) state.started = true;
+    const isLoaded = track === this.sourceTrack;
+    // A newer link for the playing track would only interrupt it.
+    if (isLoaded && !this.audio.paused && !options.forceRefresh) return;
+    const requestId = ++this.playRequestId;
+    let refreshed = false;
+
+    if (this.onRefreshStream && (options.forceRefresh || !isStreamFresh(track))) {
+      this.playPending = true;
+      this.setPlayButton('loading');
+      try {
+        await this.onRefreshStream(track, !!options.forceRefresh);
+        refreshed = true;
+      } catch (err) {
+        console.warn('[bcp] Could not refresh stream link', err);
+      }
+      if (requestId !== this.playRequestId) return;
+      this.playPending = false;
+      if (track.unplayable || !track.streamUrl) {
+        this.showUnplayable(track, options.skip);
+        return;
+      }
+      this.updateQueueEl();
+      this.updateNavButtons();
+    }
+
+    if (refreshed || !isLoaded) {
+      this.setSource(track, isLoaded ? this.audio.currentTime : 0);
+    }
+    this.audio.play().catch((err: unknown) => {
+      console.warn(err);
+      if (this.audio.paused) this.setPlayButton('play');
+    });
+  }
+
+  private showUnplayable(track: PlaylistTrack, skip?: 1 | -1) {
+    this.setPlayButton('play');
+    const state = this.active();
+    const index = state ? state.tracks.indexOf(track) : -1;
+    if (index === -1) {
+      // The track was removed from the playlist while loaded; carry on from the current one.
+      if (skip === 1) this.next();
+      else if (skip === -1) this.prev();
+      return;
+    }
+    this.loadTrack(index, true);
+    if (!skip) return;
+    const nextIndex = this.stepPlayable(index, skip);
+    if (nextIndex === -1) return;
+    this.loadTrack(nextIndex);
+    void this.startPlayback({ skip });
   }
 
   get currentPlaylistId(): PlaylistId | null {
@@ -669,40 +922,155 @@ export class Player {
     return !this.audio.paused;
   }
 
+  // Counts every start of playback, so a caller can tell whether the user
+  // started something while it was waiting.
+  get playStartCount(): number {
+    return this.playStarts;
+  }
+
+  // Re-reads which tracks are playable after their details were updated in place.
+  refreshTrackAvailability() {
+    this.updateQueueEl();
+    this.updateNavButtons();
+    const track = this.currentTrack();
+    if (track && this.audio.paused && !this.playPending) {
+      this.playPauseBtn.disabled = track.unplayable || !track.streamUrl;
+    }
+  }
+
+  private setPlayButton(state: 'play' | 'pause' | 'loading') {
+    if (state === 'loading') {
+      const spinner = document.createElement('span');
+      spinner.className = 'bcp-spinner';
+      this.playPauseBtn.replaceChildren(spinner);
+      this.playPauseBtn.setAttribute('aria-label', 'Loading');
+    } else {
+      this.playPauseBtn.textContent = state === 'play' ? '▶' : '⏸';
+      this.playPauseBtn.setAttribute('aria-label', state === 'play' ? 'Play' : 'Pause');
+    }
+  }
+
   private reflectPlaybackState(playing: boolean) {
-    this.playPauseBtn.textContent = playing ? '⏸' : '▶';
+    this.setPlayButton(playing ? 'pause' : 'play');
     if ('mediaSession' in navigator) {
       navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
     }
     this.onPlayStateChange?.(playing);
   }
 
-  private bindAudioEvents() {
-    this.audio.addEventListener('play', () => {
+  // Every element is bound once; only the one currently in `this.audio`
+  // reacts, so standby elements buffering upcoming tracks stay silent.
+  private createAudio(): HTMLAudioElement {
+    const audio = new Audio();
+    const on = (type: keyof HTMLMediaElementEventMap, listener: () => void) => {
+      audio.addEventListener(type, () => {
+        if (audio === this.audio) listener();
+      });
+    };
+    this.bindAudioEvents(on);
+    return audio;
+  }
+
+  // Fetches fresh links for the next few tracks and starts buffering them, so
+  // skipping ahead waits on neither a release-page fetch nor a cold stream.
+  private async preloadUpcoming() {
+    const runId = ++this.preloadRunId;
+    const upcoming = this.upcomingTracks();
+    let refreshed = false;
+    for (const track of upcoming) {
+      if (!this.onRefreshStream || isStreamFresh(track)) continue;
+      if (Date.now() < (this.preloadRetryAt.get(track) ?? 0)) continue;
+      try {
+        await this.onRefreshStream(track, false, true);
+        refreshed = true;
+      } catch (err) {
+        console.warn('[bcp] Could not preload stream link', err);
+      }
+      if (!isStreamFresh(track)) this.preloadRetryAt.set(track, Date.now() + PRELOAD_RETRY_AFTER_MS);
+      if (runId !== this.preloadRunId) return;
+    }
+    if (refreshed) {
+      this.updateQueueEl();
+      this.updateNavButtons();
+    }
+
+    const wanted = upcoming
+      .filter((t) => !t.unplayable && t.streamUrl && (!this.onRefreshStream || isStreamFresh(t)))
+      .map((t) => t.streamUrl!);
+    for (const [url, standby] of this.preloaded) {
+      if (wanted.includes(url)) continue;
+      unloadAudio(standby);
+      this.preloaded.delete(url);
+    }
+    for (const url of wanted) {
+      if (this.preloaded.has(url) || url === this.audio.src) continue;
+      const standby = this.createAudio();
+      standby.preload = 'auto';
+      standby.src = url;
+      this.preloaded.set(url, standby);
+    }
+  }
+
+  private clearPreloaded() {
+    this.preloadRunId++;
+    for (const standby of this.preloaded.values()) unloadAudio(standby);
+    this.preloaded.clear();
+  }
+
+  private upcomingTracks(): PlaylistTrack[] {
+    const state = this.active();
+    if (!state) return [];
+    const upcoming: PlaylistTrack[] = [];
+    let index = this.nextIndex(state);
+    while (upcoming.length < PRELOAD_AHEAD) {
+      if (index === -1) break;
+      upcoming.push(state.tracks[index]!);
+      index = this.stepPlayable(index, 1);
+    }
+    return upcoming;
+  }
+
+  private bindAudioEvents(on: (type: keyof HTMLMediaElementEventMap, listener: () => void) => void) {
+    on('play', () => {
+      this.playStarts++;
       this.reflectPlaybackState(true);
       this.onPlaybackStart?.();
     });
 
-    this.audio.addEventListener('pause', () => {
+    on('pause', () => {
       this.reflectPlaybackState(false);
     });
 
-    this.audio.addEventListener('timeupdate', () => {
+    on('timeupdate', () => {
       if (this.seeking || !isFinite(this.audio.duration)) return;
       this.currentTimeEl.textContent = fmtTime(this.audio.currentTime);
       this.seekBar.value = String((this.audio.currentTime / this.audio.duration) * 100);
     });
 
-    this.audio.addEventListener('loadedmetadata', () => {
+    on('loadedmetadata', () => {
       this.totalTimeEl.textContent = fmtTime(this.audio.duration);
     });
 
-    this.audio.addEventListener('ended', () => {
+    on('ended', () => {
       this.next();
     });
 
-    this.audio.addEventListener('error', () => {
+    on('playing', () => {
+      this.streamRetriedFor = null;
+      void this.preloadUpcoming();
+    });
+
+    on('error', () => {
+      if (!this.audio.getAttribute('src')) return;
       console.warn('[bcp] Audio error for track', this.active()?.lastIndex, this.audio.error);
+      // The link may have expired mid-session; fetch a fresh one once before
+      // skipping the track.
+      const track = this.sourceTrack;
+      if (track && this.onRefreshStream && this.streamRetriedFor !== track) {
+        this.streamRetriedFor = track;
+        void this.startPlayback({ track, forceRefresh: true, skip: 1 });
+        return;
+      }
       this.next();
     });
   }
@@ -732,8 +1100,10 @@ export class Player {
   }
 
   private togglePlay() {
-    if (this.audio.paused) {
-      this.audio.play().catch(console.warn);
+    if (this.playPending) {
+      this.cancelPendingPlay();
+    } else if (this.audio.paused) {
+      this.play();
     } else {
       this.audio.pause();
     }
@@ -742,32 +1112,60 @@ export class Player {
   private next() {
     const state = this.active();
     if (!state) return;
-    const nextIndex = this.nextPlayable(state.lastIndex + 1, 1);
+    const nextIndex = this.nextIndex(state);
     if (nextIndex !== -1) {
       this.loadTrack(nextIndex);
-      this.audio.play().catch(console.warn);
+      void this.startPlayback({ skip: 1 });
     }
   }
 
   private prev() {
     const state = this.active();
     if (!state) return;
-    const prevIndex = this.nextPlayable(state.lastIndex - 1, -1);
+    const prevIndex = this.stepPlayable(state.lastIndex, -1);
     if (prevIndex !== -1) {
       this.loadTrack(prevIndex);
-      this.audio.play().catch(console.warn);
+      void this.startPlayback({ skip: -1 });
     }
   }
 
-  private nextPlayable(start: number, dir: 1 | -1): number {
+  // The track next() plays, or -1 when there is none.
+  private nextIndex(state: PlaylistState): number {
+    if (state.nextIsCurrent && !state.tracks[state.lastIndex]?.unplayable) return state.lastIndex;
+    return this.stepPlayable(state.lastIndex, 1);
+  }
+
+  // The index of the first playable track after (dir 1) or before (dir -1)
+  // `fromIndex` in play order, or -1 when there is none.
+  private stepPlayable(fromIndex: number, dir: 1 | -1): number {
     const state = this.active();
     if (!state) return -1;
-    let i = start;
-    while (i >= 0 && i < state.tracks.length) {
-      if (!state.tracks[i]!.unplayable) return i;
-      i += dir;
+    const order = playOrder(state);
+    let position = order.indexOf(fromIndex) + dir;
+    while (position >= 0 && position < order.length) {
+      const index = order[position]!;
+      if (!state.tracks[index]!.unplayable) return index;
+      position += dir;
     }
     return -1;
+  }
+
+  private toggleReversed() {
+    const state = this.active();
+    if (!state || this.activeId === null) return;
+    const id = this.activeId;
+    this.applyReversed(id, state, !state.reversed);
+    this.reversedPlaylists = { ...this.reversedPlaylists, [id]: state.reversed };
+    // Read before writing, so a choice made in another tab is kept.
+    chrome.storage.local.get('reversedPlaylists', (result) => {
+      const saved = (result['reversedPlaylists'] ?? {}) as Partial<Record<PlaylistId, boolean>>;
+      chrome.storage.local.set({ reversedPlaylists: { ...saved, [id]: state.reversed } });
+    });
+    this.clearPreloaded();
+    if (!this.audio.paused) void this.preloadUpcoming();
+    this.updateHeader();
+    this.updateQueueEl();
+    this.updateNavButtons();
   }
 
   private updateNavButtons() {
@@ -777,8 +1175,8 @@ export class Player {
       this.nextBtn.disabled = true;
       return;
     }
-    this.prevBtn.disabled = this.nextPlayable(state.lastIndex - 1, -1) === -1;
-    this.nextBtn.disabled = this.nextPlayable(state.lastIndex + 1, 1) === -1;
+    this.prevBtn.disabled = this.stepPlayable(state.lastIndex, -1) === -1;
+    this.nextBtn.disabled = this.nextIndex(state) === -1;
   }
 
   private toggleQueue() {
@@ -822,55 +1220,49 @@ export class Player {
       badge.textContent = inCartAsAlbum ? '✓ In cart (full album)' : '✓ In cart';
       this.cartActionsEl.append(badge, removeBtn);
     } else {
-      if (track.releaseType === 'album' && track.trackId !== null) {
-        const addTrackBtn = btn('+ Track', 'bcp-cart-action-btn');
-        if (track.purchasable) {
-          addTrackBtn.title = 'Add this track to cart';
-          addTrackBtn.addEventListener('click', async () => {
-            addTrackBtn.disabled = true;
-            const ok = await this.onCartAdd?.(track, 'track');
-            if (ok === false) {
-              addTrackBtn.classList.add('bcp-disabled');
-              addTrackBtn.title = 'Only full release for sale';
-            } else {
-              addTrackBtn.disabled = false;
-            }
-          });
-        } else {
-          addTrackBtn.classList.add('bcp-disabled');
-          addTrackBtn.title = 'Only full release for sale';
-        }
+      // Always show both buttons so the layout is the same for every track.
+      // A single-track release is added through "+ Track" (the track is the
+      // release); its "+ Release" adds the album the track page links to, and is
+      // greyed out when there is none. An album track without a track id can
+      // only be bought as part of the release.
+      const isAlbum = track.releaseType === 'album';
+      const canAddRelease = isAlbum || !!track.albumUrl;
+      const trackAddType: 'track' | 'release' | null = !isAlbum
+        ? 'release'
+        : track.trackId !== null ? 'track' : null;
 
-        const addReleaseBtn = btn('+ Release', 'bcp-cart-action-btn');
+      const addTrackBtn = btn('+ Track', 'bcp-cart-action-btn');
+      if (trackAddType !== null && track.purchasable) {
+        addTrackBtn.title = 'Add this track to cart';
+        addTrackBtn.addEventListener('click', async () => {
+          addTrackBtn.disabled = true;
+          const ok = await this.onCartAdd?.(track, trackAddType);
+          if (ok === false) {
+            addTrackBtn.classList.add('bcp-disabled');
+            addTrackBtn.title = 'Only full release for sale';
+          } else {
+            addTrackBtn.disabled = false;
+          }
+        });
+      } else {
+        addTrackBtn.classList.add('bcp-disabled');
+        addTrackBtn.title = 'Only full release for sale';
+      }
+
+      const addReleaseBtn = btn('+ Release', 'bcp-cart-action-btn');
+      if (canAddRelease) {
         addReleaseBtn.title = 'Add the full release to cart';
         addReleaseBtn.addEventListener('click', async () => {
           addReleaseBtn.disabled = true;
-          await this.onCartAdd?.(track, 'release');
+          await this.onCartAdd?.(track, isAlbum ? 'release' : 'album');
           addReleaseBtn.disabled = false;
         });
-
-        this.cartActionsEl.append(addTrackBtn, addReleaseBtn);
       } else {
-        const addCartBtn = btn('+ Cart', 'bcp-cart-action-btn');
-        if (track.purchasable) {
-          addCartBtn.title = 'Add to cart';
-          addCartBtn.addEventListener('click', async () => {
-            addCartBtn.disabled = true;
-            const ok = await this.onCartAdd?.(track, 'release');
-            if (ok === false) {
-              addCartBtn.classList.add('bcp-disabled');
-              addCartBtn.title = 'Only full release for sale';
-            } else {
-              addCartBtn.disabled = false;
-            }
-          });
-        } else {
-          addCartBtn.classList.add('bcp-disabled');
-          addCartBtn.title = 'Only full release for sale';
-        }
-
-        this.cartActionsEl.append(addCartBtn);
+        addReleaseBtn.classList.add('bcp-disabled');
+        addReleaseBtn.title = 'Single-track release: use + Track';
       }
+
+      this.cartActionsEl.append(addTrackBtn, addReleaseBtn);
     }
   }
 
@@ -929,6 +1321,32 @@ export class Player {
 
 }
 
+// Runs of consecutive tracks from the same release, as lists of track indices.
+function releaseBlocks(tracks: PlaylistTrack[]): number[][] {
+  const blocks: number[][] = [];
+  let previousRelease: string | null = null;
+  tracks.forEach((track, i) => {
+    const release = normalizeUrl(track.releaseUrl);
+    if (release === previousRelease) blocks[blocks.length - 1]!.push(i);
+    else blocks.push([i]);
+    previousRelease = release;
+  });
+  return blocks;
+}
+
+// Track indices in the order they play: as listed, or with the releases
+// reversed while each release still plays from its first track.
+function playOrder(state: Pick<PlaylistState, 'tracks' | 'reversed'>): number[] {
+  if (!state.reversed) return state.tracks.map((_, i) => i);
+  return releaseBlocks(state.tracks).reverse().flat();
+}
+
+// The first playable track in play order, or the first track when none is.
+function firstPlayable(state: Pick<PlaylistState, 'tracks' | 'reversed'>): number {
+  const order = playOrder(state);
+  return order.find((i) => !state.tracks[i]!.unplayable) ?? order[0] ?? 0;
+}
+
 function injectStyles() {
   if (document.getElementById('bcp-styles')) return;
   const style = document.createElement('style');
@@ -948,6 +1366,12 @@ function btn(text: string, className: string): HTMLButtonElement {
   b.textContent = text;
   b.className = className;
   return b;
+}
+
+function unloadAudio(audio: HTMLAudioElement) {
+  audio.pause();
+  audio.removeAttribute('src');
+  audio.load();
 }
 
 function fmtTime(seconds: number): string {

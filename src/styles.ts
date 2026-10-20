@@ -223,6 +223,22 @@ export const PLAYER_CSS = `
   color: #fff;
 }
 
+.bcp-spinner {
+  display: inline-block;
+  box-sizing: border-box;
+  width: 1em;
+  height: 1em;
+  vertical-align: middle;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: bcp-spin 0.8s linear infinite;
+}
+
+@keyframes bcp-spin {
+  to { transform: rotate(360deg); }
+}
+
 .bcp-seek-area {
   display: flex;
   align-items: center;
@@ -399,10 +415,25 @@ input[type=range].bcp-tempo {
   border-color: #1da0c3;
 }
 
-.bcp-tab:disabled {
-  color: #444;
+.bcp-tab.bcp-tab-unavailable {
+  color: #555;
   border-color: #333;
+  border-style: dashed;
+  cursor: help;
+}
+
+.bcp-tab.bcp-reverse-btn {
+  margin-left: auto;
+}
+
+.bcp-tab.bcp-reverse-btn.bcp-tab-unavailable {
   cursor: default;
+}
+
+.bcp-tab.bcp-tab-unavailable.bcp-tab-error,
+.bcp-tab.bcp-tab-unavailable.bcp-tab-warn {
+  color: #a86a3d;
+  border-color: #5a3a24;
 }
 
 .bcp-grid-play-btn {
@@ -486,6 +517,15 @@ input[type=range].bcp-tempo {
   font-size: 11px;
   flex-shrink: 0;
   margin-left: auto;
+}
+
+.bcp-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 
 .bcp-toast {
@@ -666,3 +706,38 @@ a.itemName.bcp-playing {
   }
 }
 `;
+
+// Backdrop/card shell shared by the cart history, track cache and remove-purchased
+// modals, plus the track cache modal's own rules.
+export const MODAL_CSS = `
+  .bcp-hb{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:999999;display:flex;align-items:center;justify-content:center}
+  .bcp-hm{background:#fff;color:#1a1a1a;border-radius:8px;padding:20px 24px;max-width:520px;width:90%;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,.3);font-family:inherit;font-size:14px}
+  .bcp-hm h3{margin:0 0 14px;font-size:15px;font-weight:600}
+  .bcp-hl{list-style:none;margin:0 0 16px;padding:0;overflow-y:auto;flex:1 1 auto}
+  .bcp-hl li{padding:9px 8px;border-radius:4px;border-bottom:1px solid #f0f0f0}
+  .bcp-hl li:last-child{border-bottom:none}
+  .bcp-hl li.bcp-clickable{cursor:pointer}
+  .bcp-hl li.bcp-clickable:hover{background:#f0f9fc}
+  .bcp-ha{display:flex;justify-content:flex-end;flex-shrink:0}
+  .bcp-ha button{padding:7px 16px;border-radius:4px;border:1px solid #ccc;cursor:pointer;font-size:13px;font-family:inherit}
+  .bcp-hcl:hover{background:#f5f5f5}
+  .bcp-cache-hm{max-width:680px}
+  .bcp-cache-url{font-size:12px;color:#1da0c3;word-break:break-all;text-decoration:none}
+  .bcp-cache-url:hover{text-decoration:underline}
+  .bcp-cache-meta{color:#999;font-size:12px;margin-left:6px;white-space:nowrap}
+  .bcp-cache-tracks{list-style:none;margin:5px 0 0;padding:0 0 0 8px}
+  .bcp-cache-tracks li{padding:2px 0;font-size:12px;color:#333;border-bottom:1px solid #f5f5f5}
+  .bcp-cache-tracks li:last-child{border-bottom:none}
+  .bcp-cache-track-title{font-weight:600}
+  .bcp-cache-track-detail{color:#888;margin-left:4px}
+  .bcp-cache-flags{color:#bbb;font-size:11px;margin-left:4px}
+  .bcp-cache-empty{color:#999;font-style:italic;padding:12px 0}
+`;
+
+export function ensureModalStyles(): void {
+  if (document.getElementById('bcp-modal-styles')) return;
+  const style = document.createElement('style');
+  style.id = 'bcp-modal-styles';
+  style.textContent = MODAL_CSS;
+  document.head.appendChild(style);
+}

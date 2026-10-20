@@ -1,7 +1,7 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { describe, it, expect } from 'vitest';
-import { parseTralbum, isReleaseOwned, findAlbumUrl } from '../src/bandcamp';
+import { parseTralbum, isReleaseOwned } from '../src/bandcamp';
 
 function fixture(name: string): string {
   return readFileSync(join(__dirname, 'fixtures', name), 'utf-8');
@@ -203,6 +203,55 @@ describe('parseTralbum — minified variable name (Strategy 3)', () => {
   });
 });
 
+describe('parseTralbum — data-tralbum attribute (Strategy 1)', () => {
+  const pageUrl = 'https://solardrift.bandcamp.com/track/night-and-day';
+  const tracks = parseTralbum(fixture('data-tralbum-attr.html'), pageUrl);
+
+  it('finds tracks via the data-tralbum attribute', () => {
+    expect(tracks).toHaveLength(1);
+  });
+
+  it('HTML-entity-decodes the attribute JSON in a single pass', () => {
+    expect(tracks[0]!.trackTitle).toBe('Night & Day');
+    expect(tracks[0]!.albumTitle).toBe('Night & Day');
+  });
+
+  it('extracts artist and stream URL', () => {
+    expect(tracks[0]!.artist).toBe('Solar Drift');
+    expect(tracks[0]!.streamUrl).toBe('https://t4.bcbits.com/stream/fake-stream-url-attr');
+  });
+
+  it('extracts duration and bandId', () => {
+    expect(tracks[0]!.durationSec).toBe(198.0);
+    expect(tracks[0]!.bandId).toBe(88888);
+  });
+});
+
+describe('parseTralbum — purchasable flag with both buy options present', () => {
+  it('is true when the digital-track buy command is present alongside buyAlbumLink', () => {
+    const tracks = parseTralbum(
+      fixture('track-with-digital-buy.html'),
+      'https://solardrift.bandcamp.com/track/nightfall-reprise'
+    );
+    expect(tracks[0]!.purchasable).toBe(true);
+  });
+});
+
+describe('parseTralbum — minified variable name (Strategy 3) does not match text inside HTML comments', () => {
+  it('ignores "TralbumData" and "trackinfo" mentioned only in a comment preceding the real script', () => {
+    // album-minified.html's leading comment contains the literal strings
+    // "TralbumData" and "trackinfo" in explanatory prose. A naive whole-HTML
+    // scan (without stripping comments) would find those first and fail to
+    // extract the real, minified-variable data that follows.
+    const tracks = parseTralbum(
+      fixture('album-minified.html'),
+      'https://solardrift.bandcamp.com/album/echoes-of-the-void'
+    );
+    expect(tracks).toHaveLength(3);
+    expect(tracks[0]!.trackTitle).toBe('Intro');
+  });
+});
+
 describe('parseTralbum — invalid HTML', () => {
   it('returns empty array for empty string', () => {
     expect(parseTralbum('', 'https://example.com')).toEqual([]);
@@ -286,42 +335,33 @@ describe('isReleaseOwned', () => {
   }
 });
 
-describe('findAlbumUrl', () => {
-  const cases: Array<{ name: string; html: string; pageUrl: string; expected: string | null }> = [
-    {
-      name: 'resolves the album of a track page against the page origin',
-      html: tralbumPage({ tralbum_type: 't', album_url: '/album/untrue' }),
-      pageUrl: 'https://burial.bandcamp.com/track/archangel',
-      expected: 'https://burial.bandcamp.com/album/untrue',
-    },
-    {
-      name: 'returns null for a standalone track',
-      html: tralbumPage({ tralbum_type: 't', album_url: null }),
-      pageUrl: 'https://artist.bandcamp.com/track/single',
-      expected: null,
-    },
-    {
-      name: 'returns null for an album page',
-      html: tralbumPage({ tralbum_type: 'a', album_url: '/album/untrue' }),
-      pageUrl: 'https://burial.bandcamp.com/album/untrue',
-      expected: null,
-    },
-    {
-      name: 'returns null when the page has no tralbum data',
-      html: '<p>nothing here</p>',
-      pageUrl: 'https://artist.bandcamp.com/track/single',
-      expected: null,
-    },
-  ];
-
-  for (const { name, html, pageUrl, expected } of cases) {
-    it(name, () => {
-      expect(findAlbumUrl(html, pageUrl)).toBe(expected);
-    });
-  }
-});
-
 function tralbumPage(data: Record<string, unknown>): string {
   const attr = JSON.stringify(data).replace(/"/g, '&quot;');
   return `<script data-tralbum="${attr}"></script>`;
 }
+
+describe('parseTralbum — album a track page belongs to', () => {
+  it('reads it from the "Buy the Full Digital Album" link', () => {
+    const tracks = parseTralbum(
+      fixture('track-album-only.html'),
+      'https://oddysee.bandcamp.com/track/7th-element'
+    );
+    expect(tracks[0]!.albumUrl).toBe('https://oddysee.bandcamp.com/album/7th-element');
+  });
+
+  it('reads it from TralbumData when the page has album_url', () => {
+    const html = fixture('single-track.html').replace(
+      '"tralbum_type"',
+      '"album_url": "/album/night-sessions", "tralbum_type"'
+    );
+    const tracks = parseTralbum(html, 'https://solardrift.bandcamp.com/track/nightfall');
+    expect(tracks[0]!.albumUrl).toBe('https://solardrift.bandcamp.com/album/night-sessions');
+  });
+
+  it('is null for a single-track release that is not on an album, and for album pages', () => {
+    const single = parseTralbum(fixture('single-track.html'), 'https://solardrift.bandcamp.com/track/nightfall');
+    const album = parseTralbum(fixture('album.html'), 'https://solardrift.bandcamp.com/album/echoes-of-the-void');
+    expect(single[0]!.albumUrl).toBeNull();
+    for (const t of album) expect(t.albumUrl).toBeNull();
+  });
+});

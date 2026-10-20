@@ -1,4 +1,9 @@
-import type { BcpRequest } from './messages';
+import type { BcpRequest, FetchResponse } from './messages';
+import { createLimiter, dedupeInFlight, type Priority } from './inflight';
+import { pruneTrackCache } from './cache';
+
+chrome.runtime.onStartup.addListener(() => { void pruneTrackCache(); });
+chrome.runtime.onInstalled.addListener(() => { void pruneTrackCache(); });
 
 // Returns the https origin for a Bandcamp URL, or null if the URL isn't a valid
 // https://*.bandcamp.com address. Used to refuse proxying credentialed requests
@@ -14,6 +19,39 @@ function bandcampOrigin(rawUrl: string): string | null {
   }
 }
 
+// Several tabs can miss the cache for the same release at once; the service
+// worker is shared by all of them, so coalescing here gives one real fetch.
+const inFlightHtmlFetches = new Map<string, Promise<FetchResponse>>();
+
+// Every tab's release-page fetches share this limit, so a few open tabs with
+// large carts stay below Bandcamp's rate limiting.
+const limitReleaseFetches = createLimiter(4);
+
+// A server that never answers would otherwise hold up every playlist load
+// waiting on it. Reading the page gets longer, so a slow connection still finishes.
+const RESPONSE_TIMEOUT_MS = 20_000;
+const BODY_TIMEOUT_MS = 60_000;
+
+async function fetchWithTimeouts(url: string): Promise<FetchResponse> {
+  const controller = new AbortController();
+  let timer = setTimeout(() => controller.abort(new Error('No response within 20 s')), RESPONSE_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, { credentials: 'include', signal: controller.signal });
+    if (!res.ok) return { error: `HTTP ${res.status}` };
+    clearTimeout(timer);
+    timer = setTimeout(() => controller.abort(new Error('Page took over 60 s to download')), BODY_TIMEOUT_MS);
+    return { html: await res.text() };
+  } catch (err) {
+    return { error: String(err) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function fetchBandcampHtml(url: string, priority: Priority): Promise<FetchResponse> {
+  return dedupeInFlight(inFlightHtmlFetches, url, () => limitReleaseFetches(priority, () => fetchWithTimeouts(url)));
+}
+
 chrome.runtime.onMessage.addListener((message: BcpRequest, sender, sendResponse) => {
   // Only act on messages from this extension's own content scripts/pages.
   if (sender.id !== chrome.runtime.id) return false;
@@ -23,17 +61,7 @@ chrome.runtime.onMessage.addListener((message: BcpRequest, sender, sendResponse)
       sendResponse({ error: 'Refused: not a bandcamp.com URL' });
       return false;
     }
-    fetch(message.url, { credentials: 'include' })
-      .then(async (res) => {
-        if (!res.ok) {
-          sendResponse({ error: `HTTP ${res.status}` });
-          return;
-        }
-        sendResponse({ html: await res.text() });
-      })
-      .catch((err: unknown) => {
-        sendResponse({ error: String(err) });
-      });
+    fetchBandcampHtml(message.url, message.bulk ? 'bulk' : 'interactive').then(sendResponse);
     return true; // keep message channel open for async response
   }
 

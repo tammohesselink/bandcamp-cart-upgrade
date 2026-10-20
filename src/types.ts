@@ -46,6 +46,11 @@ export interface PlaylistTrack {
   currency: string | null;
   // False when the track can only be purchased as part of the full release.
   purchasable: boolean;
+  // Album a single-track page belongs to, read from the track's own page.
+  // "+ Release" adds this album. Missing on entries cached before it existed.
+  albumUrl?: string | null;
+  // When streamUrl was fetched. Bandcamp stream links are signed and expire.
+  streamFetchedAt?: number;
 }
 
 // Shape of the TralbumData object embedded in Bandcamp track/album pages.

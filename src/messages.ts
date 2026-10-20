@@ -5,6 +5,8 @@
 export interface FetchRequest {
   type: 'fetch';
   url: string;
+  // Part of loading a whole playlist; waits behind fetches someone is waiting on.
+  bulk?: boolean;
 }
 
 export interface CartAddRequest {

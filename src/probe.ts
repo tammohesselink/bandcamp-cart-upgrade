@@ -196,8 +196,7 @@ export function injectDiscographyButton(): HTMLButtonElement {
 
   const button = document.createElement('button');
   button.className = 'bcp-discography-btn';
-  button.textContent = 'Loading label discography…';
-  button.disabled = true;
+  button.textContent = 'Play label discography';
 
   const featuredGrid = document.querySelector('ol.featured-grid');
   const target = featuredGrid ?? grid ?? container;

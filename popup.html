@@ -84,11 +84,61 @@
     .toggle input:checked + .toggle-track::after {
       transform: translateX(18px);
     }
+
+    h2 {
+      font-size: 16px;
+      font-weight: 700;
+      color: #fff;
+      margin: 20px 0 6px;
+    }
+
+    .section-description {
+      color: #a6adc8;
+      font-size: 13px;
+      line-height: 1.4;
+      margin-bottom: 10px;
+    }
+
+    .action-buttons {
+      display: flex;
+      gap: 8px;
+    }
+
+    .action-button {
+      flex: 1;
+      padding: 8px 12px;
+      background: #313244;
+      color: #cdd6f4;
+      border: 1px solid #45475a;
+      border-radius: 6px;
+      font: inherit;
+      cursor: pointer;
+    }
+
+    .action-button:hover {
+      background: #45475a;
+    }
+
+    .status {
+      margin-top: 10px;
+      font-size: 13px;
+      line-height: 1.4;
+      color: #a6e3a1;
+    }
+
+    .status:empty {
+      display: none;
+    }
+
+    .status.error {
+      color: #f38ba8;
+    }
   </style>
 </head>
 <body>
   <h1>Options</h1>
   <div id="settings"></div>
+  <div id="history-transfer"></div>
   <script src="popup.js"></script>
 </body>
 </html>
