@@ -1182,6 +1182,7 @@ export class Player {
   private toggleQueue() {
     this.queueVisible = !this.queueVisible;
     this.queueEl.classList.toggle('bcp-visible', this.queueVisible);
+    if (this.queueVisible) this.scrollQueueToActive();
   }
 
   private togglePlayer() {
@@ -1189,6 +1190,16 @@ export class Player {
     this.wrapper.classList.toggle('bcp-collapsed', !this.playerVisible);
     this.collapseBtn.textContent = this.playerVisible ? 'Hide player ▼' : 'Show player ▲';
     this.collapseBtn.title = this.playerVisible ? 'Hide player' : 'Show player';
+    if (this.playerVisible && this.queueVisible) this.scrollQueueToActive();
+  }
+
+  // Centres the playing track in the queue. Sets the queue's own scrollTop
+  // rather than using scrollIntoView, which would also scroll the page.
+  private scrollQueueToActive() {
+    const item = this.queueEl.querySelector<HTMLElement>('.bcp-queue-item.bcp-active');
+    if (!item) return;
+    const offset = item.getBoundingClientRect().top - this.queueEl.getBoundingClientRect().top;
+    this.queueEl.scrollTop += offset - (this.queueEl.clientHeight - item.offsetHeight) / 2;
   }
 
   private updateCartActions(track: PlaylistTrack) {

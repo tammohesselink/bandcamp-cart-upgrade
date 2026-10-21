@@ -10,6 +10,13 @@ export const PLAYER_CSS = `
   line-height: 1.4;
   color: #fff;
   box-sizing: border-box;
+  /* The open queue only fills the right third, leaving a transparent strip
+     beside it that would otherwise swallow clicks meant for the page. */
+  pointer-events: none;
+}
+
+#bcp-wrapper > * {
+  pointer-events: auto;
 }
 
 #bcp-collapse-btn {

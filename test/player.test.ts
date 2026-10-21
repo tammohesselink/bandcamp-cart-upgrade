@@ -476,6 +476,39 @@ describe('Player playlist tabs', () => {
   });
 });
 
+describe('Player queue', () => {
+  const ITEM_HEIGHT = 40;
+  const QUEUE_HEIGHT = 300;
+
+  // happy-dom does no layout, so give the queue and its items the geometry a
+  // browser would: a 300px tall list of 40px rows that moves as it scrolls.
+  function stubQueueLayout(player: Player): HTMLElement {
+    const queue = player.wrapper.querySelector<HTMLElement>('#bcp-queue')!;
+    Object.defineProperty(queue, 'clientHeight', { value: QUEUE_HEIGHT });
+    queue.getBoundingClientRect = () => ({ top: 0 }) as DOMRect;
+    queue.querySelectorAll<HTMLElement>('.bcp-queue-item').forEach((item, position) => {
+      Object.defineProperty(item, 'offsetHeight', { value: ITEM_HEIGHT });
+      item.getBoundingClientRect = () => ({ top: position * ITEM_HEIGHT - queue.scrollTop }) as DOMRect;
+    });
+    return queue;
+  }
+
+  function queueButton(player: Player): HTMLButtonElement {
+    return player.wrapper.querySelector<HTMLButtonElement>('button[title="Toggle queue"]')!;
+  }
+
+  it('opens scrolled to the playing track, centred in the list', async () => {
+    const player = new Player(Array.from({ length: 80 }, (_, i) => freshTrack(i + 1)));
+    player.jumpTo('cart', 39);
+    await settle();
+    const queue = stubQueueLayout(player);
+
+    queueButton(player).click();
+
+    expect(queue.scrollTop).toBe(39 * ITEM_HEIGHT - (QUEUE_HEIGHT - ITEM_HEIGHT) / 2);
+  });
+});
+
 describe('Player cart buttons', () => {
   async function playing(track: PlaylistTrack): Promise<Player> {
     const player = new Player([track]);
