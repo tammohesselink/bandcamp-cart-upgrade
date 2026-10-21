@@ -542,6 +542,39 @@ input[type=range].bcp-tempo {
   white-space: nowrap;
 }
 
+.bcp-tag-btn.bcp-tag-btn-active {
+  color: #e6b400;
+  border-color: #6e5c2e;
+}
+
+.bcp-tag-btn.bcp-tag-btn-active:hover:not(:disabled) {
+  color: #ffcc33;
+  border-color: #e6b400;
+}
+
+.bcp-queue-tag-btn {
+  background: none;
+  border: none;
+  color: #555;
+  cursor: pointer;
+  flex-shrink: 0;
+  font-size: 11px;
+  padding: 0 2px;
+  transition: color 0.15s;
+}
+
+.bcp-queue-tag-btn:hover {
+  color: #999;
+}
+
+.bcp-queue-tag-btn.bcp-queue-tag-btn-active {
+  color: #e6b400;
+}
+
+.bcp-queue-tag-btn.bcp-queue-tag-btn-active:hover {
+  color: #ffcc33;
+}
+
 .bcp-toast {
   background: #1a1a1a;
   border: 1px solid #2e2e2e;
@@ -721,8 +754,9 @@ a.itemName.bcp-playing {
 }
 `;
 
-// Backdrop/card shell shared by the cart history, track cache and remove-purchased
-// modals, plus the track cache modal's own rules.
+// Backdrop/card shell shared by the cart history, track cache, remove-purchased
+// and named-cart modals, plus the track cache and named-cart modals' own rules
+// and the sidecart's "Checkout a cart" button, which shows without a player.
 export const MODAL_CSS = `
   .bcp-hb{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:999999;display:flex;align-items:center;justify-content:center}
   .bcp-hm{background:#fff;color:#1a1a1a;border-radius:8px;padding:20px 24px;max-width:520px;width:90%;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,.3);font-family:inherit;font-size:14px}
@@ -746,6 +780,43 @@ export const MODAL_CSS = `
   .bcp-cache-track-detail{color:#888;margin-left:4px}
   .bcp-cache-flags{color:#bbb;font-size:11px;margin-left:4px}
   .bcp-cache-empty{color:#999;font-style:italic;padding:12px 0}
+  .bcp-nc-row{display:flex;align-items:center;gap:8px}
+  .bcp-nc-row input[type=checkbox]{accent-color:#1da0c3;cursor:pointer}
+  .bcp-nc-name{flex:1;font-size:13px}
+  .bcp-nc-meta{color:#999;font-size:12px;white-space:nowrap}
+  .bcp-nc-meta.bcp-nc-stale{color:#c98a00}
+  .bcp-nc-items{list-style:none;margin:5px 0 0;padding:0 0 0 8px;font-size:12px}
+  .bcp-nc-items li{padding:1px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:420px}
+  .bcp-nc-new{display:flex;gap:6px;margin-top:4px;padding:8px;border-top:1px solid #f0f0f0}
+  .bcp-nc-new input[type=text]{flex:1;padding:5px 8px;border:1px solid #ccc;border-radius:4px;font-size:13px;font-family:inherit}
+  .bcp-nc-new button{padding:5px 12px;border-radius:4px;border:1px solid #1da0c3;color:#1da0c3;background:none;cursor:pointer;font-size:12px;font-family:inherit}
+  .bcp-nc-empty{color:#999;font-style:italic;padding:8px 0}
+  .bcp-nc-checkout-btn{padding:4px 10px;border-radius:3px;border:1px solid #1da0c3;color:#1da0c3;background:none;cursor:pointer;font-size:12px;font-family:inherit;white-space:nowrap}
+  .bcp-nc-checkout-btn:disabled{border-color:#ccc;color:#999;cursor:default}
+  .bcp-nc-delete-btn{padding:4px 8px;border-radius:3px;border:1px solid #c0392b;color:#c0392b;background:none;cursor:pointer;font-size:11px;font-family:inherit;white-space:nowrap}
+  .bcp-checkout-cart-btn {
+    display: block;
+    margin: 4px 0 0;
+    padding: 5px 10px;
+    background: none;
+    color: #1da0c3;
+    border: 1px solid #1da0c3;
+    border-radius: 4px;
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: opacity 0.15s;
+  }
+
+  .bcp-checkout-cart-btn:hover:not(:disabled) {
+    opacity: 0.85;
+  }
+
+  .bcp-checkout-cart-btn:disabled {
+    border-color: #ccc;
+    color: #999;
+    cursor: default;
+  }
 `;
 
 export function ensureModalStyles(): void {

@@ -12,6 +12,13 @@ export interface CartSnapshot {
   items: SavedCartItem[];
 }
 
+export interface NamedCart {
+  id: string;
+  name: string;
+  createdAt: number;
+  items: SavedCartItem[];
+}
+
 export interface CartItem {
   url: string;
   type: 'track' | 'album' | 'unknown';

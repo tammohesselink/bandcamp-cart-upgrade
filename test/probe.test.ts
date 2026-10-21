@@ -1,7 +1,7 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { describe, it, expect, beforeEach } from 'vitest';
-import { probeCart, probeDiscography, injectDiscographyButton, readDataCart, injectRestoreCartButton, injectRemoveAlreadyOwnedButton, type DataCartItem } from '../src/probe';
+import { probeCart, probeDiscography, injectDiscographyButton, readDataCart, injectRestoreCartButton, injectRemoveAlreadyOwnedButton, injectCheckoutCartButton, type DataCartItem } from '../src/probe';
 import { findCheckoutControl, clickCheckout } from '../src/bandcamp-dom';
 
 function fixture(name: string): string {
@@ -419,6 +419,76 @@ describe('injectRemoveAlreadyOwnedButton — no sidecart anchor', () => {
 
   it('returns null when #sidecart, #sidecartReveal and #sidecartBody are absent', () => {
     expect(injectRemoveAlreadyOwnedButton()).toBeNull();
+  });
+});
+
+// --- injectCheckoutCartButton -------------------------------------------------
+
+describe('injectCheckoutCartButton — falls back to the sidecart anchor chain', () => {
+  beforeEach(() => loadFixture('sidecart-with-data-cart.html'));
+
+  it('returns a button element', () => {
+    const btn = injectCheckoutCartButton(2);
+    expect(btn?.tagName).toBe('BUTTON');
+  });
+
+  it('button has bcp-checkout-cart-btn class', () => {
+    const btn = injectCheckoutCartButton(2);
+    expect(btn?.classList.contains('bcp-checkout-cart-btn')).toBe(true);
+  });
+
+  it('button text contains the named-cart count', () => {
+    const btn = injectCheckoutCartButton(2);
+    expect(btn?.textContent).toContain('2');
+  });
+
+  it('is inserted after #sidecart when no checkout-selected button is present', () => {
+    const btn = injectCheckoutCartButton(2);
+    const sidecart = document.getElementById('sidecart')!;
+    expect(sidecart.nextElementSibling).toBe(btn);
+  });
+
+  it('is disabled when there are no named carts', () => {
+    const btn = injectCheckoutCartButton(0);
+    expect(btn?.disabled).toBe(true);
+  });
+
+  it('does not double-inject', () => {
+    injectCheckoutCartButton(2);
+    injectCheckoutCartButton(2);
+    expect(document.querySelectorAll('.bcp-checkout-cart-btn')).toHaveLength(1);
+  });
+
+  it('updates the label on a second call instead of leaving a stale count', () => {
+    injectCheckoutCartButton(1);
+    const btn = injectCheckoutCartButton(3);
+    expect(btn?.textContent).toContain('3');
+    expect(btn?.disabled).toBe(false);
+  });
+});
+
+describe('injectCheckoutCartButton — inserted after an existing checkout-selected button', () => {
+  beforeEach(() => {
+    loadFixture('sidecart-with-data-cart.html');
+    const selectedBtn = document.createElement('button');
+    selectedBtn.className = 'bcp-checkout-selected-btn';
+    document.getElementById('sidecart')!.insertAdjacentElement('afterend', selectedBtn);
+  });
+
+  it('lands directly after the checkout-selected button', () => {
+    const btn = injectCheckoutCartButton(1);
+    const selectedBtn = document.querySelector('.bcp-checkout-selected-btn')!;
+    expect(selectedBtn.nextElementSibling).toBe(btn);
+  });
+});
+
+describe('injectCheckoutCartButton — no sidecart anchor', () => {
+  beforeEach(() => {
+    document.documentElement.innerHTML = '<body></body>';
+  });
+
+  it('returns null when #sidecart, #sidecartReveal and #sidecartBody are absent', () => {
+    expect(injectCheckoutCartButton(1)).toBeNull();
   });
 });
 
