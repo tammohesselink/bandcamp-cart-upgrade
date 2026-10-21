@@ -770,7 +770,7 @@ export class Player {
         item.append(marker);
       }
 
-      if (this.activeId === 'cart') {
+      if (this.activeId === 'cart' && this.onTagTrack) {
         const tagIds = this.namedCartIdsFor(track);
         const tagBtn = btn('🏷', 'bcp-queue-tag-btn');
         tagBtn.title = tagIds.length > 0
@@ -1332,7 +1332,7 @@ export class Player {
     }
 
     // Named-cart tagging only makes sense for items in the real Bandcamp cart.
-    if (this.activeId === 'cart') {
+    if (this.activeId === 'cart' && this.onTagTrack) {
       this.cartActionsEl.appendChild(this.buildTagButton(track));
     }
   }

@@ -575,30 +575,6 @@ input[type=range].bcp-tempo {
   color: #ffcc33;
 }
 
-.bcp-checkout-cart-btn {
-  display: block;
-  margin: 4px 0 0;
-  padding: 5px 10px;
-  background: none;
-  color: #1da0c3;
-  border: 1px solid #1da0c3;
-  border-radius: 4px;
-  font-size: 12px;
-  font-family: inherit;
-  cursor: pointer;
-  transition: opacity 0.15s;
-}
-
-.bcp-checkout-cart-btn:hover:not(:disabled) {
-  opacity: 0.85;
-}
-
-.bcp-checkout-cart-btn:disabled {
-  border-color: #ccc;
-  color: #999;
-  cursor: default;
-}
-
 .bcp-toast {
   background: #1a1a1a;
   border: 1px solid #2e2e2e;
@@ -779,7 +755,8 @@ a.itemName.bcp-playing {
 `;
 
 // Backdrop/card shell shared by the cart history, track cache, remove-purchased
-// and named-cart modals, plus the track cache and named-cart modals' own rules.
+// and named-cart modals, plus the track cache and named-cart modals' own rules
+// and the sidecart's "Checkout a cart" button, which shows without a player.
 export const MODAL_CSS = `
   .bcp-hb{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:999999;display:flex;align-items:center;justify-content:center}
   .bcp-hm{background:#fff;color:#1a1a1a;border-radius:8px;padding:20px 24px;max-width:520px;width:90%;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,.3);font-family:inherit;font-size:14px}
@@ -817,6 +794,29 @@ export const MODAL_CSS = `
   .bcp-nc-checkout-btn{padding:4px 10px;border-radius:3px;border:1px solid #1da0c3;color:#1da0c3;background:none;cursor:pointer;font-size:12px;font-family:inherit;white-space:nowrap}
   .bcp-nc-checkout-btn:disabled{border-color:#ccc;color:#999;cursor:default}
   .bcp-nc-delete-btn{padding:4px 8px;border-radius:3px;border:1px solid #c0392b;color:#c0392b;background:none;cursor:pointer;font-size:11px;font-family:inherit;white-space:nowrap}
+  .bcp-checkout-cart-btn {
+    display: block;
+    margin: 4px 0 0;
+    padding: 5px 10px;
+    background: none;
+    color: #1da0c3;
+    border: 1px solid #1da0c3;
+    border-radius: 4px;
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: opacity 0.15s;
+  }
+
+  .bcp-checkout-cart-btn:hover:not(:disabled) {
+    opacity: 0.85;
+  }
+
+  .bcp-checkout-cart-btn:disabled {
+    border-color: #ccc;
+    color: #999;
+    cursor: default;
+  }
 `;
 
 export function ensureModalStyles(): void {

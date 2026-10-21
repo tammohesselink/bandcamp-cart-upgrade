@@ -175,6 +175,8 @@ async function loadNamedCarts(): Promise<NamedCart[]> {
 }
 
 function saveNamedCarts(carts: NamedCart[]): void {
+  // Keep the sidecart's "Checkout a cart (N)" count in step with the carts.
+  if (document.querySelector('.bcp-checkout-cart-btn')) injectCheckoutCartButton(carts.length);
   chrome.storage.local.set({ [NAMED_CARTS_KEY]: { carts, updatedAt: Date.now() } }).catch(() => {});
 }
 
@@ -923,7 +925,7 @@ async function checkoutInPrivateWindow(
 
   // Persist purchased items so the cleanup button survives a page reload.
   const merged = await addPendingPurchase(toRemove);
-  setupRemovePurchasedButton(merged);
+  if (merged.length > 0) setupRemovePurchasedButton(merged);
   return true;
 }
 
@@ -1275,6 +1277,7 @@ async function main() {
     // at this point; it's read lazily so it reflects whichever value is set
     // (or not) by the time the user actually clicks.
     namedCarts = await loadNamedCarts();
+    ensureModalStyles();
     const checkoutCartBtn = injectCheckoutCartButton(namedCarts.length);
     checkoutCartBtn?.addEventListener('click', () => showNamedCartCheckoutModal(activePlayer));
   } else if (settings.showCartHistoryBtn) {
@@ -1324,8 +1327,9 @@ async function main() {
   // Named carts are skipped entirely in incognito: its storage is a separate,
   // throwaway instance (same reason cart history is skipped, see below).
   if (!chrome.extension.inIncognitoContext) {
-    player.setNamedCarts(namedCarts);
+    // Set before setNamedCarts() renders, which only draws tag buttons once a handler exists.
     player.onTagTrack = (track, cartItemUrl) => showNamedCartPicker(player, track, cartItemUrl);
+    player.setNamedCarts(namedCarts);
   }
 
   player.onTrackChange = (id, index) => {
