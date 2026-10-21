@@ -1,7 +1,7 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { describe, it, expect } from 'vitest';
-import { parseTralbum, isReleaseOwned } from '../src/bandcamp';
+import { hasTralbumData, parseTralbum, isReleaseOwned } from '../src/bandcamp';
 
 function fixture(name: string): string {
   return readFileSync(join(__dirname, 'fixtures', name), 'utf-8');
@@ -363,5 +363,21 @@ describe('parseTralbum — album a track page belongs to', () => {
     const album = parseTralbum(fixture('album.html'), 'https://solardrift.bandcamp.com/album/echoes-of-the-void');
     expect(single[0]!.albumUrl).toBeNull();
     for (const t of album) expect(t.albumUrl).toBeNull();
+  });
+});
+
+describe('hasTralbumData', () => {
+  it('is true for a release page', () => {
+    expect(hasTralbumData(fixture('album.html'))).toBe(true);
+  });
+
+  it('is true for a release page that lists no tracks', () => {
+    const html = '<div data-tralbum="{&quot;id&quot;:1,&quot;trackinfo&quot;:[]}"></div>';
+    expect(parseTralbum(html, 'https://label.bandcamp.com/album/merch-only')).toEqual([]);
+    expect(hasTralbumData(html)).toBe(true);
+  });
+
+  it('is false for a page that is not a release page', () => {
+    expect(hasTralbumData('<html><body>Too many requests</body></html>')).toBe(false);
   });
 });

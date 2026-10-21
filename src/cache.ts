@@ -10,14 +10,19 @@ export const TRACK_DETAILS_MAX_AGE_MS = 182 * 24 * 60 * 60 * 1000;
 // trust data fetched within this window.
 export const LIVE_DATA_MAX_AGE_MS = 60 * 60 * 1000;
 
+// A release page without tracks (merch, or nothing uploaded yet) is cached as
+// an empty entry so it isn't refetched on every load, but rechecked weekly in
+// case tracks are added.
+export const NO_TRACKS_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
 export interface CacheEntry {
   tracks: PlaylistTrack[];
   cachedAt: number;
 }
 
 export function isCacheEntryUsable(entry: CacheEntry, maxAgeMs: number, now = Date.now()): boolean {
-  if (entry.tracks.length === 0) return false;
-  return now - entry.cachedAt <= maxAgeMs;
+  const maxAge = entry.tracks.length === 0 ? Math.min(maxAgeMs, NO_TRACKS_MAX_AGE_MS) : maxAgeMs;
+  return now - entry.cachedAt <= maxAge;
 }
 
 // Unplayable tracks can become playable (a pre-order is released, or the user
@@ -70,8 +75,9 @@ export async function readCacheBatch(urls: string[]): Promise<Map<string, CacheE
   return hits;
 }
 
+// An empty `tracks` records a release page that has no tracks. Callers must
+// not write one for a page that failed to parse, or it would not be retried.
 export function writeCache(url: string, tracks: PlaylistTrack[]): void {
-  if (tracks.length === 0) return; // Don't cache parse failures — allow retries.
   const entry: CacheEntry = { tracks, cachedAt: Date.now() };
   chrome.storage.local.set({ [cacheKey(url)]: entry }).catch(() => {});
 }

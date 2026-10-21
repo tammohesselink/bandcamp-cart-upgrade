@@ -185,6 +185,49 @@ export function probeDiscography(): CartItem[] {
     items.push({ url, type, title, artist: '', thumbnailUrl: '' });
   }
 
+  // Bandcamp only draws the first releases of a big label; the rest sit in
+  // #music-grid's data-client-items and are drawn as the page scrolls.
+  // Compared without the query string, which drawn links can carry (?label=…).
+  const releaseKey = (url: string) => {
+    const { origin, pathname } = new URL(url);
+    return origin + pathname;
+  };
+  const drawn = new Set(items.map((item) => releaseKey(item.url)));
+  for (const item of readGridClientItems()) {
+    if (drawn.has(releaseKey(item.url))) continue;
+    drawn.add(releaseKey(item.url));
+    items.push(item);
+  }
+
+  return items;
+}
+
+function readGridClientItems(): CartItem[] {
+  const raw = document.getElementById('music-grid')?.getAttribute('data-client-items');
+  if (!raw) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    console.warn('[bcp] Could not parse #music-grid data-client-items');
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  const items: CartItem[] = [];
+  for (const entry of parsed as Record<string, unknown>[]) {
+    if (typeof entry?.page_url !== 'string') continue;
+    // Resolved like the drawn links are, against the document.
+    const url = new URL(entry.page_url, document.baseURI).href;
+    const typeMatch = url.match(/\/(track|album)\//);
+    if (!typeMatch) continue;
+    items.push({
+      url,
+      type: typeMatch[1] === 'album' ? 'album' : 'track',
+      title: typeof entry.title === 'string' ? entry.title : '',
+      artist: typeof entry.artist === 'string' ? entry.artist : '',
+      thumbnailUrl: '',
+    });
+  }
   return items;
 }
 

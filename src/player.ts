@@ -208,18 +208,34 @@ export class Player {
 
   setPlaylist(id: PlaylistId, label: string, tracks: PlaylistTrack[]) {
     const previous = this.playlists.get(id);
-    const isNew = !previous;
-    // A reload replaces the playlist mid-playback; it still counts as played.
+    // A reloaded playlist that has played keeps its cued or playing track, so
+    // next() carries on from it, and still counts as played. Otherwise cue the
+    // first track that can stream, so the play button works right away.
+    const current = previous?.tracks[previous.lastIndex];
+    const foundIndex = current
+      ? tracks.findIndex((t) => normalizeUrl(t.pageUrl) === normalizeUrl(current.pageUrl))
+      : -1;
+    const keptIndex = foundIndex !== -1 && (previous!.started || !tracks[foundIndex]!.unplayable) ? foundIndex : -1;
     const state: PlaylistState = {
       label, tracks, lastIndex: 0, statusMsg: '', statusKind: 'info',
-      reversed: !!this.reversedPlaylists[id], started: previous?.started ?? false, nextIsCurrent: false,
+      reversed: !!this.reversedPlaylists[id], started: previous?.started ?? false,
+      nextIsCurrent: keptIndex !== -1 && previous!.nextIsCurrent,
     };
-    state.lastIndex = firstPlayable(state);
+    state.lastIndex = keptIndex !== -1 ? keptIndex : firstPlayable(state);
+    // A dropped track still playing hands over to the cued one when it ends.
+    if (keptIndex === -1 && this.activeId === id && !this.audio.paused) state.nextIsCurrent = true;
     this.playlists.set(id, state);
     if (tracks.length > 0) this.unavailablePlaylists.delete(id);
     this.updateHeader();
-    if (isNew && this.playlists.size === 1) {
+    if (!previous && this.playlists.size === 1) {
       this.selectPlaylist(id);
+    } else if (this.activeId === id) {
+      // Leave a track that is still playing alone; it was dropped from the list.
+      if (keptIndex === -1 && this.audio.paused) this.loadTrack(state.lastIndex, true);
+      else {
+        this.updateQueueEl();
+        this.updateNavButtons();
+      }
     }
   }
 
@@ -409,10 +425,14 @@ export class Player {
   }
 
   removeTracksByReleaseUrl(id: PlaylistId, releaseUrl: string) {
+    const normalized = normalizeUrl(releaseUrl);
+    this.removeTracks(id, (t) => normalizeUrl(t.releaseUrl) === normalized);
+  }
+
+  removeTracks(id: PlaylistId, shouldRemove: (track: PlaylistTrack) => boolean) {
     const state = this.playlists.get(id);
     if (!state) return;
-    const normalized = normalizeUrl(releaseUrl);
-    this.removeTracks(state, (t) => normalizeUrl(t.releaseUrl) === normalized);
+    this.removeFromState(state, shouldRemove);
     if (this.activeId === id) {
       // Don't touch the audio — let the current stream finish naturally.
       this.updateHeader();
@@ -427,7 +447,7 @@ export class Player {
     const normalized = normalizeUrl(pageUrl);
     const idx = state.tracks.findIndex((t) => normalizeUrl(t.pageUrl) === normalized);
     if (idx === -1) return;
-    this.removeTracks(state, (t) => t === state.tracks[idx]);
+    this.removeFromState(state, (t) => t === state.tracks[idx]);
     if (this.activeId === id) {
       this.updateHeader();
       this.updateQueueEl();
@@ -440,7 +460,7 @@ export class Player {
   // Removes the matching tracks and moves lastIndex so next() continues where
   // it would have: when the current track goes, lastIndex moves to the first
   // survivor after it in play order, which next() then plays.
-  private removeTracks(state: PlaylistState, removed: (track: PlaylistTrack) => boolean) {
+  private removeFromState(state: PlaylistState, removed: (track: PlaylistTrack) => boolean) {
     const current = state.tracks[state.lastIndex];
     let anchor = current;
     if (current && removed(current)) {
