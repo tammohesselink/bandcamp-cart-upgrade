@@ -79,7 +79,6 @@ export class Player {
   private unavailablePlaylists = new Map<PlaylistId, { label: string; reason: string; kind: StatusKind; onLoad?: () => void }>();
   private collapseBtn!: HTMLButtonElement;
   private seeking = false;
-  private switchingPlaylist = false;
   // Bumped by every play, pause and track change, so a play that is still
   // waiting for a fresh stream link can tell it has been superseded.
   private playRequestId = 0;
@@ -253,11 +252,9 @@ export class Player {
     // event dispatched above. Reflect the paused state explicitly so the glyph
     // and onPlayStateChange callbacks aren't silently dropped.
     // Skip when silent: silent selects are native-driven (onNativePlay → jumpTo)
-    // and pushing paused state back would pause the native audio that just started.
+    // and play right away, so there is no paused state to show.
     if (!silent) {
-      this.switchingPlaylist = true;
       this.reflectPlaybackState(false);
-      this.switchingPlaylist = false;
       // Reset playback position to the beginning. audio.load() does this when the
       // stream URL changes, but not when the same track is reloaded — explicit
       // reset covers both cases.
@@ -399,8 +396,11 @@ export class Player {
   }
 
   pause() {
+    const wasPending = this.playPending;
     this.cancelPendingPlay();
     this.audio.pause();
+    // A play still waiting for its stream link has no audio to fire 'pause'.
+    if (wasPending && this.audio.paused) this.reflectPlaybackState(false);
   }
 
   play() {
@@ -419,16 +419,24 @@ export class Player {
     this.seekBar.value = String(fraction * 100);
   }
 
+  // Makes the track at `pageUrl` the current one without changing whether the
+  // player is playing: a playing player plays it, a paused one waits on it.
   cueTrackByPageUrl(id: PlaylistId, pageUrl: string) {
     const state = this.playlists.get(id);
     if (!state) return;
     const idx = state.tracks.findIndex((t) => normalizeUrl(t.pageUrl) === normalizeUrl(pageUrl));
     if (idx === -1) return;
-    if (id === this.activeId) {
-      this.loadTrack(idx, true);
-    } else {
+    if (id !== this.activeId) {
       state.lastIndex = idx;
+      return;
     }
+    // Reloading the current track would cancel a play waiting for its link.
+    if (idx === state.lastIndex) return;
+    const wasPlaying = this.isPlayingOrPending;
+    this.loadTrack(idx, true);
+    // Swapping the source stops the old audio without a 'pause' event, so
+    // keep playing rather than go silent behind a pause button.
+    if (wasPlaying) void this.startPlayback({});
   }
 
   /** Stop audio, remove injected UI, and reset the body padding. */
@@ -969,12 +977,13 @@ export class Player {
     return this.activeId;
   }
 
-  get isPlaylistSwitching(): boolean {
-    return this.switchingPlaylist;
+  // Also true while a play waits for a fresh stream link.
+  get isPlayingOrPending(): boolean {
+    return !this.audio.paused || this.playPending;
   }
 
-  get isPlaying(): boolean {
-    return !this.audio.paused;
+  get currentTime(): number {
+    return this.audio.currentTime;
   }
 
   // Counts every start of playback, so a caller can tell whether the user
@@ -1156,7 +1165,7 @@ export class Player {
 
   private togglePlay() {
     if (this.playPending) {
-      this.cancelPendingPlay();
+      this.pause();
     } else if (this.audio.paused) {
       this.play();
     } else {
