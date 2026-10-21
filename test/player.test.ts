@@ -448,6 +448,34 @@ describe('Player removing tracks', () => {
 
     expect(audioOf(player).src).toBe('https://t4.bcbits.com/stream/track-3-old');
   });
+
+  it('still plays the track after a removed one when the playlist is reloaded before it ends', async () => {
+    const [removed, next, last] = [freshTrack(1), freshTrack(2), freshTrack(3)];
+    const player = new Player([removed, next, last]);
+    refreshWith(player);
+    player.jumpTo('cart', 0);
+    await settle();
+
+    player.removeTracks('cart', (t) => t === removed);
+    player.setPlaylist('cart', 'Cart', [freshTrack(2), freshTrack(3)]);
+    audioOf(player).dispatchEvent(new Event('ended'));
+    await settle();
+
+    expect(audioOf(player).src).toBe('https://t4.bcbits.com/stream/track-2-old');
+  });
+
+  it('plays the first track when a reload drops the playing one', async () => {
+    const player = new Player([freshTrack(1), freshTrack(2)]);
+    refreshWith(player);
+    player.jumpTo('cart', 1);
+    await settle();
+
+    player.setPlaylist('cart', 'Cart', [freshTrack(3), freshTrack(4)]);
+    audioOf(player).dispatchEvent(new Event('ended'));
+    await settle();
+
+    expect(audioOf(player).src).toBe('https://t4.bcbits.com/stream/track-3-old');
+  });
 });
 
 describe('Player playlist tabs', () => {
