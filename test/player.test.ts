@@ -411,6 +411,45 @@ describe('Player with a removed track still loaded', () => {
   });
 });
 
+describe('Player cueing a playlist', () => {
+  it('cues the first track that can stream, so play works right away', () => {
+    const player = new Player([freshTrack(1, { unplayable: true, streamUrl: null }), freshTrack(2)]);
+
+    expect(player.wrapper.querySelector('.bcp-track-title')?.textContent).toBe('Track 2');
+    expect(player.wrapper.querySelector<HTMLButtonElement>('.bcp-btn-play')?.disabled).toBe(false);
+  });
+
+  it('keeps playing from the same track when the playlist is reloaded around it', async () => {
+    const player = new Player([freshTrack(2)]);
+    refreshWith(player);
+    player.jumpTo('cart', 0);
+    await settle();
+
+    // The rest of the release list arrives, with the playing track in the middle.
+    player.setPlaylist('cart', 'Cart', [freshTrack(1), freshTrack(2), freshTrack(3)]);
+    audioOf(player).dispatchEvent(new Event('ended'));
+    await settle();
+
+    expect(audioOf(player).src).toBe('https://t4.bcbits.com/stream/track-3-old');
+  });
+});
+
+describe('Player removing tracks', () => {
+  it('plays the track after a removed one once the removed one ends', async () => {
+    const [first, removed, next] = [freshTrack(1), freshTrack(2), freshTrack(3)];
+    const player = new Player([first, removed, next]);
+    refreshWith(player);
+    player.jumpTo('cart', 1);
+    await settle();
+
+    player.removeTracks('cart', (t) => t === removed);
+    audioOf(player).dispatchEvent(new Event('ended'));
+    await settle();
+
+    expect(audioOf(player).src).toBe('https://t4.bcbits.com/stream/track-3-old');
+  });
+});
+
 describe('Player playlist tabs', () => {
   function tabNamed(player: Player, text: string): HTMLButtonElement | undefined {
     return Array.from(player.wrapper.querySelectorAll<HTMLButtonElement>('.bcp-tab')).find((tab) => tab.textContent === text);

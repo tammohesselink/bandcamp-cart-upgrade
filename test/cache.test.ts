@@ -4,6 +4,7 @@ import {
   isStreamFresh,
   needsPlayabilityRecheck,
   LIVE_DATA_MAX_AGE_MS,
+  NO_TRACKS_MAX_AGE_MS,
   TRACK_DETAILS_MAX_AGE_MS,
 } from '../src/cache';
 import { makeTrack as track } from './track-factory';
@@ -50,10 +51,24 @@ describe('isCacheEntryUsable', () => {
       expected: true,
     },
     {
-      name: 'rejects an entry without tracks',
+      name: 'accepts a release without tracks cached six days ago',
       tracks: [],
-      ageMs: 0,
+      ageMs: 6 * DAY,
       maxAgeMs: TRACK_DETAILS_MAX_AGE_MS,
+      expected: true,
+    },
+    {
+      name: 'rejects a release without tracks cached more than a week ago',
+      tracks: [],
+      ageMs: NO_TRACKS_MAX_AGE_MS + MINUTE,
+      maxAgeMs: TRACK_DETAILS_MAX_AGE_MS,
+      expected: false,
+    },
+    {
+      name: 'rejects a release without tracks older than an hour when live data is required',
+      tracks: [],
+      ageMs: 61 * MINUTE,
+      maxAgeMs: LIVE_DATA_MAX_AGE_MS,
       expected: false,
     },
     {

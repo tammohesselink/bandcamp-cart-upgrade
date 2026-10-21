@@ -105,7 +105,8 @@ export function readPageContext(latestSyncNum: number | null): BandcampPageConte
       try {
         const blob = JSON.parse(el.getAttribute('data-blob')!) as Record<string, unknown>;
         if (typeof blob.fan_id === 'number') { fanId = String(blob.fan_id); break; }
-        const fan = blob.fan as Record<string, unknown> | undefined;
+        const fan = (blob.fan ?? (blob.identities as Record<string, unknown> | undefined)?.fan) as
+          Record<string, unknown> | undefined;
         if (typeof fan?.id === 'number') { fanId = String(fan.id); break; }
       } catch { /* continue */ }
     }
@@ -186,4 +187,16 @@ export function isCheckoutPage(): boolean {
     location.hostname === 'checkout.bandcamp.com' ||
     /^\/(checkout|payment|cart\/checkout)(\/?$|\/)/i.test(location.pathname)
   );
+}
+
+// Bandcamp lists the signed-in fan under identities.fan in the page's data
+// blob; it is null when logged out. Unknown counts as logged out.
+export function isLoggedIn(): boolean {
+  for (const el of Array.from(document.querySelectorAll(SEL_DATA_BLOB))) {
+    try {
+      const blob = JSON.parse(el.getAttribute('data-blob')!) as { identities?: { fan?: unknown } };
+      if (blob.identities) return !!blob.identities.fan;
+    } catch { /* continue */ }
+  }
+  return false;
 }

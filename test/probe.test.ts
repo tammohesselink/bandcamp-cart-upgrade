@@ -134,6 +134,38 @@ describe('probeDiscography — with #music-grid', () => {
   });
 });
 
+describe('probeDiscography — releases Bandcamp has not drawn yet', () => {
+  beforeEach(() => {
+    loadFixture('label-with-music-grid.html');
+    setPathname('/music');
+    const clientItems = [
+      { page_url: '/album/first-album', title: 'First Album', artist: 'Drawn', type: 'album' },
+      { page_url: '/album/undrawn-album', title: 'Undrawn Album', artist: 'Later', type: 'album' },
+      { page_url: 'https://other.bandcamp.com/track/guest-track', title: 'Guest Track', artist: 'Guest', type: 'track' },
+    ];
+    document.getElementById('music-grid')!.setAttribute('data-client-items', JSON.stringify(clientItems));
+  });
+
+  it('adds the undrawn releases after the drawn ones, without repeating drawn ones', () => {
+    const urls = probeDiscography().map((i) => i.url);
+    expect(urls).toHaveLength(5);
+    expect(urls.slice(3)).toEqual([
+      new URL('/album/undrawn-album', document.baseURI).href,
+      'https://other.bandcamp.com/track/guest-track',
+    ]);
+  });
+
+  it('reads the type, title and artist of an undrawn release', () => {
+    const guest = probeDiscography().find((i) => i.url.includes('guest-track'));
+    expect(guest).toMatchObject({ type: 'track', title: 'Guest Track', artist: 'Guest' });
+  });
+
+  it('ignores a data-client-items value it cannot parse', () => {
+    document.getElementById('music-grid')!.setAttribute('data-client-items', '{not json');
+    expect(probeDiscography()).toHaveLength(3);
+  });
+});
+
 describe('probeDiscography — with featured-grid and #music-grid', () => {
   beforeEach(() => {
     loadFixture('label-with-featured-grid.html');

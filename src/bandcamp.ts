@@ -69,6 +69,12 @@ export function parseTralbum(html: string, pageUrl: string): PlaylistTrack[] {
   });
 }
 
+// True when the page is a release page Bandcamp served normally, even if it
+// lists no tracks; false for error or challenge pages.
+export function hasTralbumData(html: string): boolean {
+  return extractTralbumData(html) !== null;
+}
+
 function extractTralbumData(html: string): TralbumData | null {
   // Strategy 1: data-tralbum attribute (some Bandcamp pages). Attribute values
   // HTML-entity-encode their inner quotes, so decode before JSON.parse.

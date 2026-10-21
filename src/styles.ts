@@ -460,6 +460,13 @@ input[type=range].bcp-tempo {
   opacity: 1;
 }
 
+.bcp-cart-play-btn.bcp-disabled,
+.bcp-grid-play-btn.bcp-disabled {
+  color: #888;
+  opacity: 0.4;
+  cursor: default;
+}
+
 .bcp-cart-actions {
   display: flex;
   align-items: center;
