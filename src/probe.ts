@@ -127,46 +127,10 @@ export function injectCheckoutCartButton(namedCartCount: number): HTMLButtonElem
   return button;
 }
 
-export function injectRemovePurchasedButton(count: number): HTMLButtonElement | null {
-  const anchor = document.getElementById('sidecart')
-    ?? document.querySelector('#sidecartReveal')
-    ?? document.getElementById('sidecartBody');
-  if (!anchor) return null;
-
-  // A second private-window checkout in the same page life reuses this button
-  // with an updated count; the caller (setupRemovePurchasedButton) is
-  // responsible for re-binding its click handler to the current item list.
-  const existing = document.querySelector<HTMLButtonElement>('.bcp-remove-purchased-btn');
-  if (existing) {
-    existing.textContent = `Remove purchased tracks from cart (${count})`;
-    const existingNote = document.querySelector<HTMLElement>('.bcp-remove-purchased-note');
-    if (existingNote) existingNote.textContent = `⚠ ${count} item${count !== 1 ? 's' : ''} sent to private checkout`;
-    return existing;
-  }
-
-  const note = document.createElement('div');
-  note.className = 'bcp-remove-purchased-note';
-  Object.assign(note.style, {
-    color: '#888', fontSize: '11px', marginTop: '6px', textAlign: 'center',
-    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-  });
-  note.textContent = `⚠ ${count} item${count !== 1 ? 's' : ''} sent to private checkout`;
-
-  const button = document.createElement('button');
-  button.className = 'buttonLink bcp-remove-purchased-btn';
-  button.textContent = `Remove purchased tracks from cart (${count})`;
-
-  // Insert note first (becomes next sibling), then button (note shifts it down)
-  anchor.insertAdjacentElement('afterend', button);
-  anchor.insertAdjacentElement('afterend', note);
-  return button;
-}
-
-// Always-available button (unlike injectRemovePurchasedButton above, which only
-// appears after the extension's own private-checkout flow) that lets the fan
-// check the cart against Bandcamp's own ownership state. Covers items bought
-// through a checkout the extension didn't initiate — e.g. checking out the
-// same cart in a separate anonymous/incognito window.
+// Always-available button that lets the fan check the cart against Bandcamp's
+// own ownership state. Covers items bought through a private-window checkout,
+// whether the extension opened it or the fan checked out the same cart in a
+// separate anonymous/incognito window themselves.
 export function injectRemoveAlreadyOwnedButton(): HTMLButtonElement | null {
   const anchor = document.getElementById('sidecart')
     ?? document.querySelector('#sidecartReveal')
