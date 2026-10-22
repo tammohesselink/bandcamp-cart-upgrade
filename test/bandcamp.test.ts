@@ -1,7 +1,7 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { describe, it, expect } from 'vitest';
-import { hasTralbumData, parseTralbum, isReleaseOwned } from '../src/bandcamp';
+import { hasTralbumData, parseTralbum, isReleaseOwned, isCartAddRejected } from '../src/bandcamp';
 
 function fixture(name: string): string {
   return readFileSync(join(__dirname, 'fixtures', name), 'utf-8');
@@ -379,5 +379,32 @@ describe('hasTralbumData', () => {
 
   it('is false for a page that is not a release page', () => {
     expect(hasTralbumData('<html><body>Too many requests</body></html>')).toBe(false);
+  });
+});
+
+// Response bodies trimmed from real cart/cb answers for oddysee.bandcamp.com.
+describe('isCartAddRejected', () => {
+  it('is false for an add Bandcamp made', () => {
+    const body = { req: 'add', id: 407365374, sync_num: 2, subtotal: 5.61 };
+    expect(isCartAddRejected(body, 4136069265, 'a')).toBe(false);
+  });
+
+  it('is true for a resync to a cart without the item, as for an album-only track', () => {
+    const body = { req: 'add', resync: true, cart_data: { is_default: true, country: 'US', currency: 'USD' } };
+    expect(isCartAddRejected(body, 946312870, 't')).toBe(true);
+  });
+
+  it('is false for a resync to a cart that holds the item', () => {
+    const body = { req: 'add', resync: true, cart_data: { sync_num: 3, items: [{ id: 407365618, item_type: 'a', item_id: 4136069265 }] } };
+    expect(isCartAddRejected(body, 4136069265, 'a')).toBe(false);
+  });
+
+  it('is true for a resync to a cart that holds the same id as the other item type', () => {
+    const body = { req: 'add', resync: true, cart_data: { sync_num: 3, items: [{ id: 407365618, item_type: 'a', item_id: 4136069265 }] } };
+    expect(isCartAddRejected(body, 4136069265, 't')).toBe(true);
+  });
+
+  it('is false for a body that is not JSON', () => {
+    expect(isCartAddRejected(null, 4136069265, 'a')).toBe(false);
   });
 });

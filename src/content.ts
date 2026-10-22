@@ -590,6 +590,37 @@ function showCacheModal(entries: CacheDump[]): void {
 // Keeping the hardened add/remove logic here ensures sync_num handling and
 // line-item-id resolution are always consistent.
 
+interface CartAddTarget {
+  tralbumId: number;
+  tralbumType: 't' | 'a';
+  minPrice: number;
+  bandId: number | null;
+}
+
+// What Bandcamp's cart/cb needs to add `item`, read from its release page's
+// tracks. Null when that can't be worked out.
+async function resolveCartAddTarget(item: SavedCartItem, tracks: PlaylistTrack[]): Promise<CartAddTarget | null> {
+  let track = tracks[0];
+  if (!track) return null;
+  const isTrackAdd = item.purchaseType === 'track';
+  // Album purchases can link to one of the album's track pages, whose own ids
+  // are the track's: adding those would buy just that track, or be refused for
+  // an album-only track, so add the album's copy instead.
+  if (item.purchaseType === 'album' && track.releaseType === 'track' && track.albumUrl) {
+    const albumTrack = await albumTrackFor(track);
+    if (albumTrack === null) return null;
+    track = albumTrack;
+  }
+  const tralbumId = isTrackAdd ? (track.trackId ?? track.releaseId) : track.releaseId;
+  if (tralbumId === null) return null;
+  return {
+    tralbumId,
+    tralbumType: isTrackAdd ? 't' : (track.releaseType === 'track' ? 't' : 'a'),
+    minPrice: (isTrackAdd ? (track.trackMinPrice ?? track.minPrice) : track.minPrice) ?? 0,
+    bandId: track.bandId,
+  };
+}
+
 // `preparedTracks` are release details fetched moments ago; without them the
 // release page is fetched (or read from a cache entry under an hour old).
 async function addCartItem(item: SavedCartItem, cartLengthHint: number, preparedTracks?: PlaylistTrack[]): Promise<boolean> {
@@ -599,26 +630,18 @@ async function addCartItem(item: SavedCartItem, cartLengthHint: number, prepared
     return false;
   }
 
-  const track = tracks[0]!;
-  const isTrackAdd = item.purchaseType === 'track';
-  const tralbumId = isTrackAdd ? (track.trackId ?? track.releaseId) : track.releaseId;
-  const tralbumType = isTrackAdd ? 't' : (track.releaseType === 'track' ? 't' : 'a');
-  const minPrice = isTrackAdd ? (track.trackMinPrice ?? track.minPrice) : track.minPrice;
-
-  if (tralbumId === null) {
-    console.error('[bcp] cart-add: no tralbum id for', item.url, track);
+  const target = await resolveCartAddTarget(item, tracks);
+  if (target === null) {
+    console.error('[bcp] cart-add: no tralbum id for', item.url, tracks[0]);
     return false;
   }
 
   const ctx = readPageContext(latestSyncNum);
-  console.log('[bcp] cart-add', { url: item.url, tralbumId, tralbumType, minPrice, syncNum: ctx.syncNum });
+  console.log('[bcp] cart-add', { url: item.url, ...target, syncNum: ctx.syncNum });
 
   const result = await sendBcpMessage({
     type: 'cart-add',
-    tralbumId,
-    tralbumType,
-    minPrice: minPrice ?? 0,
-    bandId: track.bandId,
+    ...target,
     releaseUrl: item.url,
     syncNum: ctx.syncNum,
     clientId: ctx.clientId,
@@ -712,8 +735,13 @@ async function removeCartItem(item: SavedCartItem): Promise<boolean> {
 interface ProgressOverlay {
   setTitle(text: string): void;
   setProgress(text: string): void;
-  showDone(onCheckout: () => void, onContinue: () => void, onLogin: () => void): void;
+  showDone(onCheckout: () => void, onContinue: () => void, onLogin: () => void, warning?: string): void;
   remove(): void;
+}
+
+// One release per line, without the scheme, for the private-window overlay.
+function describeReleaseUrls(urls: string[]): string {
+  return urls.map((u) => u.replace(/^https?:\/\//, '')).join('\n');
 }
 
 function createProgressOverlay(initialTitle: string, onCancel?: () => void): ProgressOverlay {
@@ -734,7 +762,7 @@ function createProgressOverlay(initialTitle: string, onCancel?: () => void): Pro
   Object.assign(titleEl.style, { color: '#f0f0f0', fontSize: '15px', fontWeight: '600', marginBottom: '10px' });
   titleEl.textContent = initialTitle;
   const progressEl = document.createElement('div');
-  Object.assign(progressEl.style, { color: '#1da0c3', fontSize: '13px' });
+  Object.assign(progressEl.style, { color: '#1da0c3', fontSize: '13px', whiteSpace: 'pre-line' });
   const noteEl = document.createElement('div');
   Object.assign(noteEl.style, { color: '#666', fontSize: '11px', marginTop: '10px' });
   noteEl.textContent = 'Please don\'t close this tab';
@@ -760,9 +788,10 @@ function createProgressOverlay(initialTitle: string, onCancel?: () => void): Pro
   return {
     setTitle: (text) => { titleEl.textContent = text; },
     setProgress: (text) => { progressEl.textContent = text; },
-    showDone: (onCheckout, onContinue, onLogin) => {
+    showDone: (onCheckout, onContinue, onLogin, warning) => {
       titleEl.textContent = 'Your cart is ready!';
-      progressEl.textContent = '';
+      progressEl.textContent = warning ?? '';
+      if (warning) progressEl.style.color = '#e0a040';
       noteEl.style.display = 'none';
       cancelBtn?.remove();
       const btnRow = document.createElement('div');
@@ -893,20 +922,29 @@ async function checkoutInPrivateWindow(
   items: SavedCartItem[],
   toRemove: SavedCartItem[]
 ): Promise<boolean> {
+  // Without incognito access the private window still opens, but nothing runs
+  // in it to build the cart. A pop-up rather than a toast: it needs action.
+  const { allowed } = await sendBcpMessage({ type: 'incognito-access' });
+  if (!allowed) {
+    alert(
+      'Bandcamp Cart Upgrade is not allowed in private windows, so it cannot build the cart there.\n\n' +
+        'Turn on "Allow in incognito" for it in chrome://extensions, reload this page, and try again.'
+    );
+    return false;
+  }
+
   // Resolve track data here in the normal window where the cache is warm
   // (resolvePlaylist already fetched these). The incognito window's storage
   // is a separate empty instance, so it can't use the cache.
   const resolved: Array<{ u: string; id: number; t: 't' | 'a'; pr: number; b: number | null }> = [];
+  const unresolved: SavedCartItem[] = [];
   for (const item of items) {
-    const tracks = await fetchTracksForUrl(item.url, LIVE_DATA_MAX_AGE_MS);
-    if (tracks.length === 0) continue;
-    const track = tracks[0]!;
-    const isTrackAdd = item.purchaseType === 'track';
-    const tralbumId = isTrackAdd ? (track.trackId ?? track.releaseId) : track.releaseId;
-    if (tralbumId === null) continue;
-    const tralbumType: 't' | 'a' = isTrackAdd ? 't' : (track.releaseType === 'track' ? 't' : 'a');
-    const minPrice = isTrackAdd ? (track.trackMinPrice ?? track.minPrice) : track.minPrice;
-    resolved.push({ u: item.url, id: tralbumId, t: tralbumType, pr: minPrice ?? 0, b: track.bandId });
+    const target = await resolveCartAddTarget(item, await fetchTracksForUrl(item.url, LIVE_DATA_MAX_AGE_MS));
+    if (target === null) {
+      unresolved.push(item);
+      continue;
+    }
+    resolved.push({ u: item.url, id: target.tralbumId, t: target.tralbumType, pr: target.minPrice, b: target.bandId });
   }
   if (resolved.length === 0) {
     const msg = 'Could not resolve any selected items — check the console';
@@ -916,13 +954,19 @@ async function checkoutInPrivateWindow(
 
   const result = await sendBcpMessage({ type: 'open-incognito-checkout', items: resolved });
   if (!result.ok) {
-    const msg = 'Could not open a private window. Enable "Allow in incognito" for this extension in chrome://extensions, then try again.';
+    const msg = `Could not open a private window: ${result.error ?? 'unknown error'}`;
     if (player) player.showToast(msg, 'error'); else alert(msg);
     return false;
   }
 
+  if (unresolved.length > 0) {
+    const msg = `Left out of the private cart, as they could not be looked up: ${unresolved.map((i) => i.title || i.url).join(', ')}`;
+    if (player) player.showToast(msg, 'warn'); else alert(msg);
+  }
+
   // Persist purchased items so the cleanup button survives a page reload.
-  const merged = await addPendingPurchase(toRemove);
+  const unresolvedUrls = new Set(unresolved.map((i) => normalizeUrl(i.url)));
+  const merged = await addPendingPurchase(toRemove.filter((i) => !unresolvedUrls.has(normalizeUrl(i.url))));
   if (merged.length > 0) setupRemovePurchasedButton(merged);
   return true;
 }
@@ -1110,6 +1154,8 @@ async function main() {
         // Track data is pre-resolved — just read page context and POST directly,
         // no release-page fetches needed.
         let added = 0;
+        // Release URLs Bandcamp didn't add, listed on the ready screen.
+        const failed: string[] = [];
         for (let i = 0; i < items.length; i++) {
           const it = items[i]!;
           const ctx = readPageContext(latestSyncNum);
@@ -1129,6 +1175,9 @@ async function main() {
           if (result.ok) {
             updateSyncNum(result.body);
             added++;
+          } else {
+            console.error('[bcp] incognito stage A: could not add', it.u, result.error);
+            failed.push(it.u);
           }
           overlay.setProgress(`${added} / ${items.length} items`);
           if (cancelled) break;
@@ -1136,13 +1185,16 @@ async function main() {
 
         if (!cancelled && added === 0) {
           overlay.setTitle('Could not add items to cart');
-          overlay.setProgress('Try logging into Bandcamp in this window and refreshing.');
+          overlay.setProgress(
+            `Bandcamp did not add:\n${describeReleaseUrls(failed)}\n\n` +
+              'Try logging into Bandcamp in this window and refreshing.'
+          );
           // Leave overlay visible so the message is readable; user closes the tab.
         } else if (cancelled) {
           overlay.remove();
         } else {
           // Reload so the page reflects the cart we just built, then show options.
-          location.assign('https://bandcamp.com/cart#bcp_cart_ready=1');
+          location.assign(`https://bandcamp.com/cart#bcp_cart_ready=${encodeURIComponent(JSON.stringify(failed))}`);
         }
       }
 
@@ -1155,11 +1207,22 @@ async function main() {
     if (hash.startsWith('#bcp_cart_ready=')) {
       history.replaceState(null, '', window.location.pathname);
 
+      let failed: string[] = [];
+      try {
+        const raw = JSON.parse(decodeURIComponent(hash.slice('#bcp_cart_ready='.length))) as unknown;
+        if (Array.isArray(raw)) failed = raw.filter((u): u is string => typeof u === 'string');
+      } catch {
+        console.error('[bcp] incognito stage B: could not parse the items that were not added');
+      }
+
       const overlay = createProgressOverlay('Your cart is ready!');
       overlay.showDone(
         () => { location.assign('https://bandcamp.com/cart#bcp_go_checkout=1'); },
         () => { overlay.remove(); },
         () => { location.assign('https://bandcamp.com/login'); },
+        failed.length > 0
+          ? `Bandcamp did not add ${failed.length} item${failed.length !== 1 ? 's' : ''}:\n${describeReleaseUrls(failed)}`
+          : undefined,
       );
       return;
     }
