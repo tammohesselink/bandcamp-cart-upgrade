@@ -40,7 +40,18 @@ export interface OpenIncognitoCheckoutRequest {
   items: Array<{ u: string; id: number; t: 't' | 'a'; pr: number; b: number | null }>;
 }
 
-export type BcpRequest = FetchRequest | CartAddRequest | CartRemoveRequest | OpenIncognitoCheckoutRequest;
+// Whether "Allow in incognito" is on for the extension. Only the background
+// can ask; content scripts have no access to that API.
+export interface IncognitoAccessRequest {
+  type: 'incognito-access';
+}
+
+export type BcpRequest =
+  | FetchRequest
+  | CartAddRequest
+  | CartRemoveRequest
+  | OpenIncognitoCheckoutRequest
+  | IncognitoAccessRequest;
 
 export interface FetchResponse {
   html?: string;
@@ -53,7 +64,11 @@ export interface CartMutationResponse {
   body?: unknown;
 }
 
-export type BcpResponse = FetchResponse | CartMutationResponse;
+export interface IncognitoAccessResponse {
+  allowed: boolean;
+}
+
+export type BcpResponse = FetchResponse | CartMutationResponse | IncognitoAccessResponse;
 
 // Typed wrapper around chrome.runtime.sendMessage so callers get the right
 // response type inferred from the request they send.
@@ -61,6 +76,7 @@ export function sendBcpMessage(msg: FetchRequest): Promise<FetchResponse>;
 export function sendBcpMessage(
   msg: CartAddRequest | CartRemoveRequest | OpenIncognitoCheckoutRequest
 ): Promise<CartMutationResponse>;
+export function sendBcpMessage(msg: IncognitoAccessRequest): Promise<IncognitoAccessResponse>;
 export function sendBcpMessage(msg: BcpRequest): Promise<BcpResponse> {
   return chrome.runtime.sendMessage(msg);
 }

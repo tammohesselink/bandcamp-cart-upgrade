@@ -1,6 +1,7 @@
 import type { BcpRequest, FetchResponse } from './messages';
 import { createLimiter, dedupeInFlight, type Priority } from './inflight';
 import { pruneTrackCache } from './cache';
+import { isCartAddRejected } from './bandcamp';
 
 chrome.runtime.onStartup.addListener(() => { void pruneTrackCache(); });
 chrome.runtime.onInstalled.addListener(() => { void pruneTrackCache(); });
@@ -110,11 +111,19 @@ chrome.runtime.onMessage.addListener((message: BcpRequest, sender, sendResponse)
     return true;
   }
 
+  if (message.type === 'incognito-access') {
+    chrome.extension.isAllowedIncognitoAccess()
+      .then((allowed) => sendResponse({ allowed }))
+      .catch(() => sendResponse({ allowed: false }));
+    return true;
+  }
+
   if (message.type === 'open-incognito-checkout') {
     // Open a private window at the Bandcamp cart page, passing the selected
     // items in the URL hash so the content script can add them to the fresh
-    // incognito cart and proceed to checkout. chrome.windows.create throws if
-    // the user hasn't enabled "Allow in incognito" for the extension.
+    // incognito cart and proceed to checkout. chrome.windows.create opens the
+    // window even when "Allow in incognito" is off — the content script just
+    // never runs there — so callers check 'incognito-access' first.
     const payload = encodeURIComponent(JSON.stringify(message.items));
     const url = `https://bandcamp.com/cart#bcp_cart=${payload}`;
     chrome.windows.create({ url, incognito: true })
@@ -164,6 +173,10 @@ chrome.runtime.onMessage.addListener((message: BcpRequest, sender, sendResponse)
         try { json = await res.json(); } catch { json = null; }
         if (json && typeof json === 'object' && 'error' in json && (json as Record<string, unknown>).error) {
           sendResponse({ ok: false, error: String((json as Record<string, unknown>).error), body: json });
+          return;
+        }
+        if (isCartAddRejected(json, message.tralbumId, message.tralbumType)) {
+          sendResponse({ ok: false, error: 'Bandcamp did not add the item', body: json });
           return;
         }
         sendResponse({ ok: true, body: json });

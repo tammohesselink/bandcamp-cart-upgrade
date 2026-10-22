@@ -297,6 +297,20 @@ export function isReleaseOwned(html: string): boolean {
   return OWNED_PATTERNS.some((pattern) => pattern.test(stripUserContent(html)));
 }
 
+// Bandcamp answers an add it won't make (e.g. an album-only track sent as a
+// track) without an error: it just asks the client to resync to its cart,
+// which doesn't contain the item.
+export function isCartAddRejected(body: unknown, itemId: number | null, itemType: 't' | 'a'): boolean {
+  const response = body as Record<string, unknown> | null;
+  if (!response?.resync) return false;
+  const items = (response.cart_data as Record<string, unknown> | null | undefined)?.items;
+  if (!Array.isArray(items)) return true;
+  return !items.some((i) => {
+    const item = i as Record<string, unknown>;
+    return item.item_id === itemId && item.item_type === itemType;
+  });
+}
+
 function safeOrigin(url: string): string {
   try {
     return new URL(url).origin;
