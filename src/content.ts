@@ -2,7 +2,7 @@ import type { CartItem, PlaylistTrack, SavedCartItem, NamedCart } from './types'
 import { hasTralbumData, parseTralbum, isReleaseOwned } from './bandcamp';
 import { Player } from './player';
 import { setupNativePlayerSync } from './native-sync';
-import { probeCart, probeDiscography, injectDiscographyButton, injectRestoreCartButton, injectRemovePurchasedButton, injectRemoveAlreadyOwnedButton, injectCheckoutCartButton } from './probe';
+import { probeCart, probeDiscography, injectDiscographyButton, injectRestoreCartButton, injectRemoveAlreadyOwnedButton, injectCheckoutCartButton } from './probe';
 import { addSnapshotIfChanged, loadSnapshots, saveSnapshots } from './cart-history';
 import { openCartHistoryModal } from './cart-history-modal';
 import { createNamedCart, deleteNamedCart, toggleItemInNamedCart, partitionByCart } from './named-carts';
@@ -79,9 +79,9 @@ let activePlayer: Player | null = null;
 // Populated from cart_data.items in cart operation responses.
 let cartLineItemIds = new Map<string, number>();
 
-// True while a bulk cart-cleanup flow (already-owned check, pending-purchase
-// removal, or history restore) is running. They all mutate the same cart and
-// each reloads the page when done, so two running at once would race.
+// True while a bulk cart-cleanup flow (already-owned check or history restore)
+// is running. Both mutate the same cart and each reloads the page when done, so
+// running them at once would race.
 let cartCleanupInFlight = false;
 
 function updateCartLineItemIds(items: Record<string, unknown>[]): void {
@@ -119,38 +119,6 @@ async function loadSettings(): Promise<BcpSettings> {
   } catch {
     return { showCartHistoryBtn: true };
   }
-}
-
-// --- Pending-purchase storage -------------------------------------------------
-
-const PENDING_PURCHASE_KEY = 'bcp_pending_purchase_v1';
-
-async function loadPendingPurchase(): Promise<SavedCartItem[]> {
-  try {
-    const result = await chrome.storage.local.get(PENDING_PURCHASE_KEY);
-    return (result[PENDING_PURCHASE_KEY] as SavedCartItem[] | undefined) ?? [];
-  } catch {
-    return [];
-  }
-}
-
-function savePendingPurchase(items: SavedCartItem[]): void {
-  chrome.storage.local.set({ [PENDING_PURCHASE_KEY]: items }).catch(() => {});
-}
-
-function clearPendingPurchase(): void {
-  chrome.storage.local.remove(PENDING_PURCHASE_KEY).catch(() => {});
-}
-
-// Merges newly-purchased items into the stored pending-purchase list (deduped by
-// normalised URL) so a second private-window checkout doesn't drop the first
-// one's cleanup entries.
-async function addPendingPurchase(items: SavedCartItem[]): Promise<SavedCartItem[]> {
-  const existing = await loadPendingPurchase();
-  const seen = new Set(existing.map((i) => normalizeUrl(i.url)));
-  const merged = [...existing, ...items.filter((i) => !seen.has(normalizeUrl(i.url)))];
-  savePendingPurchase(merged);
-  return merged;
 }
 
 // --- Named-cart storage --------------------------------------------------------
@@ -402,7 +370,7 @@ function showNamedCartCheckoutModal(player: Player | null): void {
       checkoutBtn.addEventListener('click', async () => {
         checkoutBtn.disabled = true;
         checkoutBtn.textContent = 'Opening…';
-        const ok = await checkoutNamedCart(cart, player);
+        const ok = await checkoutInPrivateWindow(player, cart.items);
         if (ok) {
           close();
         } else {
@@ -460,14 +428,6 @@ function showNamedCartCheckoutModal(player: Player | null): void {
   closeBtn.addEventListener('click', close);
 
   document.body.appendChild(backdrop);
-}
-
-// Resolves and opens a private-window checkout for a named cart's items. Stale
-// items (no longer in the real cart) are still purchased — `present` (the
-// subset still in the live cart) is what gets offered for removal afterwards.
-async function checkoutNamedCart(cart: NamedCart, player: Player | null): Promise<boolean> {
-  const { present } = partitionByCart(cart, probeCart());
-  return checkoutInPrivateWindow(player, cart.items, present);
 }
 
 // --- Cache viewer modal -------------------------------------------------------
@@ -883,45 +843,9 @@ function showRemovePurchasedConfirm(items: SavedCartItem[]): Promise<boolean> {
   });
 }
 
-function setupRemovePurchasedButton(items: SavedCartItem[]): void {
-  const injected = injectRemovePurchasedButton(items.length);
-  if (!injected) return;
-  // injectRemovePurchasedButton reuses an existing button across calls (e.g. two
-  // private-window checkouts in one page life); clone it to drop any listener
-  // bound to a previous, now-stale item list before attaching the current one.
-  const btn = injected.cloneNode(true) as HTMLButtonElement;
-  injected.replaceWith(btn);
-  btn.addEventListener('click', async () => {
-    if (cartCleanupInFlight) {
-      alert('Another cart cleanup is already in progress — please wait for it to finish.');
-      return;
-    }
-    if (!await showRemovePurchasedConfirm(items)) return;
-    cartCleanupInFlight = true;
-    btn.disabled = true;
-    try {
-      for (let i = 0; i < items.length; i++) {
-        const label = items[i]!.title || items[i]!.url;
-        btn.textContent = `Removing "${label}" (${i + 1} / ${items.length})…`;
-        await removeCartItem(items[i]!);
-      }
-      clearPendingPurchase();
-      location.reload();
-    } finally {
-      cartCleanupInFlight = false;
-    }
-  });
-}
-
-// Resolves each item's release page, opens a private-window checkout containing
-// exactly `items`, and — on success — merges `toRemove` into the pending-purchase
-// cleanup list. `toRemove` may be a subset of `items` when some entries are no
-// longer in the real Bandcamp cart and so shouldn't be offered for removal.
-async function checkoutInPrivateWindow(
-  player: Player | null,
-  items: SavedCartItem[],
-  toRemove: SavedCartItem[]
-): Promise<boolean> {
+// Resolves each item's release page and opens a private-window checkout
+// containing exactly `items`. The real cart is left as is.
+async function checkoutInPrivateWindow(player: Player | null, items: SavedCartItem[]): Promise<boolean> {
   // Without incognito access the private window still opens, but nothing runs
   // in it to build the cart. A pop-up rather than a toast: it needs action.
   const { allowed } = await sendBcpMessage({ type: 'incognito-access' });
@@ -963,11 +887,6 @@ async function checkoutInPrivateWindow(
     const msg = `Left out of the private cart, as they could not be looked up: ${unresolved.map((i) => i.title || i.url).join(', ')}`;
     if (player) player.showToast(msg, 'warn'); else alert(msg);
   }
-
-  // Persist purchased items so the cleanup button survives a page reload.
-  const unresolvedUrls = new Set(unresolved.map((i) => normalizeUrl(i.url)));
-  const merged = await addPendingPurchase(toRemove.filter((i) => !unresolvedUrls.has(normalizeUrl(i.url))));
-  if (merged.length > 0) setupRemovePurchasedButton(merged);
   return true;
 }
 
@@ -988,8 +907,8 @@ async function isCartItemOwned(item: CartItem): Promise<boolean | null> {
 }
 
 // Checks every cart item against Bandcamp's own ownership state and removes
-// whichever ones the fan already owns. Catches purchases the extension never
-// saw — e.g. checking the same cart out in a separate anonymous window.
+// whichever ones the fan already owns — e.g. items bought through a
+// private-window checkout, whether or not the extension opened it.
 function setupRemoveAlreadyOwnedButton(): void {
   const btn = injectRemoveAlreadyOwnedButton();
   if (!btn) return;
@@ -1316,21 +1235,6 @@ async function main() {
       }
     }
 
-    // Re-show the cleanup button if a pending-purchase list was saved from a previous session.
-    const pending = await loadPendingPurchase();
-    if (pending.length > 0) {
-      const cartUrls = new Set(cartItems.map((i) => normalizeUrl(i.url)));
-      const stillInCart = pending.filter((i) => cartUrls.has(normalizeUrl(i.url)));
-      if (stillInCart.length > 0) {
-        // Trim the stored list if some items were already manually removed from the cart.
-        if (stillInCart.length < pending.length) savePendingPurchase(stillInCart);
-        setupRemovePurchasedButton(stillInCart);
-      } else {
-        // All previously purchased items are already gone — nothing to clean up.
-        clearPendingPurchase();
-      }
-    }
-
     // "Checkout a cart" doesn't need the Player instance (it opens a private
     // window directly), so it's injected here rather than gated behind the
     // player-creation check below — it still appears when the real cart is
@@ -1593,10 +1497,10 @@ async function main() {
       return;
     }
 
-    const toRemove: SavedCartItem[] = selectedItems.map((i) => ({
+    const items: SavedCartItem[] = selectedItems.map((i) => ({
       url: i.url, title: i.title, artist: i.artist, purchaseType: i.purchaseType,
     }));
-    await checkoutInPrivateWindow(player, toRemove, toRemove);
+    await checkoutInPrivateWindow(player, items);
   };
 
   // Keep cart state in sync when Bandcamp's own JS updates the sidecart.
