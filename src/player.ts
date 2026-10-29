@@ -50,7 +50,8 @@ export class Player {
 
   private artworkEl!: HTMLImageElement;
   private titleEl!: HTMLAnchorElement;
-  private subEl!: HTMLElement;
+  private releaseEl!: HTMLAnchorElement;
+  private artistEl!: HTMLElement;
   private playPauseBtn!: HTMLButtonElement;
   private prevBtn!: HTMLButtonElement;
   private nextBtn!: HTMLButtonElement;
@@ -69,8 +70,10 @@ export class Player {
   private reversedPlaylists: Partial<Record<PlaylistId, boolean>> = {};
   private statusEl!: HTMLElement;
   private queueToggleBtn!: HTMLButtonElement;
-  private reloadBtn!: HTMLButtonElement;
-  private cacheBtn!: HTMLButtonElement;
+  private volumeBtn!: HTMLButtonElement;
+  private volumeSlider!: HTMLInputElement;
+  private volume = 1;
+  private muted = false;
 
   private queueVisible = false;
   private playerVisible = true;
@@ -116,8 +119,6 @@ export class Player {
   onTrackChange?: (id: PlaylistId, index: number) => void;
   onSeek?: (fraction: number) => void;
   onDiscographyButtonVisibilityChange?: (show: boolean) => void;
-  onReloadPlaylist?: () => Promise<void>;
-  onShowCache?: () => Promise<void> | void;
   // Updates the track's streamUrl in place; `force` skips any cached copy and
   // `bulk` queues the fetch behind ones the user is waiting on.
   onRefreshStream?: (track: PlaylistTrack, force: boolean, bulk?: boolean) => Promise<void>;
@@ -155,7 +156,7 @@ export class Player {
 
     this.setupMediaSession();
 
-    chrome.storage.local.get(['tempoRangeIndex', 'preservesPitch', 'showDiscographyButton', 'reversedPlaylists'], (result) => {
+    chrome.storage.local.get(['tempoRangeIndex', 'preservesPitch', 'showDiscographyButton', 'reversedPlaylists', 'volume'], (result) => {
       if (typeof result['tempoRangeIndex'] === 'number') {
         this.tempoRangeIndex = result['tempoRangeIndex'] as number;
       }
@@ -165,6 +166,11 @@ export class Player {
       }
       if (typeof result['showDiscographyButton'] === 'boolean') {
         this.showDiscographyButton = result['showDiscographyButton'] as boolean;
+      }
+      if (typeof result['volume'] === 'number') {
+        this.volume = result['volume'] as number;
+        this.applyVolume(this.audio);
+        this.updateVolumeUI();
       }
       const reversed = result['reversedPlaylists'];
       if (reversed && typeof reversed === 'object') {
@@ -259,8 +265,8 @@ export class Player {
       // stream URL changes, but not when the same track is reloaded — explicit
       // reset covers both cases.
       this.audio.currentTime = 0;
-      this.currentTimeEl.textContent = '0:00';
-      this.seekBar.value = '0';
+      this.currentTimeEl.textContent = fmtTime(0);
+      this.setSeekPercent(0);
     }
     if (this.activeId !== id) this.clearPreloaded();
     this.activeId = id;
@@ -416,7 +422,7 @@ export class Player {
   seekToFraction(fraction: number) {
     if (!isFinite(this.audio.duration)) return;
     this.audio.currentTime = fraction * this.audio.duration;
-    this.seekBar.value = String(fraction * 100);
+    this.setSeekPercent(fraction * 100);
   }
 
   // Makes the track at `pageUrl` the current one without changing whether the
@@ -592,7 +598,7 @@ export class Player {
 
     const state = this.active();
     if (state && state.tracks.length > 0) {
-      const reverseBtn = btn('⇅ Reverse', 'bcp-tab bcp-reverse-btn');
+      const reverseBtn = btn('⇅ Reverse playlist order', 'bcp-tab bcp-reverse-btn');
       reverseBtn.setAttribute('aria-pressed', String(state.reversed));
       if (state.reversed) reverseBtn.classList.add('bcp-tab-active');
       if (releaseBlocks(state.tracks).length > 1) {
@@ -617,41 +623,45 @@ export class Player {
     this.artworkEl.id = 'bcp-artwork';
     this.artworkEl.alt = '';
 
+    // Laid out like the player docked at the bottom of a Bandcamp collection:
+    // the release on the left, the track and its progress in the middle.
     const trackInfo = el('div', 'bcp-track-info');
+    this.releaseEl = document.createElement('a');
+    this.releaseEl.className = 'bcp-release-title';
+    this.releaseEl.target = '_blank';
+    this.releaseEl.rel = 'noopener noreferrer';
+    this.artistEl = el('div', 'bcp-track-artist');
+    this.cartActionsEl = el('div', 'bcp-cart-actions');
+    trackInfo.append(this.releaseEl, this.artistEl, this.cartActionsEl);
+
+    this.playPauseBtn = btn('', 'bcp-btn bcp-btn-play');
+    this.playPauseBtn.title = 'Play / Pause';
+    this.playPauseBtn.addEventListener('click', () => this.togglePlay());
+    this.setPlayButton('play');
+
     this.titleEl = document.createElement('a');
     this.titleEl.className = 'bcp-track-title';
     this.titleEl.textContent = 'No tracks loaded';
     this.titleEl.target = '_blank';
     this.titleEl.rel = 'noopener noreferrer';
-    this.subEl = el('div', 'bcp-track-sub');
-    trackInfo.append(this.titleEl, this.subEl);
 
-    this.prevBtn = btn('⏮', 'bcp-btn');
-    this.prevBtn.title = 'Previous';
-    this.prevBtn.addEventListener('click', () => this.prev());
+    this.currentTimeEl = el('span', 'bcp-time-current');
+    this.currentTimeEl.textContent = fmtTime(0);
+    this.totalTimeEl = el('span', 'bcp-time-total');
+    this.totalTimeEl.textContent = fmtTime(0);
+    const time = el('div', 'bcp-time');
+    time.append(this.currentTimeEl, ' / ', this.totalTimeEl);
 
-    this.playPauseBtn = btn('▶', 'bcp-btn bcp-btn-play');
-    this.playPauseBtn.title = 'Play / Pause';
-    this.playPauseBtn.addEventListener('click', () => this.togglePlay());
-
-    this.nextBtn = btn('⏭', 'bcp-btn');
-    this.nextBtn.title = 'Next';
-    this.nextBtn.addEventListener('click', () => this.next());
-
-    const controls = el('div', 'bcp-controls');
-    controls.append(this.prevBtn, this.playPauseBtn, this.nextBtn);
-
-    this.currentTimeEl = el('div', 'bcp-time bcp-time-current');
-    this.currentTimeEl.textContent = '0:00';
-    this.totalTimeEl = el('div', 'bcp-time bcp-time-total');
-    this.totalTimeEl.textContent = '0:00';
+    const trackRow = el('div', 'bcp-track-row');
+    trackRow.append(this.titleEl, time);
 
     this.seekBar = el('input', 'bcp-range bcp-seek') as HTMLInputElement;
     this.seekBar.type = 'range';
     this.seekBar.min = '0';
     this.seekBar.max = '100';
-    this.seekBar.value = '0';
+    this.setSeekPercent(0);
     this.seekBar.addEventListener('mousedown', () => (this.seeking = true));
+    this.seekBar.addEventListener('input', () => updateRangeFill(this.seekBar));
     this.seekBar.addEventListener('mouseup', () => {
       this.seeking = false;
       const fraction = parseFloat(this.seekBar.value) / 100;
@@ -661,8 +671,24 @@ export class Player {
       }
     });
 
-    const seekArea = el('div', 'bcp-seek-area');
-    seekArea.append(this.currentTimeEl, this.seekBar, this.totalTimeEl);
+    this.prevBtn = btn('', 'bcp-btn bcp-nav-btn');
+    this.prevBtn.title = 'Previous';
+    this.prevBtn.append(icon('previous'));
+    this.prevBtn.addEventListener('click', () => this.prev());
+
+    this.nextBtn = btn('', 'bcp-btn bcp-nav-btn');
+    this.nextBtn.title = 'Next';
+    this.nextBtn.append(icon('next'));
+    this.nextBtn.addEventListener('click', () => this.next());
+
+    const controls = el('div', 'bcp-controls');
+    controls.append(this.prevBtn, this.nextBtn);
+
+    const progress = el('div', 'bcp-progress');
+    progress.append(trackRow, this.seekBar, controls);
+
+    const center = el('div', 'bcp-center');
+    center.append(this.playPauseBtn, progress);
 
     this.tempoSlider = el('input', 'bcp-range bcp-tempo') as HTMLInputElement;
     this.tempoSlider.type = 'range';
@@ -706,38 +732,43 @@ export class Player {
     const tempoArea = el('div', 'bcp-tempo-area');
     tempoArea.append(tempoLabel, this.tempoSlider, this.tempoResetBtn, this.tempoRangeBtn, this.tempoMTBtn);
 
-    this.cartActionsEl = el('div', 'bcp-cart-actions');
-
-    this.queueToggleBtn = btn('☰', 'bcp-btn');
+    this.queueToggleBtn = btn('☰', 'bcp-btn bcp-queue-toggle');
     this.queueToggleBtn.title = 'Toggle queue';
     this.queueToggleBtn.addEventListener('click', () => this.toggleQueue());
 
-    this.cacheBtn = btn('🗄', 'bcp-btn');
-    this.cacheBtn.title = 'Show track cache contents';
-    this.cacheBtn.addEventListener('click', () => this.onShowCache?.());
-
-    this.reloadBtn = btn('⟳', 'bcp-btn');
-    this.reloadBtn.title = 'Reload playlist information (clears track cache)';
-    this.reloadBtn.addEventListener('click', async () => {
-      this.reloadBtn.disabled = true;
-      try { await this.onReloadPlaylist?.(); }
-      finally { this.reloadBtn.disabled = false; }
-    });
-
     this.statusEl = el('div', 'bcp-status');
 
-    bar.append(
-      this.artworkEl,
-      trackInfo,
-      this.cartActionsEl,
-      controls,
-      seekArea,
-      tempoArea,
-      this.queueToggleBtn,
-      this.statusEl,
-      this.cacheBtn,
-      this.reloadBtn
-    );
+    this.volumeBtn = btn('', 'bcp-btn bcp-volume-btn');
+    this.volumeBtn.addEventListener('click', () => {
+      this.muted = !this.muted;
+      this.applyVolume(this.audio);
+      this.updateVolumeUI();
+    });
+
+    this.volumeSlider = el('input', 'bcp-range bcp-volume-slider') as HTMLInputElement;
+    this.volumeSlider.type = 'range';
+    this.volumeSlider.min = '0';
+    this.volumeSlider.max = '1';
+    this.volumeSlider.step = '0.01';
+    this.volumeSlider.setAttribute('aria-label', 'Volume');
+    this.volumeSlider.addEventListener('input', () => {
+      this.volume = parseFloat(this.volumeSlider.value);
+      this.muted = false;
+      this.applyVolume(this.audio);
+      this.updateVolumeUI();
+    });
+    this.volumeSlider.addEventListener('change', () => {
+      chrome.storage.local.set({ volume: this.volume });
+    });
+
+    const volumeArea = el('div', 'bcp-volume');
+    volumeArea.append(this.volumeBtn, this.volumeSlider);
+    this.updateVolumeUI();
+
+    const side = el('div', 'bcp-side');
+    side.append(this.statusEl, tempoArea, this.queueToggleBtn, volumeArea);
+
+    bar.append(this.artworkEl, trackInfo, center, side);
 
     return bar;
   }
@@ -831,20 +862,12 @@ export class Player {
     this.artworkEl.src = track.artworkUrl || '';
     this.titleEl.textContent = track.trackTitle || '(untitled)';
     this.titleEl.href = track.pageUrl;
-    this.subEl.innerHTML = '';
-    if (track.artist) this.subEl.appendChild(document.createTextNode(track.albumTitle ? `${track.artist} — ` : track.artist));
-    if (track.albumTitle) {
-      const albumLink = document.createElement('a');
-      albumLink.className = 'bcp-track-album-link';
-      albumLink.href = track.releaseUrl;
-      albumLink.target = '_blank';
-      albumLink.rel = 'noopener noreferrer';
-      albumLink.textContent = track.albumTitle;
-      this.subEl.appendChild(albumLink);
-    }
+    this.releaseEl.textContent = track.albumTitle || track.trackTitle || '(untitled)';
+    this.releaseEl.href = track.releaseUrl;
+    this.artistEl.textContent = track.artist ? `by ${track.artist}` : '';
     if (needsReload) {
-      this.currentTimeEl.textContent = '0:00';
-      this.seekBar.value = '0';
+      this.currentTimeEl.textContent = fmtTime(0);
+      this.setSeekPercent(0);
     }
     this.totalTimeEl.textContent = fmtTime(track.durationSec);
     this.updateNavButtons();
@@ -899,6 +922,7 @@ export class Player {
     this.audio.currentTime = startAt;
     this.audio.playbackRate = this.playbackRate;
     this.audio.preservesPitch = this.preservesPitch;
+    this.applyVolume(this.audio);
     this.sourceTrack = track;
   }
 
@@ -1009,7 +1033,7 @@ export class Player {
       this.playPauseBtn.replaceChildren(spinner);
       this.playPauseBtn.setAttribute('aria-label', 'Loading');
     } else {
-      this.playPauseBtn.textContent = state === 'play' ? '▶' : '⏸';
+      this.playPauseBtn.replaceChildren(icon(state));
       this.playPauseBtn.setAttribute('aria-label', state === 'play' ? 'Play' : 'Pause');
     }
   }
@@ -1026,6 +1050,7 @@ export class Player {
   // reacts, so standby elements buffering upcoming tracks stay silent.
   private createAudio(): HTMLAudioElement {
     const audio = new Audio();
+    this.applyVolume(audio);
     const on = (type: keyof HTMLMediaElementEventMap, listener: () => void) => {
       audio.addEventListener(type, () => {
         if (audio === this.audio) listener();
@@ -1108,7 +1133,7 @@ export class Player {
     on('timeupdate', () => {
       if (this.seeking || !isFinite(this.audio.duration)) return;
       this.currentTimeEl.textContent = fmtTime(this.audio.currentTime);
-      this.seekBar.value = String((this.audio.currentTime / this.audio.duration) * 100);
+      this.setSeekPercent((this.audio.currentTime / this.audio.duration) * 100);
     });
 
     on('loadedmetadata', () => {
@@ -1412,6 +1437,24 @@ export class Player {
     this.tempoMTBtn.classList.toggle('bcp-tempo-btn-active', this.preservesPitch);
   }
 
+  private setSeekPercent(percent: number) {
+    this.seekBar.value = String(percent);
+    updateRangeFill(this.seekBar);
+  }
+
+  private applyVolume(audio: HTMLAudioElement) {
+    audio.volume = this.volume;
+    audio.muted = this.muted;
+  }
+
+  private updateVolumeUI() {
+    const silent = this.muted || this.volume === 0;
+    this.volumeBtn.replaceChildren(icon(silent ? 'muted' : 'volume'));
+    this.volumeBtn.title = this.muted ? 'Unmute' : 'Mute';
+    this.volumeSlider.value = String(this.muted ? 0 : this.volume);
+    updateRangeFill(this.volumeSlider);
+  }
+
 
 }
 
@@ -1468,10 +1511,41 @@ function unloadAudio(audio: HTMLAudioElement) {
   audio.load();
 }
 
+// Zero-padded like Bandcamp's own player: 00:01 / 07:51.
 function fmtTime(seconds: number): string {
   const s = Math.max(0, Math.floor(seconds));
   const m = Math.floor(s / 60);
   const rem = s % 60;
-  return `${m}:${rem.toString().padStart(2, '0')}`;
+  return `${m.toString().padStart(2, '0')}:${rem.toString().padStart(2, '0')}`;
+}
+
+// Lets the stylesheet colour a range input's track up to its thumb.
+function updateRangeFill(input: HTMLInputElement) {
+  const min = parseFloat(input.min) || 0;
+  const max = parseFloat(input.max) || 100;
+  const fraction = (parseFloat(input.value) - min) / (max - min);
+  input.style.setProperty('--bcp-fill', `${Math.max(0, Math.min(1, fraction)) * 100}%`);
+}
+
+// 24x24 Material Design icon paths.
+const ICON_PATHS = {
+  play: 'M8 5v14l11-7z',
+  pause: 'M6 5h4v14H6zm8 0h4v14h-4z',
+  previous: 'M6 6h2v12H6zm3.5 6 8.5 6V6z',
+  next: 'M16 6h2v12h-2zM6 18l8.5-6L6 6z',
+  volume: 'M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 7.97v8.05A4.47 4.47 0 0 0 16.5 12zM14 3.23v2.06a7 7 0 0 1 0 13.42v2.06A9 9 0 0 0 14 3.23z',
+  muted: 'M16.5 12A4.5 4.5 0 0 0 14 7.97v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51A8.8 8.8 0 0 0 21 12a9 9 0 0 0-7-8.77v2.06A7 7 0 0 1 19 12zM4.27 3 3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06a9 9 0 0 0 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4 9.91 6.09 12 8.18V4z',
+} as const;
+
+function icon(name: keyof typeof ICON_PATHS): SVGSVGElement {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.classList.add('bcp-icon');
+  const path = document.createElementNS(ns, 'path');
+  path.setAttribute('d', ICON_PATHS[name]);
+  svg.appendChild(path);
+  return svg;
 }
 

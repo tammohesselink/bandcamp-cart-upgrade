@@ -95,32 +95,3 @@ export async function pruneTrackCache(): Promise<void> {
     if (keys.length > 0) await chrome.storage.local.remove(keys);
   } catch {}
 }
-
-export async function clearTrackCache(): Promise<void> {
-  try {
-    const all = await chrome.storage.local.get(null);
-    const keys = Object.keys(all).filter((k) => k.startsWith(CACHE_KEY_PREFIX));
-    if (keys.length > 0) await chrome.storage.local.remove(keys);
-  } catch {}
-}
-
-export interface CacheDump {
-  url: string;
-  cachedAt: number;
-  tracks: PlaylistTrack[];
-}
-
-export async function listCacheEntries(): Promise<CacheDump[]> {
-  try {
-    const all = await chrome.storage.local.get(null);
-    return Object.keys(all)
-      .filter((k) => k.startsWith(CACHE_KEY_PREFIX))
-      .map((k) => {
-        const entry = all[k] as CacheEntry;
-        return { url: k.slice(CACHE_KEY_PREFIX.length), cachedAt: entry.cachedAt, tracks: entry.tracks };
-      })
-      .sort((a, b) => b.cachedAt - a.cachedAt);
-  } catch {
-    return [];
-  }
-}
