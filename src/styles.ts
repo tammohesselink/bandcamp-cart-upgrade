@@ -130,16 +130,15 @@ export const PLAYER_CSS = `
 #bcp-bar {
   background: #fff;
   border-top: 1px solid #ccc;
-  min-height: 78px;
   display: flex;
   align-items: center;
-  padding: 8px 10px;
+  padding: 6px 10px;
   gap: 16px;
 }
 
 #bcp-artwork {
-  width: 60px;
-  height: 60px;
+  width: 50px;
+  height: 50px;
   object-fit: cover;
   flex-shrink: 0;
   background: #eee;
@@ -149,6 +148,7 @@ export const PLAYER_CSS = `
   min-width: 0;
   width: 260px;
   flex-shrink: 0;
+  line-height: 1.25;
 }
 
 .bcp-release-title {
@@ -190,7 +190,7 @@ export const PLAYER_CSS = `
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   column-gap: 12px;
-  row-gap: 5px;
+  row-gap: 4px;
   flex: 1 1 auto;
   min-width: 0;
 }
@@ -267,8 +267,8 @@ export const PLAYER_CSS = `
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  width: 42px;
-  height: 42px;
+  width: 38px;
+  height: 38px;
   padding: 0;
   font-size: 20px;
   color: #222;
@@ -278,8 +278,8 @@ export const PLAYER_CSS = `
 }
 
 .bcp-btn-play .bcp-icon {
-  width: 26px;
-  height: 26px;
+  width: 24px;
+  height: 24px;
 }
 
 .bcp-btn-play:hover:not(:disabled) {
@@ -473,7 +473,7 @@ input[type=range].bcp-tempo {
 .bcp-tabs-label {
   color: #999;
   font-size: 11px;
-  margin-bottom: 4px;
+  margin-bottom: 2px;
 }
 
 .bcp-tab-list {
@@ -549,7 +549,7 @@ input[type=range].bcp-tempo {
 .bcp-cart-actions {
   display: flex;
   align-items: center;
-  margin-top: 3px;
+  margin-top: 2px;
   overflow: hidden;
   font-size: 12px;
   white-space: nowrap;
