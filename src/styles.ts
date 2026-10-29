@@ -43,7 +43,6 @@ export const PLAYER_CSS = `
 }
 
 #bcp-wrapper.bcp-collapsed #bcp-queue,
-#bcp-wrapper.bcp-collapsed #bcp-header,
 #bcp-wrapper.bcp-collapsed #bcp-bar {
   display: none;
 }
@@ -128,18 +127,9 @@ export const PLAYER_CSS = `
   flex-shrink: 0;
 }
 
-/* The header and bar read as one panel, like Bandcamp's docked player. */
-#bcp-header {
-  background: #fff;
-  border-top: 1px solid #ccc;
-  padding: 6px 10px 0;
-  font-size: 12px;
-  color: #999;
-  user-select: none;
-}
-
 #bcp-bar {
   background: #fff;
+  border-top: 1px solid #ccc;
   min-height: 78px;
   display: flex;
   align-items: center;
@@ -425,29 +415,12 @@ input[type=range].bcp-tempo {
   color: #b7791f;
 }
 
-.bcp-volume {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+.bcp-reverse-slot:empty {
+  display: none;
 }
 
-.bcp-volume-btn {
-  padding: 2px;
-  font-size: 20px;
-  color: #555;
-}
-
-input[type=range].bcp-volume-slider {
-  width: 60px;
-  height: 2px;
-  border-radius: 0;
-  background: linear-gradient(to right, #333 var(--bcp-fill, 0%), #ccc var(--bcp-fill, 0%));
-}
-
-input[type=range].bcp-volume-slider::-webkit-slider-thumb {
-  width: 10px;
-  height: 10px;
-  background: #333;
+.bcp-reverse-btn {
+  white-space: nowrap;
 }
 
 .bcp-cart-play-btn {
@@ -493,10 +466,20 @@ input[type=range].bcp-volume-slider::-webkit-slider-thumb {
 }
 
 #bcp-tabs {
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.bcp-tabs-label {
+  color: #999;
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+
+.bcp-tab-list {
   display: flex;
   gap: 6px;
   align-items: center;
-  flex-grow: 1;
 }
 
 .bcp-tab {
@@ -526,10 +509,6 @@ input[type=range].bcp-volume-slider::-webkit-slider-thumb {
   border-color: #e2e2e2;
   border-style: dashed;
   cursor: help;
-}
-
-.bcp-tab.bcp-reverse-btn {
-  margin-left: auto;
 }
 
 .bcp-tab.bcp-reverse-btn.bcp-tab-unavailable {
@@ -820,9 +799,7 @@ a.itemName.bcp-playing {
   .bcp-tempo-range-btn {
     display: none;
   }
-}
 
-@media (max-width: 860px) {
   #bcp-bar {
     flex-wrap: wrap;
     row-gap: 8px;
@@ -847,8 +824,7 @@ a.itemName.bcp-playing {
 }
 
 @media (max-width: 520px) {
-  .bcp-tempo-area,
-  .bcp-volume-slider {
+  .bcp-tempo-area {
     display: none;
   }
 }

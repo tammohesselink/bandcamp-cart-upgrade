@@ -42,7 +42,6 @@ export class Player {
   readonly wrapper: HTMLElement;
   private bar: HTMLElement;
   private queueEl: HTMLElement;
-  private headerEl: HTMLElement;
 
   private audio: HTMLAudioElement;
   private playlists = new Map<PlaylistId, PlaylistState>();
@@ -70,10 +69,6 @@ export class Player {
   private reversedPlaylists: Partial<Record<PlaylistId, boolean>> = {};
   private statusEl!: HTMLElement;
   private queueToggleBtn!: HTMLButtonElement;
-  private volumeBtn!: HTMLButtonElement;
-  private volumeSlider!: HTMLInputElement;
-  private volume = 1;
-  private muted = false;
 
   private queueVisible = false;
   private playerVisible = true;
@@ -105,6 +100,8 @@ export class Player {
   private announcer!: HTMLElement;
   private cartUrls = new Set<string>();
   private cartActionsEl!: HTMLElement;
+  private playlistTabsEl!: HTMLElement;
+  private reverseSlot!: HTMLElement;
 
   private namedCarts: NamedCart[] = [];
   private namedCartMembership = new Map<string, string[]>();
@@ -138,12 +135,10 @@ export class Player {
     this.collapseBtn.addEventListener('click', () => this.togglePlayer());
 
     this.queueEl = this.buildQueueEl();
-    this.headerEl = this.buildHeaderEl();
     this.bar = this.buildBarEl();
 
     this.wrapper.appendChild(this.collapseBtn);
     this.wrapper.appendChild(this.queueEl);
-    this.wrapper.appendChild(this.headerEl);
     this.wrapper.appendChild(this.bar);
 
     this.announcer = el('div', 'bcp-visually-hidden');
@@ -156,7 +151,7 @@ export class Player {
 
     this.setupMediaSession();
 
-    chrome.storage.local.get(['tempoRangeIndex', 'preservesPitch', 'showDiscographyButton', 'reversedPlaylists', 'volume'], (result) => {
+    chrome.storage.local.get(['tempoRangeIndex', 'preservesPitch', 'showDiscographyButton', 'reversedPlaylists'], (result) => {
       if (typeof result['tempoRangeIndex'] === 'number') {
         this.tempoRangeIndex = result['tempoRangeIndex'] as number;
       }
@@ -167,18 +162,13 @@ export class Player {
       if (typeof result['showDiscographyButton'] === 'boolean') {
         this.showDiscographyButton = result['showDiscographyButton'] as boolean;
       }
-      if (typeof result['volume'] === 'number') {
-        this.volume = result['volume'] as number;
-        this.applyVolume(this.audio);
-        this.updateVolumeUI();
-      }
       const reversed = result['reversedPlaylists'];
       if (reversed && typeof reversed === 'object') {
         this.reversedPlaylists = reversed as Partial<Record<PlaylistId, boolean>>;
         for (const [id, state] of this.playlists) {
           this.applyReversed(id, state, !!this.reversedPlaylists[id]);
         }
-        this.updateHeader();
+        this.updatePlaylistTabs();
         this.updateQueueEl();
         this.updateNavButtons();
       }
@@ -191,7 +181,7 @@ export class Player {
     if (initialPlaylist.length > 0) {
       this.setPlaylist('cart', 'Cart', initialPlaylist);
     } else {
-      this.updateHeader();
+      this.updatePlaylistTabs();
     }
   }
 
@@ -206,14 +196,14 @@ export class Player {
   // to the playlist replaces it with the normal tab.
   setPlaylistUnavailable(id: PlaylistId, label: string, reason: string, kind: StatusKind = 'info') {
     this.unavailablePlaylists.set(id, { label, reason, kind });
-    this.updateHeader();
+    this.updatePlaylistTabs();
   }
 
   // Shows a clickable tab for a playlist that only loads when asked; `onLoad`
   // runs on click and is expected to set or grey out the playlist.
   setPlaylistOnDemand(id: PlaylistId, label: string, hint: string, onLoad: () => void) {
     this.unavailablePlaylists.set(id, { label, reason: hint, kind: 'info', onLoad });
-    this.updateHeader();
+    this.updatePlaylistTabs();
   }
 
   setPlaylist(id: PlaylistId, label: string, tracks: PlaylistTrack[]) {
@@ -236,7 +226,7 @@ export class Player {
     if (keptIndex === -1 && this.activeId === id && !this.audio.paused) state.nextIsCurrent = true;
     this.playlists.set(id, state);
     if (tracks.length > 0) this.unavailablePlaylists.delete(id);
-    this.updateHeader();
+    this.updatePlaylistTabs();
     if (!previous && this.playlists.size === 1) {
       this.selectPlaylist(id);
     } else if (this.activeId === id) {
@@ -270,7 +260,7 @@ export class Player {
     }
     if (this.activeId !== id) this.clearPreloaded();
     this.activeId = id;
-    this.updateHeader();
+    this.updatePlaylistTabs();
     this.updateQueueEl();
     // Always load silently: tab switches must not fire onCurrentPageTrackChange,
     // which clicks the native row and triggers a native 'play' event that echoes
@@ -381,7 +371,7 @@ export class Player {
     state.tracks.push(...toAdd);
     this.unavailablePlaylists.delete(id);
     // The reverse button depends on how many releases there are.
-    this.updateHeader();
+    this.updatePlaylistTabs();
     if (this.activeId === id) {
       // Selecting an empty playlist leaves the bar blank, so load its first
       // track now, unless a removed track is still playing.
@@ -465,7 +455,7 @@ export class Player {
     this.removeFromState(state, shouldRemove);
     if (this.activeId === id) {
       // Don't touch the audio — let the current stream finish naturally.
-      this.updateHeader();
+      this.updatePlaylistTabs();
       this.updateQueueEl();
       this.updateNavButtons();
     }
@@ -479,7 +469,7 @@ export class Player {
     if (idx === -1) return;
     this.removeFromState(state, (t) => t === state.tracks[idx]);
     if (this.activeId === id) {
-      this.updateHeader();
+      this.updatePlaylistTabs();
       this.updateQueueEl();
       this.updateNavButtons();
     }
@@ -552,21 +542,8 @@ export class Player {
     return this.playlists.get(this.activeId) ?? null;
   }
 
-  private buildHeaderEl(): HTMLElement {
-    const header = document.createElement('div');
-    header.id = 'bcp-header';
-    return header;
-  }
-
-  private updateHeader() {
-    this.headerEl.innerHTML = '';
-
-    const tabs = document.createElement('div');
-    tabs.id = 'bcp-tabs';
-
-    const label = document.createElement('span');
-    label.textContent = 'Playlist type:';
-    tabs.appendChild(label);
+  private updatePlaylistTabs() {
+    const tabs = el('div', 'bcp-tab-list');
 
     const ids: PlaylistId[] = ['currentpage', 'discography', 'cart'];
 
@@ -609,10 +586,14 @@ export class Player {
         reverseBtn.setAttribute('aria-disabled', 'true');
         reverseBtn.title = 'Only one release';
       }
-      tabs.appendChild(reverseBtn);
+      this.reverseSlot.replaceChildren(reverseBtn);
+    } else {
+      this.reverseSlot.replaceChildren();
     }
 
-    this.headerEl.appendChild(tabs);
+    const label = el('div', 'bcp-tabs-label');
+    label.textContent = 'Playlist type:';
+    this.playlistTabsEl.replaceChildren(label, tabs);
   }
 
   private buildBarEl(): HTMLElement {
@@ -738,37 +719,15 @@ export class Player {
 
     this.statusEl = el('div', 'bcp-status');
 
-    this.volumeBtn = btn('', 'bcp-btn bcp-volume-btn');
-    this.volumeBtn.addEventListener('click', () => {
-      this.muted = !this.muted;
-      this.applyVolume(this.audio);
-      this.updateVolumeUI();
-    });
+    this.playlistTabsEl = el('div');
+    this.playlistTabsEl.id = 'bcp-tabs';
 
-    this.volumeSlider = el('input', 'bcp-range bcp-volume-slider') as HTMLInputElement;
-    this.volumeSlider.type = 'range';
-    this.volumeSlider.min = '0';
-    this.volumeSlider.max = '1';
-    this.volumeSlider.step = '0.01';
-    this.volumeSlider.setAttribute('aria-label', 'Volume');
-    this.volumeSlider.addEventListener('input', () => {
-      this.volume = parseFloat(this.volumeSlider.value);
-      this.muted = false;
-      this.applyVolume(this.audio);
-      this.updateVolumeUI();
-    });
-    this.volumeSlider.addEventListener('change', () => {
-      chrome.storage.local.set({ volume: this.volume });
-    });
-
-    const volumeArea = el('div', 'bcp-volume');
-    volumeArea.append(this.volumeBtn, this.volumeSlider);
-    this.updateVolumeUI();
+    this.reverseSlot = el('div', 'bcp-reverse-slot');
 
     const side = el('div', 'bcp-side');
-    side.append(this.statusEl, tempoArea, this.queueToggleBtn, volumeArea);
+    side.append(this.statusEl, tempoArea, this.queueToggleBtn, this.reverseSlot);
 
-    bar.append(this.artworkEl, trackInfo, center, side);
+    bar.append(this.artworkEl, trackInfo, this.playlistTabsEl, center, side);
 
     return bar;
   }
@@ -922,7 +881,6 @@ export class Player {
     this.audio.currentTime = startAt;
     this.audio.playbackRate = this.playbackRate;
     this.audio.preservesPitch = this.preservesPitch;
-    this.applyVolume(this.audio);
     this.sourceTrack = track;
   }
 
@@ -1050,7 +1008,6 @@ export class Player {
   // reacts, so standby elements buffering upcoming tracks stay silent.
   private createAudio(): HTMLAudioElement {
     const audio = new Audio();
-    this.applyVolume(audio);
     const on = (type: keyof HTMLMediaElementEventMap, listener: () => void) => {
       audio.addEventListener(type, () => {
         if (audio === this.audio) listener();
@@ -1252,7 +1209,7 @@ export class Player {
     });
     this.clearPreloaded();
     if (!this.audio.paused) void this.preloadUpcoming();
-    this.updateHeader();
+    this.updatePlaylistTabs();
     this.updateQueueEl();
     this.updateNavButtons();
   }
@@ -1442,18 +1399,6 @@ export class Player {
     updateRangeFill(this.seekBar);
   }
 
-  private applyVolume(audio: HTMLAudioElement) {
-    audio.volume = this.volume;
-    audio.muted = this.muted;
-  }
-
-  private updateVolumeUI() {
-    const silent = this.muted || this.volume === 0;
-    this.volumeBtn.replaceChildren(icon(silent ? 'muted' : 'volume'));
-    this.volumeBtn.title = this.muted ? 'Unmute' : 'Mute';
-    this.volumeSlider.value = String(this.muted ? 0 : this.volume);
-    updateRangeFill(this.volumeSlider);
-  }
 
 
 }
@@ -1533,8 +1478,6 @@ const ICON_PATHS = {
   pause: 'M6 5h4v14H6zm8 0h4v14h-4z',
   previous: 'M6 6h2v12H6zm3.5 6 8.5 6V6z',
   next: 'M16 6h2v12h-2zM6 18l8.5-6L6 6z',
-  volume: 'M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 7.97v8.05A4.47 4.47 0 0 0 16.5 12zM14 3.23v2.06a7 7 0 0 1 0 13.42v2.06A9 9 0 0 0 14 3.23z',
-  muted: 'M16.5 12A4.5 4.5 0 0 0 14 7.97v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51A8.8 8.8 0 0 0 21 12a9 9 0 0 0-7-8.77v2.06A7 7 0 0 1 19 12zM4.27 3 3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06a9 9 0 0 0 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4 9.91 6.09 12 8.18V4z',
 } as const;
 
 function icon(name: keyof typeof ICON_PATHS): SVGSVGElement {
