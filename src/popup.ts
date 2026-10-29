@@ -7,26 +7,12 @@ import {
   parseHistoryExport,
   saveSnapshots,
 } from './cart-history';
+import { log, initDebugLogging } from './log';
+import { loadSettings, saveSetting } from './settings';
 
-const SETTINGS_KEY = 'bcp_settings_v1';
 // Chrome closes the action popup as soon as a file picker opens, so importing happens
 // in a tab that shows this same page.
 const IMPORT_TAB_PARAM = 'import';
-
-interface BcpSettings {
-  showCartHistoryBtn: boolean;
-}
-
-async function loadSettings(): Promise<BcpSettings> {
-  const result = await chrome.storage.local.get(SETTINGS_KEY);
-  const stored = result[SETTINGS_KEY] as Partial<BcpSettings> | undefined;
-  return { showCartHistoryBtn: true, ...stored };
-}
-
-async function saveSetting<K extends keyof BcpSettings>(key: K, value: BcpSettings[K]): Promise<void> {
-  const current = await loadSettings();
-  await chrome.storage.local.set({ [SETTINGS_KEY]: { ...current, [key]: value } });
-}
 
 async function loadShowDiscographyButton(): Promise<boolean> {
   const result = await chrome.storage.local.get('showDiscographyButton');
@@ -153,22 +139,36 @@ function addHistoryTransfer(container: HTMLElement): void {
 }
 
 async function init(): Promise<void> {
+  await initDebugLogging();
   const [settings, showDisco] = await Promise.all([
     loadSettings(),
     loadShowDiscographyButton(),
   ]);
 
   const container = document.getElementById('settings')!;
-
-  addToggle(container, 'Show cart history button', settings.showCartHistoryBtn, (v) => {
-    saveSetting('showCartHistoryBtn', v);
-  });
+  const advanced = document.getElementById('advanced')!;
+  advanced.hidden = !settings.showAdvanced;
 
   addToggle(container, 'Show play button on top of label pages', showDisco, (v) => {
     chrome.storage.local.set({ showDiscographyButton: v });
   });
 
+  addToggle(container, 'Show advanced functionality', settings.showAdvanced, (v) => {
+    advanced.hidden = !v;
+    saveSetting('showAdvanced', v);
+  });
+
+  const advancedSettings = document.getElementById('advanced-settings')!;
+
+  addToggle(advancedSettings, 'Show cart history button', settings.showCartHistoryBtn, (v) => {
+    saveSetting('showCartHistoryBtn', v);
+  });
+
+  addToggle(advancedSettings, 'Debug logging in the browser console', settings.debugLogging, (v) => {
+    saveSetting('debugLogging', v);
+  });
+
   addHistoryTransfer(document.getElementById('history-transfer')!);
 }
 
-init().catch(console.error);
+init().catch(log.error);

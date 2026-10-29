@@ -3,6 +3,7 @@ import { diffSnapshot } from './cart-history';
 import { normalizeUrl } from './url';
 import { formatTimestamp } from './format';
 import { ensureModalStyles } from './styles';
+import { log } from './log';
 
 export interface CartHistoryModalDeps {
   snapshots: CartSnapshot[];
@@ -156,7 +157,7 @@ export function openCartHistoryModal(deps: CartHistoryModalDeps): Promise<number
           });
         } catch (err) {
           // Each add fetches what it still needs, so the restore can go on.
-          console.warn('[bcp] Could not prepare cart restore', err);
+          log.warn('[bcp] Could not prepare cart restore', err);
         }
       }
 

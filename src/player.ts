@@ -3,6 +3,7 @@ import { namedCartMembership } from './named-carts';
 import { PLAYER_CSS } from './styles';
 import { normalizeUrl } from './url';
 import { isStreamFresh } from './cache';
+import { log } from './log';
 
 // 'album' adds the album a single-track page belongs to (track.albumUrl).
 type CartAddType = 'track' | 'release' | 'album';
@@ -934,7 +935,7 @@ export class Player {
         await this.onRefreshStream(track, !!options.forceRefresh);
         refreshed = true;
       } catch (err) {
-        console.warn('[bcp] Could not refresh stream link', err);
+        log.warn('[bcp] Could not refresh stream link', err);
       }
       if (requestId !== this.playRequestId) return;
       this.playPending = false;
@@ -950,7 +951,7 @@ export class Player {
       this.setSource(track, isLoaded ? this.audio.currentTime : 0);
     }
     this.audio.play().catch((err: unknown) => {
-      console.warn(err);
+      log.warn(err);
       if (this.audio.paused) this.setPlayButton('play');
     });
   }
@@ -1048,7 +1049,7 @@ export class Player {
         await this.onRefreshStream(track, false, true);
         refreshed = true;
       } catch (err) {
-        console.warn('[bcp] Could not preload stream link', err);
+        log.warn('[bcp] Could not preload stream link', err);
       }
       if (!isStreamFresh(track)) this.preloadRetryAt.set(track, Date.now() + PRELOAD_RETRY_AFTER_MS);
       if (runId !== this.preloadRunId) return;
@@ -1126,7 +1127,7 @@ export class Player {
 
     on('error', () => {
       if (!this.audio.getAttribute('src')) return;
-      console.warn('[bcp] Audio error for track', this.active()?.lastIndex, this.audio.error);
+      log.warn('[bcp] Audio error for track', this.active()?.lastIndex, this.audio.error);
       // The link may have expired mid-session; fetch a fresh one once before
       // skipping the track.
       const track = this.sourceTrack;

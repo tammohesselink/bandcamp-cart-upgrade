@@ -2,6 +2,8 @@
 // single diff when Bandcamp changes their markup, rather than hunting across
 // multiple source files.
 
+import { log } from './log';
+
 // Native track/album page player
 export const SEL_NATIVE_PLAYER      = '.inline_player';
 export const SEL_NATIVE_PLAY_BUTTON = '.inline_player .playbutton';
@@ -123,7 +125,7 @@ export function readPageContext(latestSyncNum: number | null): BandcampPageConte
   if (!clientId) missing.push('client_id');
   if (!fanId) missing.push('fan_id');
   if (missing.length > 0) {
-    console.warn(
+    log.warn(
       `[bcp] Could not find ${missing.join(', ')} in page. ` +
         'Cart mutations may fail. Bandcamp may have changed their page format.'
     );

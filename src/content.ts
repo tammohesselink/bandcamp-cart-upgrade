@@ -34,8 +34,11 @@ import {
 } from './bandcamp-dom';
 import { sendBcpMessage } from './messages';
 import { mapWithConcurrency } from './inflight';
+import { log, initDebugLogging } from './log';
+import { loadSettings } from './settings';
 
-console.log('[bcp] cart player loaded');
+// Appended to error messages: the [bcp] logs are silent until the user switches them on.
+const DEBUG_LOGGING_HINT = "Turn on debug logging in the extension's advanced options and check the browser console for details.";
 
 // Bandcamp's sync_num is an optimistic-concurrency counter — each cart mutation
 // increments it server-side and returns the new value in cart_data.sync_num.
@@ -101,24 +104,6 @@ function buildCartItemTypes(items: CartItem[]): Map<string, 'track' | 'album'> {
     if (item.purchaseType) map.set(normalizeUrl(item.url), item.purchaseType);
   }
   return map;
-}
-
-// --- Settings ----------------------------------------------------------------
-
-const SETTINGS_KEY = 'bcp_settings_v1';
-
-interface BcpSettings {
-  showCartHistoryBtn: boolean;
-}
-
-async function loadSettings(): Promise<BcpSettings> {
-  try {
-    const result = await chrome.storage.local.get(SETTINGS_KEY);
-    const stored = result[SETTINGS_KEY] as Partial<BcpSettings> | undefined;
-    return { showCartHistoryBtn: true, ...stored };
-  } catch {
-    return { showCartHistoryBtn: true };
-  }
 }
 
 // --- Named-cart storage --------------------------------------------------------
@@ -586,18 +571,18 @@ async function resolveCartAddTarget(item: SavedCartItem, tracks: PlaylistTrack[]
 async function addCartItem(item: SavedCartItem, cartLengthHint: number, preparedTracks?: PlaylistTrack[]): Promise<boolean> {
   const tracks = preparedTracks ?? (await fetchTracksForUrl(item.url, LIVE_DATA_MAX_AGE_MS));
   if (tracks.length === 0) {
-    console.error('[bcp] cart-add: could not fetch release page for', item.url);
+    log.error('[bcp] cart-add: could not fetch release page for', item.url);
     return false;
   }
 
   const target = await resolveCartAddTarget(item, tracks);
   if (target === null) {
-    console.error('[bcp] cart-add: no tralbum id for', item.url, tracks[0]);
+    log.error('[bcp] cart-add: no tralbum id for', item.url, tracks[0]);
     return false;
   }
 
   const ctx = readPageContext(latestSyncNum);
-  console.log('[bcp] cart-add', { url: item.url, ...target, syncNum: ctx.syncNum });
+  log.info('[bcp] cart-add', { url: item.url, ...target, syncNum: ctx.syncNum });
 
   const result = await sendBcpMessage({
     type: 'cart-add',
@@ -615,7 +600,7 @@ async function addCartItem(item: SavedCartItem, cartLengthHint: number, prepared
     return true;
   }
 
-  console.error('[bcp] cart-add failed for', item.url, { error: result.error, body: result.body });
+  log.error('[bcp] cart-add failed for', item.url, { error: result.error, body: result.body });
   return false;
 }
 
@@ -630,7 +615,7 @@ async function removeCartItem(item: SavedCartItem): Promise<boolean> {
   if (lineItemId === null) {
     const tracks = await fetchTracksForUrl(item.url);
     if (tracks.length === 0) {
-      console.error('[bcp] cart-remove: could not fetch release page for', item.url);
+      log.error('[bcp] cart-remove: could not fetch release page for', item.url);
       return false;
     }
 
@@ -646,7 +631,7 @@ async function removeCartItem(item: SavedCartItem): Promise<boolean> {
       tralbumId = albumTrack?.releaseId ?? track.releaseId;
     }
     if (tralbumId === null) {
-      console.error('[bcp] cart-remove: no tralbum id for', item.url, track);
+      log.error('[bcp] cart-remove: no tralbum id for', item.url, track);
       return false;
     }
   }
@@ -654,7 +639,7 @@ async function removeCartItem(item: SavedCartItem): Promise<boolean> {
   for (let attempt = 0; attempt < 2; attempt++) {
     const idToSend = lineItemId ?? tralbumId;
     const ctx = readPageContext(latestSyncNum);
-    console.log('[bcp] cart-remove', { url: item.url, idToSend, syncNum: ctx.syncNum });
+    log.info('[bcp] cart-remove', { url: item.url, idToSend, syncNum: ctx.syncNum });
 
     const result = await sendBcpMessage({
       type: 'cart-remove',
@@ -666,7 +651,7 @@ async function removeCartItem(item: SavedCartItem): Promise<boolean> {
     });
 
     if (!result.ok) {
-      console.error('[bcp] cart-remove failed for', item.url, result.error, result.body);
+      log.error('[bcp] cart-remove failed for', item.url, result.error, result.body);
       return false;
     }
 
@@ -871,7 +856,7 @@ async function checkoutInPrivateWindow(player: Player | null, items: SavedCartIt
     resolved.push({ u: item.url, id: target.tralbumId, t: target.tralbumType, pr: target.minPrice, b: target.bandId });
   }
   if (resolved.length === 0) {
-    const msg = 'Could not resolve any selected items — check the console';
+    const msg = `Could not resolve any selected items. ${DEBUG_LOGGING_HINT}`;
     if (player) player.showToast(msg, 'error'); else alert(msg);
     return false;
   }
@@ -945,9 +930,9 @@ function setupRemoveAlreadyOwnedButton(): void {
           ? `\n\nCould not check ${unchecked.length} item${unchecked.length !== 1 ? 's' : ''}: ${unchecked.map((i) => i.title || i.url).join(', ')}`
           : '';
       } catch (err) {
-        console.error('[bcp] remove already owned: checking cart failed', err);
+        log.error('[bcp] remove already owned: checking cart failed', err);
         reset();
-        alert('Checking the cart for already-purchased items failed. See the console for details.');
+        alert(`Checking the cart for already-purchased items failed. ${DEBUG_LOGGING_HINT}`);
         return;
       }
 
@@ -980,8 +965,8 @@ function setupRemoveAlreadyOwnedButton(): void {
       } catch (err) {
         // Some items may already be gone from the live cart even though this threw —
         // reload so the sidecart reflects the real cart state instead of a stale one.
-        console.error('[bcp] remove already owned: removing items failed', err);
-        alert('Removing already-purchased items from the cart failed partway through. Reloading to show the current cart state — see the console for details.');
+        log.error('[bcp] remove already owned: removing items failed', err);
+        alert(`Removing already-purchased items from the cart failed partway through. Reloading to show the current cart state. ${DEBUG_LOGGING_HINT}`);
         location.reload();
       }
     } finally {
@@ -990,7 +975,7 @@ function setupRemoveAlreadyOwnedButton(): void {
   });
 }
 
-main().catch(console.error);
+main().catch(log.error);
 
 // Loads (or reloads) the cart playlist: resolves track metadata, updates the
 // player's cart playlist, and re-injects sidecart UI elements.
@@ -1037,6 +1022,10 @@ async function loadCartPlaylist(cartItems: CartItem[], player: Player): Promise<
 }
 
 async function main() {
+  // Before anything else, so nothing logs while the stored option is still unknown.
+  await initDebugLogging();
+  log.info('[bcp] cart player loaded');
+
   // --- Incognito checkout: Stage A — add selected items to a fresh cart ------
   // The normal window opens this URL: bandcamp.com/cart#bcp_cart=<items>.
   // We parse the payload, add items via the incognito session's cookie jar,
@@ -1059,7 +1048,7 @@ async function main() {
           }
         }
       } catch {
-        console.error('[bcp] incognito stage A: could not parse payload');
+        log.error('[bcp] incognito stage A: could not parse payload');
       }
 
       if (items.length > 0) {
@@ -1095,7 +1084,7 @@ async function main() {
             updateSyncNum(result.body);
             added++;
           } else {
-            console.error('[bcp] incognito stage A: could not add', it.u, result.error);
+            log.error('[bcp] incognito stage A: could not add', it.u, result.error);
             failed.push(it.u);
           }
           overlay.setProgress(`${added} / ${items.length} items`);
@@ -1131,7 +1120,7 @@ async function main() {
         const raw = JSON.parse(decodeURIComponent(hash.slice('#bcp_cart_ready='.length))) as unknown;
         if (Array.isArray(raw)) failed = raw.filter((u): u is string => typeof u === 'string');
       } catch {
-        console.error('[bcp] incognito stage B: could not parse the items that were not added');
+        log.error('[bcp] incognito stage B: could not parse the items that were not added');
       }
 
       const overlay = createProgressOverlay('Your cart is ready!');
@@ -1260,15 +1249,15 @@ async function main() {
     }
   }
 
-  console.log('[bcp] Cart items found:');
-  console.table(cartItems.map((it) => ({ type: it.type, title: it.title, artist: it.artist, url: it.url })));
+  log.info('[bcp] Cart items found:');
+  log.table(cartItems.map((it) => ({ type: it.type, title: it.title, artist: it.artist, url: it.url })));
 
   // Probe discography early so we can show the player on label pages even when
   // the cart is empty. Release pages always get the player for their own tracks.
   const discoItems = probeDiscography();
 
   if (cartItems.length === 0 && discoItems.length === 0 && !isTrackOrAlbumPage()) {
-    console.warn(
+    log.warn(
       '[bcp] No cart items detected. The cart may be empty, or the selectors need updating. ' +
         'Open DevTools, inspect the cart item DOM nodes, and update probeCart() in src/content.ts.'
     );
@@ -1660,8 +1649,8 @@ async function main() {
       () => void playDiscographyWhenLoaded(playDiscographyFromStart, NO_DISCOGRAPHY_STREAMS)
     );
 
-    console.log('[bcp] Discography releases found:');
-    console.table(discoItems.map((it) => ({ type: it.type, url: it.url })));
+    log.info('[bcp] Discography releases found:');
+    log.table(discoItems.map((it) => ({ type: it.type, url: it.url })));
 
     const onGridPlay = (item: CartItem) => void playGridRelease(item);
     injectDiscographyPlayButtons(discoItems, onGridPlay);
@@ -1953,13 +1942,13 @@ async function fetchRelease(url: string, { bulk = false } = {}): Promise<{ track
   try {
     const response = await sendBcpMessage({ type: 'fetch', url, bulk });
     if (response.error) {
-      console.warn('[bcp] Fetch error for', url, response.error);
+      log.warn('[bcp] Fetch error for', url, response.error);
       return { tracks: [], problem: 'fetch-failed' };
     }
     const html = response.html ?? '';
     const parsed = parseTralbum(html, url);
     if (parsed.length === 0) {
-      console.warn('[bcp] No tracks parsed from', url);
+      log.warn('[bcp] No tracks parsed from', url);
       if (hasTralbumData(html)) writeCache(url, []);
       return { tracks: [], problem: 'no-tracks' };
     }
@@ -1968,7 +1957,7 @@ async function fetchRelease(url: string, { bulk = false } = {}): Promise<{ track
     writeCache(url, parsed);
     return { tracks: parsed };
   } catch (err) {
-    console.warn('[bcp] Failed to fetch', url, err);
+    log.warn('[bcp] Failed to fetch', url, err);
     return { tracks: [], problem: 'fetch-failed' };
   }
 }
@@ -1979,12 +1968,12 @@ async function fetchRawHtml(url: string): Promise<string | null> {
   try {
     const response = await sendBcpMessage({ type: 'fetch', url });
     if (response.error) {
-      console.error('[bcp] fetchRawHtml: fetch error for', url, response.error);
+      log.error('[bcp] fetchRawHtml: fetch error for', url, response.error);
       return null;
     }
     return response.html ?? null;
   } catch (err) {
-    console.error('[bcp] fetchRawHtml: exception for', url, err);
+    log.error('[bcp] fetchRawHtml: exception for', url, err);
     return null;
   }
 }
