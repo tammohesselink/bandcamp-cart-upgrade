@@ -127,11 +127,14 @@ export const PLAYER_CSS = `
   flex-shrink: 0;
 }
 
+/* Three shared lines across the 50px-high bar: titles along the top, the
+   artist, play button and side controls through the middle, and the cart
+   links, playlist tabs and seek bar along the bottom. */
 #bcp-bar {
   background: #fff;
   border-top: 1px solid #ccc;
   display: flex;
-  align-items: center;
+  align-items: stretch;
   padding: 6px 10px;
   gap: 16px;
 }
@@ -141,14 +144,17 @@ export const PLAYER_CSS = `
   height: 50px;
   object-fit: cover;
   flex-shrink: 0;
+  align-self: center;
   background: #eee;
 }
 
 .bcp-track-info {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
   min-width: 0;
   width: 260px;
   flex-shrink: 0;
-  line-height: 1.25;
 }
 
 .bcp-release-title {
@@ -158,6 +164,7 @@ export const PLAYER_CSS = `
   white-space: nowrap;
   font-size: 14px;
   font-weight: 500;
+  line-height: 17px;
   color: #333;
   text-decoration: none;
 }
@@ -171,6 +178,7 @@ export const PLAYER_CSS = `
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 12px;
+  line-height: 15px;
   color: #333;
 }
 
@@ -188,6 +196,9 @@ export const PLAYER_CSS = `
 .bcp-progress {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: 17px 18px;
+  align-self: stretch;
+  align-content: space-between;
   align-items: center;
   column-gap: 12px;
   row-gap: 4px;
@@ -197,6 +208,7 @@ export const PLAYER_CSS = `
 
 .bcp-track-row {
   grid-column: 1;
+  line-height: 17px;
   display: flex;
   align-items: baseline;
   justify-content: space-between;
@@ -292,7 +304,7 @@ export const PLAYER_CSS = `
 }
 
 .bcp-nav-btn {
-  padding: 2px;
+  padding: 0;
   font-size: 18px;
   color: #999;
 }
@@ -358,6 +370,7 @@ input[type=range].bcp-tempo {
 
 .bcp-side {
   display: flex;
+  align-self: center;
   align-items: center;
   gap: 14px;
   flex-shrink: 0;
@@ -466,6 +479,9 @@ input[type=range].bcp-tempo {
 }
 
 #bcp-tabs {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
   flex-shrink: 0;
   user-select: none;
 }
@@ -473,13 +489,14 @@ input[type=range].bcp-tempo {
 .bcp-tabs-label {
   color: #999;
   font-size: 11px;
-  margin-bottom: 2px;
+  line-height: 17px;
 }
 
 .bcp-tab-list {
   display: flex;
   gap: 6px;
   align-items: center;
+  height: 18px;
 }
 
 .bcp-tab {
@@ -490,6 +507,7 @@ input[type=range].bcp-tempo {
   padding: 2px 10px;
   border-radius: 10px;
   font-size: 11px;
+  line-height: 12px;
   font-family: inherit;
   transition: color 0.15s, border-color 0.15s;
 }
@@ -549,7 +567,7 @@ input[type=range].bcp-tempo {
 .bcp-cart-actions {
   display: flex;
   align-items: center;
-  margin-top: 2px;
+  height: 18px;
   overflow: hidden;
   font-size: 12px;
   white-space: nowrap;
