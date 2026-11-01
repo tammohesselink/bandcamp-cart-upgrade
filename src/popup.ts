@@ -161,6 +161,10 @@ async function init(): Promise<void> {
     saveSetting('darkMode', v);
   });
 
+  addToggle(container, 'Enable named carts', settings.namedCartsEnabled, (v) => {
+    saveSetting('namedCartsEnabled', v);
+  });
+
   addToggle(container, 'Show advanced functionality', settings.showAdvanced, (v) => {
     showAdvanced(advanced, v);
     saveSetting('showAdvanced', v);

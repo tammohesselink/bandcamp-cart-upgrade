@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isTrackOrAlbumPage, isCheckoutPage, isLoggedIn, readPageContext } from '../src/bandcamp-dom';
+import { isTrackOrAlbumPage, isCheckoutPage, isLoggedIn, readPageContext, sidecartItemFor } from '../src/bandcamp-dom';
 
 function setPathname(pathname: string): void {
   Object.defineProperty(window, 'location', {
@@ -107,5 +107,70 @@ describe('readPageContext fan id', () => {
     div.setAttribute('data-blob', JSON.stringify({ identities: { fan: { id: 2105866 } } }));
     document.body.replaceChildren(div);
     expect(readPageContext(null).fanId).toBe('2105866');
+  });
+});
+
+describe('sidecartItemFor', () => {
+  function item(name: string, url: string): string {
+    return `<li class="item"><div class="cartItemContents"><p><a class="itemName" href="${url}">${name}</a><br><span class="price">7.00 USD</span></p></div></li>`;
+  }
+
+  function linkTo(url: string): HTMLAnchorElement {
+    return document.querySelector<HTMLAnchorElement>(`#sidecartBody a.itemName[href="${url}"]`)
+      ?? document.querySelector<HTMLAnchorElement>(`a.itemName[href="${url}"]`)!;
+  }
+
+  it('returns just the entry when the entries sit in #item_list, as on the live sidecart', () => {
+    document.body.innerHTML = `<div id="sidecartBody"><ul id="item_list">` +
+      item('First', 'https://a.bandcamp.com/album/first') +
+      item('Second', 'https://a.bandcamp.com/album/second') +
+      `</ul><div class="total">14.00 USD</div></div>`;
+
+    const entry = sidecartItemFor(linkTo('https://a.bandcamp.com/album/second'));
+
+    expect(entry?.tagName).toBe('LI');
+    expect(entry?.textContent).toContain('Second');
+    expect(entry?.textContent).not.toContain('First');
+  });
+
+  it('returns just the entry when another wrapper sits between #item_list and the entries', () => {
+    document.body.innerHTML = `<div id="sidecartBody"><div id="item_list"><div class="items">` +
+      item('First', 'https://a.bandcamp.com/album/first') +
+      item('Second', 'https://a.bandcamp.com/album/second') +
+      `</div></div></div>`;
+
+    const entry = sidecartItemFor(linkTo('https://a.bandcamp.com/album/first'));
+
+    expect(entry?.textContent).toContain('First');
+    expect(entry?.textContent).not.toContain('Second');
+  });
+
+  it('is not misled by another #item_list earlier on the page', () => {
+    document.body.innerHTML = `<ul id="item_list"><li>Something else</li></ul>` +
+      `<div id="sidecartBody"><ul id="item_list">` +
+      item('First', 'https://a.bandcamp.com/album/first') +
+      item('Second', 'https://a.bandcamp.com/album/second') +
+      `</ul></div>`;
+
+    const entry = sidecartItemFor(linkTo('https://a.bandcamp.com/album/first'));
+
+    expect(entry?.textContent).toContain('First');
+    expect(entry?.textContent).not.toContain('Second');
+  });
+
+  it('returns nothing, rather than a wrapper of several entries, when entries have no .item', () => {
+    document.body.innerHTML = `<div id="sidecartBody"><div class="items">` +
+      `<p><a class="itemName" href="https://a.bandcamp.com/album/first">First</a></p>` +
+      `<p><a class="itemName" href="https://a.bandcamp.com/album/second">Second</a></p>` +
+      `</div></div>`;
+
+    expect(sidecartItemFor(linkTo('https://a.bandcamp.com/album/first'))).toBeNull();
+  });
+
+  it('returns nothing for a link outside the sidecart', () => {
+    document.body.innerHTML = `<div id="sidecartBody"><ul id="item_list"></ul></div>` +
+      `<a class="itemName" href="https://a.bandcamp.com/album/elsewhere">Elsewhere</a>`;
+
+    expect(sidecartItemFor(linkTo('https://a.bandcamp.com/album/elsewhere'))).toBeNull();
   });
 });

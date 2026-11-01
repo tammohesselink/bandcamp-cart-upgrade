@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { Player } from '../src/player';
 import type { PlaylistTrack } from '../src/types';
+import { normalizeUrl } from '../src/url';
 import { makeTrack } from './track-factory';
 
 const HOUR = 60 * 60 * 1000;
@@ -483,6 +484,29 @@ describe('Player playlist tabs', () => {
     return Array.from(player.wrapper.querySelectorAll<HTMLButtonElement>('.bcp-tab')).find((tab) => tab.textContent === text);
   }
 
+  it('shows the playlist status above the playlist switch, with the full text as its tooltip', () => {
+    const player = new Player([freshTrack(1)]);
+    player.setPlaylistStatus('cart', '1 release (1 track)');
+
+    const status = player.wrapper.querySelector('#bcp-tabs > .bcp-status');
+    expect(status?.textContent).toBe('1 release (1 track)');
+    expect((status as HTMLElement).dataset.tooltip).toBe('1 release (1 track)');
+    expect(status?.nextElementSibling?.classList.contains('bcp-tab-list')).toBe(true);
+  });
+
+  it('turns the queue button on while the queue is open', () => {
+    const player = new Player([freshTrack(1)]);
+    const queueButton = player.wrapper.querySelector<HTMLButtonElement>('.bcp-queue-toggle')!;
+
+    queueButton.click();
+    expect(queueButton.classList.contains('bcp-toggle-on')).toBe(true);
+    expect(queueButton.getAttribute('aria-pressed')).toBe('true');
+
+    queueButton.click();
+    expect(queueButton.classList.contains('bcp-toggle-on')).toBe(false);
+    expect(queueButton.getAttribute('aria-pressed')).toBe('false');
+  });
+
   it('shows a greyed-out tab that explains why the playlist cannot be played', () => {
     const player = new Player([]);
     player.setPlaylistUnavailable('cart', 'Cart (empty)', 'Your cart is empty.');
@@ -490,7 +514,7 @@ describe('Player playlist tabs', () => {
     const tab = tabNamed(player, 'Cart (empty)');
 
     expect(tab?.getAttribute('aria-disabled')).toBe('true');
-    expect(tab?.title).toBe('Your cart is empty.');
+    expect(tab?.dataset.tooltip).toBe('Your cart is empty.');
   });
 
   it('shows the reason as a message, also announced to screen readers, when the greyed-out tab is clicked', async () => {
@@ -561,7 +585,7 @@ describe('Player queue', () => {
   }
 
   function queueButton(player: Player): HTMLButtonElement {
-    return player.wrapper.querySelector<HTMLButtonElement>('button[title="Toggle queue"]')!;
+    return player.wrapper.querySelector<HTMLButtonElement>('.bcp-queue-toggle')!;
   }
 
   it('opens scrolled to the playing track, centred in the list', async () => {
@@ -641,15 +665,85 @@ describe('Player cart buttons', () => {
 
   it('shows a track page as in the cart once its album was added', async () => {
     const albumUrl = 'https://solardrift.bandcamp.com/album/echoes-of-the-void';
-    const player = await playing(freshTrack(1, {
+    const player = new Player([]);
+    player.setPlaylist('currentpage', 'This page', [freshTrack(1, {
       releaseType: 'track',
       releaseUrl: 'https://solardrift.bandcamp.com/track/track-1',
       albumUrl,
-    }));
+    })]);
 
     player.addCartUrl(albumUrl);
 
     expect(player.wrapper.querySelector('.bcp-in-cart-badge')?.textContent).toBe('✓ In cart (full album)');
+  });
+
+  it('offers "Add to named cart" beside Remove on the Cart tab, without the in-cart badge', async () => {
+    const track = freshTrack(1);
+    const player = new Player([track]);
+    const onTagTrack = vi.fn();
+    player.setOnTagTrack(onTagTrack);
+    player.setCartUrls(new Set([normalizeUrl(track.releaseUrl)]));
+
+    const actions = Array.from(player.wrapper.querySelector('.bcp-cart-actions')!.children).map((a) => a.textContent);
+    expect(actions).toEqual(['Remove', 'Add to named cart']);
+
+    cartButton(player, 'Add to named cart').click();
+    expect(onTagTrack).toHaveBeenCalledWith(track, track.releaseUrl);
+  });
+
+  it('offers "Add to named cart" for a release in the cart on any tab, in the bar and the queue', () => {
+    const inCart = freshTrack(1);
+    const notInCart = freshTrack(2, { releaseUrl: 'https://solardrift.bandcamp.com/album/other', releaseId: 6000 });
+    const player = new Player([]);
+    player.setOnTagTrack(vi.fn());
+    player.setPlaylist('discography', 'Label discography', [inCart, notInCart]);
+    player.setCartUrls(new Set([normalizeUrl(inCart.releaseUrl)]));
+
+    const actions = () => Array.from(player.wrapper.querySelector('.bcp-cart-actions')!.children).map((a) => a.textContent);
+    expect(actions()).toEqual(['Remove', 'Add to named cart']);
+    const queueRows = player.wrapper.querySelectorAll('.bcp-queue-item');
+    expect(queueRows[0]!.querySelector('.bcp-queue-tag-btn')).not.toBeNull();
+    expect(queueRows[1]!.querySelector('.bcp-queue-tag-btn')).toBeNull();
+
+    player.jumpTo('discography', 1, true);
+    expect(actions()).toEqual(['+ Track', '+ Release']);
+  });
+
+  it('drops the named-cart link and brings back the badge when named carts are switched off', () => {
+    const track = freshTrack(1);
+    const player = new Player([track]);
+    player.setOnTagTrack(vi.fn());
+    player.setCartUrls(new Set([normalizeUrl(track.releaseUrl)]));
+
+    player.setOnTagTrack(null);
+
+    const actions = Array.from(player.wrapper.querySelector('.bcp-cart-actions')!.children).map((a) => a.textContent);
+    expect(actions).toEqual(['✓ In cart (full album)', 'Remove']);
+    expect(player.wrapper.querySelector('.bcp-queue-tag-btn')).toBeNull();
+  });
+
+  it('keeps the in-cart badge where named carts are off, as in incognito', () => {
+    const track = freshTrack(1);
+    const player = new Player([]);
+    player.setPlaylist('discography', 'Label discography', [track]);
+    player.setCartUrls(new Set([normalizeUrl(track.releaseUrl)]));
+
+    const actions = Array.from(player.wrapper.querySelector('.bcp-cart-actions')!.children).map((a) => a.textContent);
+    expect(actions).toEqual(['✓ In cart (full album)', 'Remove']);
+  });
+
+  it('names how many named carts the playing release is in', async () => {
+    const track = freshTrack(1);
+    const player = new Player([track]);
+    player.setOnTagTrack(vi.fn());
+    player.setCartUrls(new Set([normalizeUrl(track.releaseUrl)]));
+    const item = { url: track.releaseUrl, title: 'Echoes of the Void' };
+    player.setNamedCarts([
+      { id: 'a', name: 'Birthday', createdAt: 0, items: [item] },
+      { id: 'b', name: 'Later', createdAt: 0, items: [item] },
+    ]);
+
+    expect(cartButton(player, 'In 2 named carts').dataset.tooltip).toBe('In: Birthday, Later');
   });
 });
 
@@ -677,7 +771,7 @@ describe('Player reverse order', () => {
   }
 
   function nextButton(player: Player): HTMLButtonElement {
-    return player.wrapper.querySelector<HTMLButtonElement>('button[title="Next"]')!;
+    return player.wrapper.querySelector<HTMLButtonElement>('button[aria-label="Next"]')!;
   }
 
   function currentTitle(player: Player): string {
@@ -864,7 +958,7 @@ describe('Player reverse order', () => {
     await settle();
 
     player.removeTracksByReleaseUrl('cart', tracks[2]!.releaseUrl);
-    player.wrapper.querySelector<HTMLButtonElement>('button[title="Previous"]')!.click();
+    player.wrapper.querySelector<HTMLButtonElement>('button[aria-label="Previous"]')!.click();
 
     expect(currentTitle(player)).toBe('Track 2');
   });
@@ -886,8 +980,173 @@ describe('Player reverse order', () => {
     reverseButton(player).click();
 
     expect(reverseButton(player).getAttribute('aria-disabled')).toBe('true');
-    expect(reverseButton(player).title).toBe('Only one release');
+    expect(reverseButton(player).dataset.tooltip).toBe('Reverse playlist order: only one release');
     expect(set).not.toHaveBeenCalled();
+  });
+});
+
+describe('Player tooltips', () => {
+  function hover(target: Element) {
+    target.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+  }
+
+  // happy-dom delivers mutation records on a real timer of its own (browsers
+  // use a microtask), which fake timers don't reach.
+  async function mutationsDelivered() {
+    vi.useRealTimers();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+
+  // On the page, as the tooltip only shows for elements that are.
+  function playerOnPage(): Player {
+    const player = new Player([freshTrack(1)]);
+    document.body.appendChild(player.wrapper);
+    return player;
+  }
+
+  function tooltip(player: Player): HTMLElement {
+    return player.wrapper.querySelector<HTMLElement>('.bcp-tooltip')!;
+  }
+
+  it('shows the tooltip after a short pause, with no browser tooltip alongside it', () => {
+    vi.useFakeTimers();
+    try {
+      const player = playerOnPage();
+      const queueButton = player.wrapper.querySelector<HTMLButtonElement>('.bcp-queue-toggle')!;
+
+      hover(queueButton);
+      expect(queueButton.hasAttribute('title')).toBe(false);
+      expect(tooltip(player).classList.contains('bcp-tooltip-visible')).toBe(false);
+
+      vi.advanceTimersByTime(250);
+      expect(tooltip(player).classList.contains('bcp-tooltip-visible')).toBe(true);
+      expect(tooltip(player).textContent).toBe('Toggle queue');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('shows the next tooltip straight away when moving from one to the next', () => {
+    vi.useFakeTimers();
+    try {
+      const player = playerOnPage();
+      hover(player.wrapper.querySelector('.bcp-queue-toggle')!);
+      vi.advanceTimersByTime(250);
+
+      hover(player.wrapper.querySelector('.bcp-tempo-reset-btn')!);
+      vi.advanceTimersByTime(0);
+
+      expect(tooltip(player).classList.contains('bcp-tooltip-visible')).toBe(true);
+      expect(tooltip(player).textContent).toBe('Reset tempo');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('shows the status line\'s tooltip only when the status is cut off', () => {
+    vi.useFakeTimers();
+    try {
+      const player = playerOnPage();
+      player.setPlaylistStatus('cart', 'Loading releases: 12 / 28', 'loading');
+      const status = player.wrapper.querySelector<HTMLElement>('.bcp-status')!;
+
+      hover(status);
+      vi.advanceTimersByTime(250);
+      expect(tooltip(player).classList.contains('bcp-tooltip-visible')).toBe(false);
+
+      player.wrapper.dispatchEvent(new MouseEvent('mouseleave'));
+      Object.defineProperty(status, 'scrollWidth', { value: 300, configurable: true });
+      Object.defineProperty(status, 'clientWidth', { value: 180, configurable: true });
+      hover(status);
+      vi.advanceTimersByTime(250);
+      expect(tooltip(player).classList.contains('bcp-tooltip-visible')).toBe(true);
+      expect(tooltip(player).textContent).toBe('Loading releases: 12 / 28');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('leaves the standard transport icons without a tooltip, named for screen readers', () => {
+    const player = new Player([freshTrack(1)]);
+
+    for (const name of ['Previous', 'Next']) {
+      const navButton = player.wrapper.querySelector(`button[aria-label="${name}"]`);
+      expect(navButton?.hasAttribute('title')).toBe(false);
+    }
+    const playButton = player.wrapper.querySelector('.bcp-btn-play')!;
+    expect(playButton.hasAttribute('title')).toBe(false);
+    expect(playButton.getAttribute('aria-label')).toBe('Play');
+  });
+
+  it('hides when the pointer leaves the player', () => {
+    vi.useFakeTimers();
+    try {
+      const player = playerOnPage();
+      hover(player.wrapper.querySelector('.bcp-queue-toggle')!);
+      vi.advanceTimersByTime(250);
+
+      player.wrapper.dispatchEvent(new MouseEvent('mouseleave'));
+
+      expect(tooltip(player).classList.contains('bcp-tooltip-visible')).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stays hidden after a click until the pointer moves on to another control', () => {
+    vi.useFakeTimers();
+    try {
+      const player = playerOnPage();
+      const mt = Array.from(player.wrapper.querySelectorAll<HTMLButtonElement>('.bcp-tempo-btn')).find((b) => b.textContent === 'MT')!;
+      hover(mt);
+      vi.advanceTimersByTime(250);
+
+      mt.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      hover(mt);
+      vi.advanceTimersByTime(250);
+
+      expect(tooltip(player).classList.contains('bcp-tooltip-visible')).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('hides when the hovered control is rebuilt', async () => {
+    vi.useFakeTimers();
+    try {
+      const player = playerOnPage();
+      player.setPlaylistUnavailable('discography', 'Label discography (loading 1 / 5)', 'Loading the label.');
+      hover(Array.from(player.wrapper.querySelectorAll('.bcp-tab')).find((tab) => tab.textContent?.startsWith('Label'))!);
+      vi.advanceTimersByTime(250);
+      expect(tooltip(player).classList.contains('bcp-tooltip-visible')).toBe(true);
+
+      player.setPlaylistUnavailable('discography', 'Label discography (loading 2 / 5)', 'Loading the label.');
+      await mutationsDelivered();
+
+      expect(tooltip(player).classList.contains('bcp-tooltip-visible')).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('follows the text of the hovered control while it shows', async () => {
+    vi.useFakeTimers();
+    try {
+      const player = playerOnPage();
+      player.setPlaylistStatus('cart', 'Loading releases: 1 / 28', 'loading');
+      const status = player.wrapper.querySelector<HTMLElement>('.bcp-status')!;
+      Object.defineProperty(status, 'scrollWidth', { value: 300, configurable: true });
+      Object.defineProperty(status, 'clientWidth', { value: 180, configurable: true });
+      hover(status);
+      vi.advanceTimersByTime(250);
+
+      player.setPlaylistStatus('cart', 'Loading releases: 2 / 28', 'loading');
+      await mutationsDelivered();
+
+      expect(tooltip(player).textContent).toBe('Loading releases: 2 / 28');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

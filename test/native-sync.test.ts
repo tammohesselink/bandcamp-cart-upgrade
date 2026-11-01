@@ -22,8 +22,12 @@ function audioOf(player: Player): HTMLAudioElement {
   return (player as unknown as { audio: HTMLAudioElement }).audio;
 }
 
-function button(title: string): HTMLButtonElement {
-  return document.querySelector<HTMLButtonElement>(`#bcp-bar button[title="${title}"]`)!;
+function playButton(): HTMLButtonElement {
+  return document.querySelector<HTMLButtonElement>('#bcp-bar .bcp-btn-play')!;
+}
+
+function nextButton(): HTMLButtonElement {
+  return document.querySelector<HTMLButtonElement>('#bcp-bar button[aria-label="Next"]')!;
 }
 
 // The native audio seeks to 0:00 when a track starts, so seeks just after a
@@ -150,7 +154,7 @@ describe('native player sync', () => {
     await settle();
     expect(page.native.paused).toBe(false);
 
-    button('Play / Pause').click();
+    playButton().click();
     await settle();
 
     expect(page.native.paused).toBe(true);
@@ -164,7 +168,7 @@ describe('native player sync', () => {
     expect(page.currentRow()).toBe(0);
     expect(page.native.paused).toBe(false);
 
-    button('Next').click();
+    nextButton().click();
     await settle();
 
     expect(audioOf(player).src).toBe('https://t4.bcbits.com/stream/track-2-old');
@@ -177,11 +181,11 @@ describe('native player sync', () => {
     player.jumpTo('currentpage', 0);
     await settle();
 
-    button('Play / Pause').click();
+    playButton().click();
     await settle();
     expect(page.native.paused).toBe(true);
 
-    button('Play / Pause').click();
+    playButton().click();
     await settle();
     expect(page.native.paused).toBe(false);
     expect(page.currentRow()).toBe(0);

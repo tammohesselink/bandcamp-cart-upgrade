@@ -5,7 +5,7 @@ import { setupNativePlayerSync } from './native-sync';
 import { probeCart, probeDiscography, injectDiscographyButton, injectRestoreCartButton, injectRemoveAlreadyOwnedButton, injectCheckoutCartButton } from './probe';
 import { addSnapshotIfChanged, loadSnapshots, saveSnapshots } from './cart-history';
 import { openCartHistoryModal } from './cart-history-modal';
-import { createNamedCart, deleteNamedCart, toggleItemInNamedCart, partitionByCart } from './named-carts';
+import { createNamedCart, deleteNamedCart, countItemsInNamedCart, setItemsInNamedCart, partitionByCart } from './named-carts';
 import { normalizeUrl } from './url';
 import { ensureModalStyles } from './styles';
 import {
@@ -21,6 +21,7 @@ import {
   isTrackOrAlbumPage,
   isLoggedIn,
   clickCheckout,
+  sidecartItemFor,
   SEL_SIDECART_BODY,
   SEL_SIDECART_ITEM_LIST,
   SEL_SIDECART_ITEM_LINK,
@@ -53,9 +54,14 @@ let cartItemProblems = new Map<string, ItemProblem>();
 // Normalised URLs of cart items the user has checked for partial checkout.
 let cartSelection = new Set<string>();
 
-// The injected "Checkout selected (N)" button, kept as a reference so it can
-// be updated without re-injecting.
+// The injected "Checkout selected (N)" and "Add selected to named cart (N)"
+// buttons, kept as references so they can be updated without re-injecting.
 let checkoutSelectedBtn: HTMLButtonElement | null = null;
+let addSelectedButton: HTMLButtonElement | null = null;
+
+// True while "Checkout selected" prepares its private window, so the button
+// stays disabled however the selection changes meanwhile.
+let checkoutSelectedInFlight = false;
 
 // Per playlist, normalised release URL → its tracks, for the ▶ buttons on the
 // page. The tracks are the playlist's own objects, so a button finds them
@@ -72,6 +78,10 @@ const tracksByReleaseUrl: Record<'cart' | 'discography', Map<string, PlaylistTra
 // of the Player — can read the current values from its click handler.
 let namedCarts: NamedCart[] = [];
 let activePlayer: Player | null = null;
+
+// Whether named carts show at all: the "Enable named carts" option, and never
+// in incognito (see main()). Switching the option applies straight away.
+let namedCartsOn = false;
 
 // Maps normalised cart item URL → Bandcamp cart line-item id.
 // req=del needs this id (assigned when the item entered the cart), not the tralbum id.
@@ -121,10 +131,56 @@ async function loadNamedCarts(): Promise<NamedCart[]> {
   }
 }
 
-function saveNamedCarts(carts: NamedCart[]): void {
-  // Keep the sidecart's "Checkout a cart (N)" count in step with the carts.
-  if (document.querySelector('.bcp-checkout-cart-btn')) injectCheckoutCartButton(carts.length);
-  chrome.storage.local.set({ [NAMED_CARTS_KEY]: { carts, updatedAt: Date.now() } }).catch(() => {});
+// Redraw callbacks of the named-cart windows that are open, so they follow
+// changes made elsewhere (another window, another tab).
+const namedCartsListeners = new Set<() => void>();
+
+// Bumped on every save that reaches this tab, so main() doesn't overwrite a
+// newer list with the one it was still loading.
+let namedCartsVersion = 0;
+
+// Changes the named carts starting from the latest list. Other tabs' saves
+// reach namedCarts through watchNamedCarts(), so a change here never writes
+// back an older list over carts another tab added or changed.
+function updateNamedCarts(change: (carts: NamedCart[]) => NamedCart[]): void {
+  namedCarts = change(namedCarts);
+  chrome.storage.local.set({ [NAMED_CARTS_KEY]: { carts: namedCarts, updatedAt: Date.now() } }).catch(() => {});
+  showNamedCarts();
+}
+
+// Takes in saves from every tab, this one included.
+function watchNamedCarts(): void {
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== 'local' || !(NAMED_CARTS_KEY in changes)) return;
+    const entry = changes[NAMED_CARTS_KEY]!.newValue as NamedCartsStorage | undefined;
+    namedCarts = entry?.carts ?? [];
+    namedCartsVersion++;
+    showNamedCarts();
+  });
+}
+
+// Brings everything that shows the named carts up to date with namedCarts.
+function showNamedCarts(): void {
+  updateCheckoutCartButton();
+  activePlayer?.setNamedCarts(namedCarts);
+  for (const listener of namedCartsListeners) listener();
+}
+
+// Keeps the sidecart's "Checkout a cart (N)" count in step with the carts, and
+// hides it while named carts are off.
+function updateCheckoutCartButton(): void {
+  if (document.querySelector('.bcp-checkout-cart-btn')) injectCheckoutCartButton(namedCarts.length, namedCartsOn);
+}
+
+function openNamedCartPickerFor(track: PlaylistTrack, cartItemUrl: string): void {
+  showNamedCartPicker([toSavedCartItem(track, cartItemUrl)]);
+}
+
+// Shows or hides everything named carts add to the sidecart and the player.
+function applyNamedCartsOption(): void {
+  updateCheckoutCartButton();
+  updateSelectionButtons();
+  activePlayer?.setOnTagTrack(namedCartsOn ? openNamedCartPickerFor : null);
 }
 
 // --- Named carts --------------------------------------------------------------
@@ -139,9 +195,7 @@ function saveNamedCarts(carts: NamedCart[]): void {
 // since left the real cart.
 function toSavedCartItem(track: PlaylistTrack, cartItemUrl: string): SavedCartItem {
   const cartMatch = probeCart().find((i) => normalizeUrl(i.url) === normalizeUrl(cartItemUrl));
-  if (cartMatch) {
-    return { url: cartMatch.url, title: cartMatch.title, artist: cartMatch.artist, purchaseType: cartMatch.purchaseType };
-  }
+  if (cartMatch) return savedCartItemFrom(cartMatch);
   const title = (cartItemUrl === track.releaseUrl ? track.albumTitle : track.trackTitle) || track.trackTitle;
   return {
     url: cartItemUrl,
@@ -149,6 +203,16 @@ function toSavedCartItem(track: PlaylistTrack, cartItemUrl: string): SavedCartIt
     artist: track.artist,
     purchaseType: cartItemTypes.get(normalizeUrl(cartItemUrl)),
   };
+}
+
+// A sidecart entry as a named cart or a private-window checkout stores it.
+function savedCartItemFrom(item: CartItem): SavedCartItem {
+  return { url: item.url, title: item.title, artist: item.artist, purchaseType: item.purchaseType };
+}
+
+// The ticked sidecart entries.
+function selectedCartItems(): SavedCartItem[] {
+  return probeCart().filter((i) => cartSelection.has(normalizeUrl(i.url))).map(savedCartItemFrom);
 }
 
 function showDeleteNamedCartConfirm(cart: NamedCart): Promise<boolean> {
@@ -201,9 +265,12 @@ function showDeleteNamedCartConfirm(cart: NamedCart): Promise<boolean> {
   });
 }
 
-// Opened from the player's tag button. Lets the user toggle the current track
-// into any named cart, or create a new one, without closing the modal.
-function showNamedCartPicker(player: Player, track: PlaylistTrack, cartItemUrl: string): void {
+// Opened from the player's "Add to named cart" link with the playing release,
+// and from the sidecart's "Add selected to named cart" with the ticked items.
+// Lets the user check the items into or out of any named cart, or create a new
+// one, without closing the modal. A cart holding only some of several items
+// shows a half-ticked box; checking it adds the rest.
+function showNamedCartPicker(items: SavedCartItem[]): void {
   ensureModalStyles();
 
   const backdrop = document.createElement('div');
@@ -213,7 +280,7 @@ function showNamedCartPicker(player: Player, track: PlaylistTrack, cartItemUrl: 
   modal.className = 'bcp-hm';
 
   const title = document.createElement('h3');
-  title.textContent = 'Add to named cart';
+  title.textContent = items.length === 1 ? 'Add to named cart' : `Add ${items.length} items to named cart`;
   modal.appendChild(title);
 
   const list = document.createElement('ul');
@@ -234,14 +301,13 @@ function showNamedCartPicker(player: Player, track: PlaylistTrack, cartItemUrl: 
       const row = document.createElement('div');
       row.className = 'bcp-nc-row';
 
+      const held = countItemsInNamedCart(cart, items);
       const checkbox = document.createElement('input');
       checkbox.type = 'checkbox';
-      checkbox.checked = cart.items.some((i) => normalizeUrl(i.url) === normalizeUrl(cartItemUrl));
+      checkbox.checked = held === items.length;
+      checkbox.indeterminate = held > 0 && held < items.length;
       checkbox.addEventListener('change', () => {
-        namedCarts = toggleItemInNamedCart(namedCarts, cart.id, toSavedCartItem(track, cartItemUrl));
-        saveNamedCarts(namedCarts);
-        player.setNamedCarts(namedCarts);
-        renderList();
+        updateNamedCarts((carts) => setItemsInNamedCart(carts, cart.id, items, held < items.length));
       });
 
       const name = document.createElement('span');
@@ -250,7 +316,8 @@ function showNamedCartPicker(player: Player, track: PlaylistTrack, cartItemUrl: 
 
       const meta = document.createElement('span');
       meta.className = 'bcp-nc-meta';
-      meta.textContent = `${cart.items.length} item${cart.items.length !== 1 ? 's' : ''}`;
+      meta.textContent = `${cart.items.length} item${cart.items.length !== 1 ? 's' : ''}` +
+        (checkbox.indeterminate ? ` (has ${held} of these ${items.length})` : '');
 
       row.append(checkbox, name, meta);
       li.appendChild(row);
@@ -258,6 +325,7 @@ function showNamedCartPicker(player: Player, track: PlaylistTrack, cartItemUrl: 
     }
   };
   renderList();
+  namedCartsListeners.add(renderList);
 
   const newRow = document.createElement('div');
   newRow.className = 'bcp-nc-new';
@@ -267,14 +335,13 @@ function showNamedCartPicker(player: Player, track: PlaylistTrack, cartItemUrl: 
   const addBtn = document.createElement('button');
   addBtn.textContent = 'Create + add';
   const createAndAdd = () => {
-    if (!nameInput.value.trim()) return;
-    namedCarts = createNamedCart(namedCarts, nameInput.value);
-    const created = namedCarts[0]!;
-    namedCarts = toggleItemInNamedCart(namedCarts, created.id, toSavedCartItem(track, cartItemUrl));
-    saveNamedCarts(namedCarts);
-    player.setNamedCarts(namedCarts);
+    const name = nameInput.value;
+    if (!name.trim()) return;
     nameInput.value = '';
-    renderList();
+    updateNamedCarts((carts) => {
+      const withNew = createNamedCart(carts, name);
+      return setItemsInNamedCart(withNew, withNew[0]!.id, items, true);
+    });
   };
   addBtn.addEventListener('click', createAndAdd);
   nameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') createAndAdd(); });
@@ -292,6 +359,7 @@ function showNamedCartPicker(player: Player, track: PlaylistTrack, cartItemUrl: 
 
   const close = () => {
     document.removeEventListener('keydown', onKey);
+    namedCartsListeners.delete(renderList);
     backdrop.remove();
   };
   const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
@@ -321,12 +389,14 @@ function showNamedCartCheckoutModal(player: Player | null): void {
   const list = document.createElement('ul');
   list.className = 'bcp-hl';
 
-  if (namedCarts.length === 0) {
-    const empty = document.createElement('li');
-    empty.className = 'bcp-nc-empty';
-    empty.textContent = 'No named carts yet — tag tracks from the Cart tab in the player';
-    list.appendChild(empty);
-  } else {
+  // Only opens with a named cart to show (the button hides otherwise), and
+  // closes once the last one is deleted.
+  const renderList = () => {
+    if (namedCarts.length === 0) {
+      close();
+      return;
+    }
+    list.innerHTML = '';
     const current = probeCart();
     for (const cart of namedCarts) {
       const li = document.createElement('li');
@@ -365,10 +435,7 @@ function showNamedCartCheckoutModal(player: Player | null): void {
       deleteBtn.textContent = 'Delete';
       deleteBtn.addEventListener('click', async () => {
         if (!await showDeleteNamedCartConfirm(cart)) return;
-        namedCarts = deleteNamedCart(namedCarts, cart.id);
-        saveNamedCarts(namedCarts);
-        player?.setNamedCarts(namedCarts);
-        li.remove();
+        updateNamedCarts((carts) => deleteNamedCart(carts, cart.id));
       });
 
       header.append(name, meta, checkoutBtn, deleteBtn);
@@ -387,7 +454,7 @@ function showNamedCartCheckoutModal(player: Player | null): void {
 
       list.appendChild(li);
     }
-  }
+  };
   modal.appendChild(list);
 
   const actions = document.createElement('div');
@@ -401,6 +468,7 @@ function showNamedCartCheckoutModal(player: Player | null): void {
 
   const close = () => {
     document.removeEventListener('keydown', onKey);
+    namedCartsListeners.delete(renderList);
     backdrop.remove();
   };
   const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
@@ -408,6 +476,8 @@ function showNamedCartCheckoutModal(player: Player | null): void {
   backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
   closeBtn.addEventListener('click', close);
 
+  renderList();
+  namedCartsListeners.add(renderList);
   document.body.appendChild(backdrop);
 }
 
@@ -778,7 +848,7 @@ async function isCartItemOwned(item: CartItem): Promise<boolean | null> {
 function setupRemoveAlreadyOwnedButton(): void {
   const btn = injectRemoveAlreadyOwnedButton();
   if (!btn) return;
-  const idleLabel = btn.textContent ?? 'Remove already purchased items from cart';
+  const idleLabel = btn.textContent ?? 'Remove purchased items from cart';
   const reset = () => {
     btn.disabled = false;
     btn.textContent = idleLabel;
@@ -1046,8 +1116,17 @@ async function main() {
 
   const cartItems = probeCart();
   const settings = await loadSettings();
+  namedCartsOn = settings.namedCartsEnabled && !chrome.extension.inIncognitoContext;
 
   if (!chrome.extension.inIncognitoContext) {
+    // Set up before the awaits below, so a switch of the option, or a named
+    // cart saved in another tab, while this page loads still applies.
+    onSettingsChanged((changed) => {
+      if (changed.namedCartsEnabled === namedCartsOn) return;
+      namedCartsOn = changed.namedCartsEnabled;
+      applyNamedCartsOption();
+    });
+    watchNamedCarts();
     setupRemoveAlreadyOwnedButton();
 
     const liveItems: SavedCartItem[] = cartItems.map((i) => ({ url: i.url, title: i.title, purchaseType: i.purchaseType }));
@@ -1111,9 +1190,11 @@ async function main() {
     // empty. The click handler reads `activePlayer`, which may still be null
     // at this point; it's read lazily so it reflects whichever value is set
     // (or not) by the time the user actually clicks.
-    namedCarts = await loadNamedCarts();
+    const versionBeforeLoad = namedCartsVersion;
+    const loaded = await loadNamedCarts();
+    if (namedCartsVersion === versionBeforeLoad) namedCarts = loaded;
     ensureModalStyles();
-    const checkoutCartBtn = injectCheckoutCartButton(namedCarts.length);
+    const checkoutCartBtn = injectCheckoutCartButton(namedCarts.length, namedCartsOn);
     checkoutCartBtn?.addEventListener('click', () => showNamedCartCheckoutModal(activePlayer));
   } else if (settings.showCartHistoryBtn) {
     const anchor = document.getElementById('sidecart')
@@ -1163,11 +1244,8 @@ async function main() {
   player.setCartUrls(buildCartUrlSet(cartItems));
   // Named carts are skipped entirely in incognito: its storage is a separate,
   // throwaway instance (same reason cart history is skipped, see below).
-  if (!chrome.extension.inIncognitoContext) {
-    // Set before setNamedCarts() renders, which only draws tag buttons once a handler exists.
-    player.onTagTrack = (track, cartItemUrl) => showNamedCartPicker(player, track, cartItemUrl);
-    player.setNamedCarts(namedCarts);
-  }
+  player.setNamedCarts(namedCarts);
+  if (namedCartsOn) player.setOnTagTrack(openNamedCartPickerFor);
 
   player.onTrackChange = (id, index) => {
     const track = player.getPlaylistTracks(id)[index];
@@ -1262,9 +1340,11 @@ async function main() {
       tracksByReleaseUrl.cart.set(normalizeUrl(cartItemUrl), tracksToAdd);
       injectPlayButtonForSidecartItem(cartItemUrl, player);
       injectCheckboxForSidecartItem(cartItemUrl);
+      // The cart may have been empty at load, when these were never injected.
+      injectCheckoutSelectedBtn(player);
       refreshCartStatus(player);
     } else {
-      player.setStatus(`Add failed: ${result.error ?? 'unknown error'}`, 'error');
+      player.showToast(`Add failed: ${result.error ?? 'unknown error'}`, 'error');
     }
   };
 
@@ -1274,7 +1354,7 @@ async function main() {
       normalizeUrl(cartItemUrl) === normalizeUrl(pageTrack.albumUrl);
     const track = isAlbumOfTrackPage ? await albumTrackFor(pageTrack) : pageTrack;
     if (track === null) {
-      player.setStatus('Remove failed: could not load the album', 'error');
+      player.showToast('Remove failed: could not load the album', 'error');
       return;
     }
 
@@ -1310,7 +1390,7 @@ async function main() {
         fanId: ctx.fanId,
       });
       if (!result.ok) {
-        player.setStatus(`Remove failed: ${result.error ?? 'unknown error'}`, 'error');
+        player.showToast(`Remove failed: ${result.error ?? 'unknown error'}`, 'error');
         return;
       }
 
@@ -1344,12 +1424,12 @@ async function main() {
       player.removeTracks('cart', (t) => wasRemoved(t) && !stillHeld.has(normalizeUrl(t.pageUrl)));
       removeSidecartItem(cartItemUrl);
       cartSelection.delete(normalizeUrl(cartItemUrl));
-      updateCheckoutSelectedBtn();
+      updateSelectionButtons();
       refreshCartStatus(player);
       return;
     }
 
-    player.setStatus('Remove failed: could not sync cart state', 'error');
+    player.showToast('Remove failed: could not sync cart state', 'error');
   };
 
   // Partial-checkout: open a private window with a fresh cart containing only
@@ -1369,10 +1449,7 @@ async function main() {
       return;
     }
 
-    const items: SavedCartItem[] = selectedItems.map((i) => ({
-      url: i.url, title: i.title, artist: i.artist, purchaseType: i.purchaseType,
-    }));
-    await checkoutInPrivateWindow(player, items);
+    await checkoutInPrivateWindow(player, selectedItems.map(savedCartItemFrom));
   };
 
   // Keep cart state in sync when Bandcamp's own JS updates the sidecart.
@@ -1431,7 +1508,7 @@ async function main() {
       const progress = `${done} / ${discoItems.length}`;
       // A release played before the rest loaded keeps its tab usable meanwhile.
       if (player.getPlaylistTracks('discography').length > 0) {
-        player.setPlaylistStatus('discography', `Loading the rest of the label: ${progress} releases`, 'loading');
+        player.setPlaylistStatus('discography', `Loading releases: ${progress}`, 'loading');
       } else {
         player.setPlaylistUnavailable(
           'discography',
@@ -1568,7 +1645,7 @@ function refreshCartState(player: Player): void {
   for (const key of Array.from(cartSelection)) {
     if (!freshUrls.has(key)) cartSelection.delete(key);
   }
-  updateCheckoutSelectedBtn();
+  updateSelectionButtons();
 }
 
 function refreshCartStatus(player: Player): void {
@@ -1617,11 +1694,17 @@ function refreshCartStatus(player: Player): void {
   }
 }
 
-function updateCheckoutSelectedBtn(): void {
-  if (!checkoutSelectedBtn) return;
+// Hidden until an item is ticked, to keep the sidecart uncluttered.
+function updateSelectionButtons(): void {
   const n = cartSelection.size;
-  checkoutSelectedBtn.disabled = n === 0;
-  checkoutSelectedBtn.textContent = `Checkout selected (${n})`;
+  if (checkoutSelectedBtn && !checkoutSelectedInFlight) {
+    checkoutSelectedBtn.hidden = n === 0;
+    checkoutSelectedBtn.textContent = `Checkout selected (${n})`;
+  }
+  if (addSelectedButton) {
+    addSelectedButton.hidden = n === 0 || !namedCartsOn;
+    addSelectedButton.textContent = `Add selected to named cart (${n})`;
+  }
 }
 
 function injectCheckboxForSidecartItem(url: string): void {
@@ -1641,7 +1724,7 @@ function injectCheckboxForSidecartItem(url: string): void {
       } else {
         cartSelection.delete(normalized);
       }
-      updateCheckoutSelectedBtn();
+      updateSelectionButtons();
     });
     // Insert before the play button if present, otherwise before the link.
     const playBtn = link.previousElementSibling;
@@ -1658,25 +1741,42 @@ function injectCheckoutSelectedBtn(player: Player): void {
 
   const btn = document.createElement('button');
   btn.className = 'bcp-checkout-selected-btn';
-  btn.disabled = true;
+  btn.hidden = true;
   btn.textContent = 'Checkout selected (0)';
   btn.addEventListener('click', async () => {
-    const current = probeCart();
-    const selectedRawUrls = current
-      .filter((i) => cartSelection.has(normalizeUrl(i.url)))
-      .map((i) => i.url);
+    const selectedRawUrls = selectedCartItems().map((i) => i.url);
     if (selectedRawUrls.length === 0) return;
+    checkoutSelectedInFlight = true;
     btn.disabled = true;
     btn.textContent = 'Preparing…';
     try {
       await player.onCheckoutSelected?.(selectedRawUrls);
     } finally {
-      updateCheckoutSelectedBtn();
+      checkoutSelectedInFlight = false;
+      btn.disabled = false;
+      updateSelectionButtons();
     }
   });
 
   anchor.insertAdjacentElement('afterend', btn);
   checkoutSelectedBtn = btn;
+
+  // Hidden while named carts are off; incognito never turns them on.
+  const addButton = document.createElement('button');
+  addButton.className = 'bcp-add-selected-button';
+  addButton.hidden = true;
+  addButton.textContent = 'Add selected to named cart (0)';
+  addButton.addEventListener('click', () => {
+    const items = selectedCartItems();
+    if (items.length > 0) showNamedCartPicker(items);
+  });
+  btn.insertAdjacentElement('afterend', addButton);
+  addSelectedButton = addButton;
+
+  // main() injects "Checkout a cart" before the cart loads, so it is moved
+  // below the selection buttons here to keep the three together.
+  const checkoutCartButton = document.querySelector('.bcp-checkout-cart-btn');
+  if (checkoutCartButton) addButton.insertAdjacentElement('afterend', checkoutCartButton);
 }
 
 function injectPlayButtonForSidecartItem(url: string, player: Player): void {
@@ -1738,14 +1838,8 @@ function removeSidecartItem(releaseUrl: string): void {
   cartItemTypes.delete(normalized);
   for (const link of Array.from(sidecartBody.querySelectorAll<HTMLAnchorElement>(SEL_SIDECART_ITEM_LINK))) {
     if (normalizeUrl(link.href) === normalized) {
-      // Walk up to the direct child of sidecartBody so we remove the entire item
-      // block (title + price rows) even when they are separate siblings inside one
-      // wrapper rather than nested under a single <li>.
-      let el: Element | null = link;
-      while (el && el.parentElement !== sidecartBody) {
-        el = el.parentElement;
-      }
-      withSuppressedObserver(() => el?.remove());
+      const item = sidecartItemFor(link);
+      withSuppressedObserver(() => item?.remove());
       break;
     }
   }

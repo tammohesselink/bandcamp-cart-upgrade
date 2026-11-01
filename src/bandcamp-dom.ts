@@ -18,6 +18,7 @@ export function isTrackOrAlbumPage(): boolean {
 // Cart sidebar
 export const SEL_SIDECART_BODY = '#sidecartBody';
 export const SEL_SIDECART_ITEM_LIST = '#item_list';
+export const SEL_SIDECART_ITEM = '.item';
 export const SEL_SIDECART_ITEM_LINK = 'a.itemName[href]';
 
 // Discography grid (label pages)
@@ -132,6 +133,21 @@ export function readPageContext(latestSyncNum: number | null): BandcampPageConte
   }
 
   return { syncNum: syncNum ?? 0, clientId, currency, fanId, countryCode };
+}
+
+/**
+ * The whole sidecart entry (title and price rows) holding `link`: its `.item`
+ * ancestor inside #sidecartBody, the class Bandcamp's entries carry and
+ * addSidecartItem copies. Matching the entry itself, rather than walking up to
+ * a container's child, keeps a wrapper around the entries (Bandcamp's
+ * #item_list, or any other) from being taken for one entry and removed with all
+ * of them. Null when there is no such entry, so nothing is removed.
+ */
+export function sidecartItemFor(link: HTMLAnchorElement): Element | null {
+  const sidecartBody = document.querySelector<HTMLElement>(SEL_SIDECART_BODY);
+  if (!sidecartBody?.contains(link)) return null;
+  const item = link.closest(SEL_SIDECART_ITEM);
+  return item && item !== sidecartBody && sidecartBody.contains(item) ? item : null;
 }
 
 // --- Checkout navigation ------------------------------------------------------

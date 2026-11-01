@@ -127,16 +127,18 @@ export const PLAYER_CSS = `
   flex-shrink: 0;
 }
 
-/* Three shared lines across the 50px-high bar: titles along the top, the
-   artist, play button and side controls through the middle, and the cart
-   links, playlist tabs and seek bar along the bottom. */
+/* Three shared lines across the 50px-high bar: titles and the playlist status
+   along the top, the artist, transport and side controls through the middle,
+   and the cart links, playlist switch and seek bar along the bottom. The
+   controls have no borders: the play button is the only solid shape, and a
+   control that is switched on turns blue. */
 #bcp-bar {
   background: #fff;
   border-top: 1px solid #ccc;
   display: flex;
   align-items: stretch;
-  padding: 6px 10px;
-  gap: 16px;
+  padding: 6px 16px 6px 10px;
+  gap: 24px;
 }
 
 #bcp-artwork {
@@ -153,7 +155,7 @@ export const PLAYER_CSS = `
   flex-direction: column;
   justify-content: space-between;
   min-width: 0;
-  width: 260px;
+  width: 220px;
   flex-shrink: 0;
 }
 
@@ -185,29 +187,35 @@ export const PLAYER_CSS = `
 .bcp-center {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 16px;
   flex: 1 1 auto;
   min-width: 0;
-  max-width: 840px;
-  margin: 0 auto;
 }
 
-/* Track title and time above the seek bar; prev/next beside the bar. */
+/* Previous, play and next together, in front of the track. */
+.bcp-transport {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* Track title and time above the seek bar, lowered so their tops line up with
+   the top of the play button; the seek bar stays on the bottom line. */
 .bcp-progress {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: 17px 18px;
   align-self: stretch;
   align-content: space-between;
   align-items: center;
-  column-gap: 12px;
   row-gap: 4px;
+  padding-top: 3px;
   flex: 1 1 auto;
   min-width: 0;
 }
 
 .bcp-track-row {
-  grid-column: 1;
   line-height: 17px;
   display: flex;
   align-items: baseline;
@@ -237,14 +245,6 @@ export const PLAYER_CSS = `
   font-variant-numeric: tabular-nums;
 }
 
-.bcp-controls {
-  grid-column: 2;
-  grid-row: 2;
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
-
 .bcp-btn {
   background: none;
   border: none;
@@ -267,6 +267,23 @@ export const PLAYER_CSS = `
   cursor: default;
 }
 
+/* A toggle that is switched on: Master Tempo, the open queue, reversed order. */
+.bcp-btn.bcp-toggle-on,
+.bcp-btn.bcp-toggle-on:hover:not(:disabled) {
+  color: #1da0c3;
+}
+
+.bcp-btn.bcp-control-unavailable,
+.bcp-btn.bcp-control-unavailable:hover {
+  color: #ccc;
+  cursor: default;
+}
+
+.bcp-icon-button {
+  padding: 4px;
+  font-size: 20px;
+}
+
 .bcp-icon {
   display: block;
   width: 1em;
@@ -283,10 +300,10 @@ export const PLAYER_CSS = `
   height: 38px;
   padding: 0;
   font-size: 20px;
-  color: #222;
-  background: #fff;
-  border: 1px solid #d9d9d9;
-  border-radius: 2px;
+  color: #fff;
+  background: #333;
+  border-radius: 4px;
+  transition: background 0.15s;
 }
 
 .bcp-btn-play .bcp-icon {
@@ -295,18 +312,18 @@ export const PLAYER_CSS = `
 }
 
 .bcp-btn-play:hover:not(:disabled) {
-  color: #000;
-  border-color: #999;
+  color: #fff;
+  background: #000;
 }
 
 .bcp-btn-play:disabled {
-  color: #ccc;
+  color: #fff;
+  background: #ccc;
 }
 
 .bcp-nav-btn {
-  padding: 0;
-  font-size: 18px;
-  color: #999;
+  padding: 4px;
+  font-size: 20px;
 }
 
 .bcp-spinner {
@@ -368,20 +385,23 @@ input[type=range].bcp-tempo {
   flex-shrink: 0;
 }
 
+/* Set further off than the bar's other gaps, so the seek bar and the tempo
+   controls don't run into each other. */
 .bcp-side {
   display: flex;
   align-self: center;
   align-items: center;
-  gap: 14px;
+  gap: 8px;
   flex-shrink: 0;
-  margin-left: auto;
+  margin-left: 24px;
 }
 
 .bcp-tempo-area {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
   flex-shrink: 0;
+  margin-right: 8px;
 }
 
 .bcp-tempo-label {
@@ -389,31 +409,34 @@ input[type=range].bcp-tempo {
   font-size: 11px;
   white-space: nowrap;
   flex-shrink: 0;
+  margin-right: 6px;
 }
 
 .bcp-tempo-btn {
-  font-size: 10px;
-  padding: 2px 5px;
-  border: 1px solid #ccc;
-  border-radius: 3px;
-  color: #777;
-  white-space: nowrap;
-}
-
-.bcp-tempo-btn:hover:not(:disabled) {
-  border-color: #999;
-}
-
-.bcp-tempo-btn-active {
-  color: #1da0c3;
-  border-color: #1da0c3;
-}
-
-.bcp-status {
   font-size: 11px;
-  color: #777;
-  text-align: right;
-  max-width: 160px;
+  padding: 4px 5px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Wide enough for "+100.0%", so the slider doesn't move as the value changes. */
+.bcp-tempo-reset-btn {
+  min-width: 52px;
+  margin-left: 4px;
+}
+
+/* Cut short, rather than widening the playlist column, when it is longer than
+   the switch below it; the full text is in its tooltip. Selectable, unlike the
+   switch around it, so an error can be copied. */
+.bcp-status {
+  user-select: text;
+  font-size: 11px;
+  line-height: 17px;
+  color: #999;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  contain: inline-size;
 }
 
 .bcp-status-loading {
@@ -428,12 +451,12 @@ input[type=range].bcp-tempo {
   color: #b7791f;
 }
 
-.bcp-reverse-slot:empty {
-  display: none;
+.bcp-reverse-slot {
+  display: flex;
 }
 
-.bcp-reverse-btn {
-  white-space: nowrap;
+.bcp-reverse-slot:empty {
+  display: none;
 }
 
 .bcp-cart-play-btn {
@@ -478,65 +501,60 @@ input[type=range].bcp-tempo {
   cursor: default;
 }
 
+/* The playlist status above the switch. */
 #bcp-tabs {
   display: flex;
   flex-direction: column;
   justify-content: space-between;
   flex-shrink: 0;
+  min-width: 180px;
   user-select: none;
 }
 
-.bcp-tabs-label {
-  color: #999;
-  font-size: 11px;
-  line-height: 17px;
-}
-
+/* One switch: the playlists sit on a grey track, the active one raised. */
 .bcp-tab-list {
   display: flex;
-  gap: 6px;
+  align-self: flex-start;
   align-items: center;
-  height: 18px;
+  gap: 2px;
+  height: 20px;
+  padding: 2px;
+  border-radius: 5px;
+  background: #ececec;
 }
 
 .bcp-tab {
   background: none;
-  border: 1px solid #ccc;
+  border: none;
   color: #777;
   cursor: pointer;
-  padding: 2px 10px;
-  border-radius: 10px;
+  padding: 0 10px;
+  border-radius: 3px;
   font-size: 11px;
-  line-height: 12px;
+  line-height: 16px;
   font-family: inherit;
-  transition: color 0.15s, border-color 0.15s;
+  white-space: nowrap;
+  transition: color 0.15s, background 0.15s;
 }
 
 .bcp-tab:hover {
   color: #333;
-  border-color: #999;
 }
 
 .bcp-tab.bcp-tab-active {
   color: #1da0c3;
-  border-color: #1da0c3;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
 }
 
 .bcp-tab.bcp-tab-unavailable {
   color: #bbb;
-  border-color: #e2e2e2;
-  border-style: dashed;
   cursor: help;
-}
-
-.bcp-tab.bcp-reverse-btn.bcp-tab-unavailable {
-  cursor: default;
 }
 
 .bcp-tab.bcp-tab-unavailable.bcp-tab-error,
 .bcp-tab.bcp-tab-unavailable.bcp-tab-warn {
   color: #c08050;
-  border-color: #ecd2bd;
 }
 
 .bcp-grid-play-btn {
@@ -657,6 +675,30 @@ input[type=range].bcp-tempo {
   color: #8a6c08;
 }
 
+/* The player's own tooltip, quicker than the browser's (see setupTooltips). */
+#bcp-wrapper > .bcp-tooltip {
+  position: fixed;
+  top: 0;
+  left: 0;
+  max-width: 320px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: #333;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  color: #fff;
+  font-size: 11px;
+  line-height: 1.35;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.1s, visibility 0.1s;
+}
+
+#bcp-wrapper > .bcp-tooltip.bcp-tooltip-visible {
+  opacity: 1;
+  visibility: visible;
+}
+
 .bcp-toast {
   background: #fff;
   border: 1px solid #ddd;
@@ -674,7 +716,9 @@ input[type=range].bcp-tempo {
   transform: translateX(-50%) translateY(calc(-50% + 12px));
   transition: opacity 0.2s ease, transform 0.2s ease;
   white-space: nowrap;
-  z-index: 2147483646;
+  /* The top layer, like the player and the named-cart windows; added last, so
+     it shows above an open window's backdrop. */
+  z-index: 2147483647;
 }
 
 .bcp-toast-visible {
@@ -802,6 +846,33 @@ a.itemName.bcp-playing {
   cursor: default;
 }
 
+.bcp-checkout-selected-btn[hidden] {
+  display: none;
+}
+
+/* Secondary to "Checkout selected" above it, so outlined rather than filled. */
+.bcp-add-selected-button {
+  display: block;
+  margin: 4px 0 0;
+  padding: 5px 10px;
+  background: none;
+  color: #1da0c3;
+  border: 1px solid #1da0c3;
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.bcp-add-selected-button:hover {
+  opacity: 0.85;
+}
+
+.bcp-add-selected-button[hidden] {
+  display: none;
+}
+
 /* Dark mode, switched on in the extension options. It covers the player and its
    toasts only: modals and the controls injected into Bandcamp's page stay light. */
 
@@ -851,16 +922,13 @@ a.itemName.bcp-playing {
 
 #bcp-wrapper.bcp-dark .bcp-btn,
 #bcp-wrapper.bcp-dark .bcp-tempo-label,
-#bcp-wrapper.bcp-dark .bcp-tempo-btn,
-#bcp-wrapper.bcp-dark .bcp-status,
 #bcp-wrapper.bcp-dark .bcp-tab {
   color: #a0a0a0;
 }
 
 #bcp-wrapper.bcp-dark .bcp-queue-num,
 #bcp-wrapper.bcp-dark .bcp-queue-sub,
-#bcp-wrapper.bcp-dark .bcp-nav-btn,
-#bcp-wrapper.bcp-dark .bcp-tabs-label,
+#bcp-wrapper.bcp-dark .bcp-status,
 #bcp-wrapper.bcp-dark .bcp-cart-actions > * + *::before {
   color: #8a8a8a;
 }
@@ -880,19 +948,29 @@ a.itemName.bcp-playing {
   background: #333;
 }
 
+#bcp-wrapper.bcp-dark .bcp-btn.bcp-toggle-on,
+#bcp-wrapper.bcp-dark .bcp-btn.bcp-toggle-on:hover:not(:disabled) {
+  color: #1da0c3;
+}
+
+#bcp-wrapper.bcp-dark .bcp-btn.bcp-control-unavailable,
+#bcp-wrapper.bcp-dark .bcp-btn.bcp-control-unavailable:hover {
+  color: #555;
+}
+
 #bcp-wrapper.bcp-dark .bcp-btn-play {
-  color: #eee;
-  background: #2a2a2a;
-  border-color: #444;
+  color: #1f1f1f;
+  background: #e6e6e6;
 }
 
 #bcp-wrapper.bcp-dark .bcp-btn-play:hover:not(:disabled) {
-  color: #fff;
-  border-color: #777;
+  color: #000;
+  background: #fff;
 }
 
 #bcp-wrapper.bcp-dark .bcp-btn-play:disabled {
-  color: #555;
+  color: #1f1f1f;
+  background: #4a4a4a;
 }
 
 #bcp-wrapper.bcp-dark .bcp-spinner {
@@ -916,31 +994,23 @@ a.itemName.bcp-playing {
   background: #ddd;
 }
 
-#bcp-wrapper.bcp-dark .bcp-tempo-btn,
-#bcp-wrapper.bcp-dark .bcp-tab {
-  border-color: #555;
+#bcp-wrapper.bcp-dark .bcp-tab-list {
+  background: #2e2e2e;
 }
 
-#bcp-wrapper.bcp-dark .bcp-tempo-btn:hover:not(:disabled),
-#bcp-wrapper.bcp-dark .bcp-tab:hover {
-  border-color: #888;
-}
-
-#bcp-wrapper.bcp-dark .bcp-tempo-btn-active,
 #bcp-wrapper.bcp-dark .bcp-tab.bcp-tab-active {
   color: #1da0c3;
-  border-color: #1da0c3;
+  background: #474747;
+  box-shadow: none;
 }
 
 #bcp-wrapper.bcp-dark .bcp-tab.bcp-tab-unavailable {
   color: #666;
-  border-color: #3a3a3a;
 }
 
 #bcp-wrapper.bcp-dark .bcp-tab.bcp-tab-unavailable.bcp-tab-error,
 #bcp-wrapper.bcp-dark .bcp-tab.bcp-tab-unavailable.bcp-tab-warn {
   color: #d79a6a;
-  border-color: #5a4030;
 }
 
 /* The light reds and yellows are too dark to read on the dark background. */
@@ -967,6 +1037,11 @@ a.itemName.bcp-playing {
   color: #1da0c3;
 }
 
+#bcp-wrapper.bcp-dark > .bcp-tooltip {
+  background: #e6e6e6;
+  color: #1f1f1f;
+}
+
 .bcp-toast.bcp-dark {
   background: #262626;
   border-color: #444;
@@ -984,21 +1059,12 @@ a.itemName.bcp-playing {
 }
 
 @media (max-width: 1440px) {
-  .bcp-tempo-label {
-    display: none;
-  }
-
   .bcp-track-info {
     width: 200px;
   }
 }
 
 @media (max-width: 1200px) {
-  .bcp-tempo-reset-btn,
-  .bcp-tempo-range-btn {
-    display: none;
-  }
-
   #bcp-bar {
     flex-wrap: wrap;
     row-gap: 8px;
@@ -1012,13 +1078,35 @@ a.itemName.bcp-playing {
   .bcp-center {
     order: 100;
     flex-basis: 100%;
-    max-width: none;
+  }
+
+  /* On its own row the title already starts level with the play button. */
+  .bcp-progress {
+    padding-top: 0;
+  }
+
+  /* The seek bar is on the row below, so the usual gap is enough. */
+  .bcp-side {
+    margin-left: 0;
+  }
+}
+
+@media (max-width: 900px) {
+  .bcp-tempo-label,
+  .bcp-tempo-reset-btn,
+  .bcp-tempo-range-btn {
+    display: none;
   }
 }
 
 @media (max-width: 720px) {
   .bcp-status {
     display: none;
+  }
+
+  /* Keep the switch on the bottom line without the status above it. */
+  #bcp-tabs {
+    justify-content: flex-end;
   }
 }
 
@@ -1033,7 +1121,7 @@ a.itemName.bcp-playing {
 // named-cart modals, plus the named-cart modal's own rules
 // and the sidecart's "Checkout a cart" button, which shows without a player.
 export const MODAL_CSS = `
-  .bcp-hb{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:999999;display:flex;align-items:center;justify-content:center}
+  .bcp-hb{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:2147483647;display:flex;align-items:center;justify-content:center}
   .bcp-hm{background:#fff;color:#1a1a1a;border-radius:8px;padding:20px 24px;max-width:520px;width:90%;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,.3);font-family:inherit;font-size:14px}
   .bcp-hm h3{margin:0 0 14px;font-size:15px;font-weight:600}
   .bcp-hl{list-style:none;margin:0 0 16px;padding:0;overflow-y:auto;flex:1 1 auto}
@@ -1076,10 +1164,8 @@ export const MODAL_CSS = `
     opacity: 0.85;
   }
 
-  .bcp-checkout-cart-btn:disabled {
-    border-color: #ccc;
-    color: #999;
-    cursor: default;
+  .bcp-checkout-cart-btn[hidden] {
+    display: none;
   }
 `;
 

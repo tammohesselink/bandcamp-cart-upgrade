@@ -105,8 +105,10 @@ export function injectRestoreCartButton(snapshotCount: number): HTMLButtonElemen
 // Inserted directly below the "Checkout selected" partial-checkout button when
 // present (both use insertAdjacentElement('afterend') on the same anchor chain,
 // and this one runs after, so it lands below); falls back to the sidecart
-// anchor chain so it still appears when the cart is empty.
-export function injectCheckoutCartButton(namedCartCount: number): HTMLButtonElement | null {
+// anchor chain so it still appears when the cart is empty. Hidden while named
+// carts are off or there are none to check out, to keep the sidecart
+// uncluttered.
+export function injectCheckoutCartButton(namedCartCount: number, enabled: boolean): HTMLButtonElement | null {
   const anchor = document.querySelector<HTMLElement>('.bcp-checkout-selected-btn')
     ?? document.getElementById('sidecart')
     ?? document.querySelector('#sidecartReveal')
@@ -116,14 +118,14 @@ export function injectCheckoutCartButton(namedCartCount: number): HTMLButtonElem
   const existing = document.querySelector<HTMLButtonElement>('.bcp-checkout-cart-btn');
   if (existing) {
     existing.textContent = `Checkout a cart (${namedCartCount})`;
-    existing.disabled = namedCartCount === 0;
+    existing.hidden = !enabled || namedCartCount === 0;
     return existing;
   }
 
   const button = document.createElement('button');
   button.className = 'bcp-checkout-cart-btn';
   button.textContent = `Checkout a cart (${namedCartCount})`;
-  button.disabled = namedCartCount === 0;
+  button.hidden = !enabled || namedCartCount === 0;
   anchor.insertAdjacentElement('afterend', button);
   return button;
 }
@@ -143,7 +145,7 @@ export function injectRemoveAlreadyOwnedButton(): HTMLButtonElement | null {
 
   const button = document.createElement('button');
   button.className = 'buttonLink bcp-remove-owned-btn';
-  button.textContent = 'Remove already purchased items from cart';
+  button.textContent = 'Remove purchased items from cart';
   anchor.insertAdjacentElement('afterend', button);
   return button;
 }

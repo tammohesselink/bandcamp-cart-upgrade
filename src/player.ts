@@ -106,11 +106,13 @@ export class Player {
 
   private namedCarts: NamedCart[] = [];
   private namedCartMembership = new Map<string, string[]>();
+  // Opens the named-cart picker for a cart item. Null while named carts are off
+  // (the option, or incognito), which hides their controls. See setOnTagTrack.
+  private onTagTrack: ((track: PlaylistTrack, cartItemUrl: string) => void) | null = null;
 
   onCartAdd?: (track: PlaylistTrack, addType: CartAddType) => Promise<boolean | void>;
   onCartRemove?: (track: PlaylistTrack, cartItemUrl: string) => Promise<void>;
   onCheckoutSelected?: (selectedRawUrls: string[]) => Promise<void>;
-  onTagTrack?: (track: PlaylistTrack, cartItemUrl: string) => void;
   onPlaybackStart?: () => void;
   onPlayStateChange?: (playing: boolean) => void;
   onCurrentPageTrackChange?: (pageUrl: string) => void;
@@ -132,7 +134,6 @@ export class Player {
 
     this.collapseBtn = btn('Hide player ▼', '');
     this.collapseBtn.id = 'bcp-collapse-btn';
-    this.collapseBtn.title = 'Hide player';
     this.collapseBtn.addEventListener('click', () => this.togglePlayer());
 
     this.queueEl = this.buildQueueEl();
@@ -151,6 +152,7 @@ export class Player {
     }).observe(this.wrapper);
 
     this.setupMediaSession();
+    this.setupTooltips();
 
     chrome.storage.local.get(['tempoRangeIndex', 'preservesPitch', 'showDiscographyButton', 'reversedPlaylists'], (result) => {
       if (typeof result['tempoRangeIndex'] === 'number') {
@@ -273,9 +275,7 @@ export class Player {
     // back through onNativePlay and restarts the bottom player. jumpTo() calls
     // loadTrack() separately with the correct silent value when it needs to play.
     this.loadTrack(state.lastIndex, true);
-    if (state.statusMsg) {
-      this.setStatus(state.statusMsg, state.statusKind);
-    }
+    this.setStatus(state.statusMsg, state.statusKind);
   }
 
   jumpTo(id: PlaylistId, index: number, silent = false) {
@@ -308,6 +308,9 @@ export class Player {
 
   setStatus(msg: string, kind: StatusKind = 'info') {
     this.statusEl.textContent = msg;
+    // The status line is cut short to fit above the playlist switch. Only the
+    // tooltip: screen readers already read its text.
+    this.statusEl.dataset.tooltip = msg;
     this.statusEl.className = `bcp-status bcp-status-${kind}`;
     const state = this.active();
     if (state) {
@@ -328,12 +331,7 @@ export class Player {
 
   setCartUrls(urls: Set<string>) {
     this.cartUrls = urls;
-    this.updateQueueEl();
-    const state = this.active();
-    if (state) {
-      const track = state.tracks[state.lastIndex];
-      if (track) this.updateCartActions(track);
-    }
+    this.updateCartViews();
   }
 
   removeCartUrl(url: string) {
@@ -347,12 +345,22 @@ export class Player {
   setNamedCarts(carts: NamedCart[]) {
     this.namedCarts = carts;
     this.namedCartMembership = namedCartMembership(carts);
+    this.updateCartViews();
+  }
+
+  // Turns named carts on with the handler that opens their picker, or off with
+  // null, and redraws the controls that depend on it.
+  setOnTagTrack(handler: ((track: PlaylistTrack, cartItemUrl: string) => void) | null) {
+    this.onTagTrack = handler;
+    this.updateCartViews();
+  }
+
+  // Redraws what shows a track's cart state: the queue rows and the bar's links.
+  private updateCartViews() {
     this.updateQueueEl();
     const state = this.active();
-    if (state) {
-      const track = state.tracks[state.lastIndex];
-      if (track) this.updateCartActions(track);
-    }
+    const track = state?.tracks[state.lastIndex];
+    if (track) this.updateCartActions(track);
   }
 
   addCartUrl(url: string) {
@@ -567,13 +575,13 @@ export class Player {
         tab.addEventListener('click', () => this.selectPlaylist(id));
       } else if (unavailable?.onLoad) {
         tab.textContent = unavailable.label;
-        tab.title = unavailable.reason;
+        setTooltip(tab, unavailable.reason);
         tab.addEventListener('click', unavailable.onLoad);
       } else if (unavailable) {
         // Not `disabled`: disabled buttons ignore clicks, and the click is how
         // the reason gets shown on touch devices.
         tab.textContent = unavailable.label;
-        tab.title = unavailable.reason;
+        setTooltip(tab, unavailable.reason);
         tab.classList.add('bcp-tab-unavailable', `bcp-tab-${unavailable.kind}`);
         tab.setAttribute('aria-disabled', 'true');
         tab.addEventListener('click', () => this.showToast(unavailable.reason, unavailable.kind));
@@ -583,25 +591,26 @@ export class Player {
 
     const state = this.active();
     if (state && state.tracks.length > 0) {
-      const reverseBtn = btn('⇅ Reverse playlist order', 'bcp-tab bcp-reverse-btn');
+      const reverseBtn = btn('', 'bcp-btn bcp-icon-button bcp-reverse-btn');
+      reverseBtn.append(icon('reverse'));
+      reverseBtn.setAttribute('aria-label', 'Reverse playlist order');
       reverseBtn.setAttribute('aria-pressed', String(state.reversed));
-      if (state.reversed) reverseBtn.classList.add('bcp-tab-active');
+      if (state.reversed) reverseBtn.classList.add('bcp-toggle-on');
       if (releaseBlocks(state.tracks).length > 1) {
-        reverseBtn.title = 'Play releases last to first (tracks within a release keep their order)';
+        setTooltip(reverseBtn, 'Reverse playlist order: play releases last to first (tracks within a release keep their order)');
         reverseBtn.addEventListener('click', () => this.toggleReversed());
       } else {
-        reverseBtn.classList.add('bcp-tab-unavailable');
+        reverseBtn.classList.add('bcp-control-unavailable');
         reverseBtn.setAttribute('aria-disabled', 'true');
-        reverseBtn.title = 'Only one release';
+        setTooltip(reverseBtn, 'Reverse playlist order: only one release');
       }
       this.reverseSlot.replaceChildren(reverseBtn);
     } else {
       this.reverseSlot.replaceChildren();
     }
 
-    const label = el('div', 'bcp-tabs-label');
-    label.textContent = 'Playlist type:';
-    this.playlistTabsEl.replaceChildren(label, tabs);
+    // The playlist's status sits above the switch, where it describes it.
+    this.playlistTabsEl.replaceChildren(this.statusEl, tabs);
   }
 
   private buildBarEl(): HTMLElement {
@@ -624,7 +633,6 @@ export class Player {
     trackInfo.append(this.releaseEl, this.artistEl, this.cartActionsEl);
 
     this.playPauseBtn = btn('', 'bcp-btn bcp-btn-play');
-    this.playPauseBtn.title = 'Play / Pause';
     this.playPauseBtn.addEventListener('click', () => this.togglePlay());
     this.setPlayButton('play');
 
@@ -661,23 +669,23 @@ export class Player {
     });
 
     this.prevBtn = btn('', 'bcp-btn bcp-nav-btn');
-    this.prevBtn.title = 'Previous';
+    this.prevBtn.setAttribute('aria-label', 'Previous');
     this.prevBtn.append(icon('previous'));
     this.prevBtn.addEventListener('click', () => this.prev());
 
     this.nextBtn = btn('', 'bcp-btn bcp-nav-btn');
-    this.nextBtn.title = 'Next';
+    this.nextBtn.setAttribute('aria-label', 'Next');
     this.nextBtn.append(icon('next'));
     this.nextBtn.addEventListener('click', () => this.next());
 
-    const controls = el('div', 'bcp-controls');
-    controls.append(this.prevBtn, this.nextBtn);
+    const transport = el('div', 'bcp-transport');
+    transport.append(this.prevBtn, this.playPauseBtn, this.nextBtn);
 
     const progress = el('div', 'bcp-progress');
-    progress.append(trackRow, this.seekBar, controls);
+    progress.append(trackRow, this.seekBar);
 
     const center = el('div', 'bcp-center');
-    center.append(this.playPauseBtn, progress);
+    center.append(transport, progress);
 
     this.tempoSlider = el('input', 'bcp-range bcp-tempo') as HTMLInputElement;
     this.tempoSlider.type = 'range';
@@ -689,15 +697,15 @@ export class Player {
     });
 
     this.tempoResetBtn = btn('+0.0%', 'bcp-btn bcp-tempo-btn bcp-tempo-reset-btn');
-    this.tempoResetBtn.title = 'Reset tempo';
+    setTooltip(this.tempoResetBtn, 'Reset tempo');
     this.tempoResetBtn.addEventListener('click', () => {
       this.playbackRate = 1;
       this.audio.playbackRate = 1;
       this.updateTempoUI();
     });
 
-    this.tempoRangeBtn = btn('(±10)', 'bcp-btn bcp-tempo-btn bcp-tempo-range-btn');
-    this.tempoRangeBtn.title = 'Cycle tempo range';
+    this.tempoRangeBtn = btn('±10', 'bcp-btn bcp-tempo-btn bcp-tempo-range-btn');
+    setTooltip(this.tempoRangeBtn, 'Cycle tempo range');
     this.tempoRangeBtn.addEventListener('click', () => {
       this.tempoRangeIndex = (this.tempoRangeIndex + 1) % TEMPO_RANGES.length;
       const range = TEMPO_RANGES[this.tempoRangeIndex]!;
@@ -708,7 +716,7 @@ export class Player {
     });
 
     this.tempoMTBtn = btn('MT', 'bcp-btn bcp-tempo-btn');
-    this.tempoMTBtn.title = 'Master Tempo (pitch lock)';
+    setTooltip(this.tempoMTBtn, 'Master Tempo (pitch lock)');
     this.tempoMTBtn.addEventListener('click', () => {
       this.preservesPitch = !this.preservesPitch;
       this.audio.preservesPitch = this.preservesPitch;
@@ -717,15 +725,19 @@ export class Player {
     });
 
     const tempoLabel = el('span', 'bcp-tempo-label');
-    tempoLabel.textContent = 'Tempo adjust';
+    tempoLabel.textContent = 'Tempo';
     const tempoArea = el('div', 'bcp-tempo-area');
     tempoArea.append(tempoLabel, this.tempoSlider, this.tempoResetBtn, this.tempoRangeBtn, this.tempoMTBtn);
 
-    this.queueToggleBtn = btn('☰', 'bcp-btn bcp-queue-toggle');
-    this.queueToggleBtn.title = 'Toggle queue';
+    this.queueToggleBtn = btn('', 'bcp-btn bcp-icon-button bcp-queue-toggle');
+    this.queueToggleBtn.append(icon('queue'));
+    setTooltip(this.queueToggleBtn, 'Toggle queue');
+    this.queueToggleBtn.setAttribute('aria-label', 'Toggle queue');
+    this.queueToggleBtn.setAttribute('aria-pressed', 'false');
     this.queueToggleBtn.addEventListener('click', () => this.toggleQueue());
 
     this.statusEl = el('div', 'bcp-status');
+    this.statusEl.dataset.tooltipWhen = 'cut-off';
 
     this.playlistTabsEl = el('div');
     this.playlistTabsEl.id = 'bcp-tabs';
@@ -733,7 +745,7 @@ export class Player {
     this.reverseSlot = el('div', 'bcp-reverse-slot');
 
     const side = el('div', 'bcp-side');
-    side.append(this.statusEl, tempoArea, this.queueToggleBtn, this.reverseSlot);
+    side.append(tempoArea, this.queueToggleBtn, this.reverseSlot);
 
     bar.append(this.artworkEl, trackInfo, this.playlistTabsEl, center, side);
 
@@ -769,23 +781,25 @@ export class Player {
 
       item.append(num, text);
 
-      if (this.isInCart(track)) {
+      const inCart = this.isInCart(track);
+      if (inCart) {
         const marker = el('div', 'bcp-queue-cart-marker');
         marker.textContent = '✓';
-        marker.title = 'In cart';
+        setTooltip(marker, 'In cart');
         item.append(marker);
       }
 
-      if (this.activeId === 'cart' && this.onTagTrack) {
+      const onTagTrack = this.onTagTrack;
+      if (onTagTrack && inCart) {
         const tagIds = this.namedCartIdsFor(track);
         const tagBtn = btn('🏷', 'bcp-queue-tag-btn');
-        tagBtn.title = tagIds.length > 0
+        setTooltip(tagBtn, tagIds.length > 0
           ? `In: ${tagIds.map((id) => this.namedCarts.find((c) => c.id === id)?.name).filter(Boolean).join(', ')}`
-          : 'Add to a named cart';
+          : 'Add to a named cart');
         if (tagIds.length > 0) tagBtn.classList.add('bcp-queue-tag-btn-active');
         tagBtn.addEventListener('click', (e) => {
           e.stopPropagation();
-          this.onTagTrack?.(track, this.cartItemKeyFor(track));
+          onTagTrack(track, this.cartItemKeyFor(track));
         });
         item.append(tagBtn);
       }
@@ -1129,6 +1143,75 @@ export class Player {
     });
   }
 
+  // The browser's own title tooltips take about a second to show, and a page
+  // can't shorten that, so the player's controls carry their text in
+  // data-tooltip instead (see setTooltip) and the player shows it after a short
+  // pause.
+  private setupTooltips() {
+    const tooltip = el('div', 'bcp-tooltip');
+    tooltip.setAttribute('aria-hidden', 'true');
+    this.wrapper.appendChild(tooltip);
+
+    let target: HTMLElement | null = null;
+    let showTimer: ReturnType<typeof setTimeout> | undefined;
+    // Moving straight from one tooltip to the next shows it without the pause.
+    let lastHiddenAt = 0;
+    const visible = () => tooltip.classList.contains('bcp-tooltip-visible');
+
+    const hide = () => {
+      clearTimeout(showTimer);
+      if (visible()) lastHiddenAt = Date.now();
+      tooltip.classList.remove('bcp-tooltip-visible');
+    };
+
+    const show = () => {
+      const text = target?.isConnected ? target.dataset.tooltip : undefined;
+      if (!target || !text) {
+        hide();
+        return;
+      }
+      // Only when it changed: replacing the text is itself a mutation the
+      // observer below would answer.
+      if (tooltip.textContent !== text) tooltip.textContent = text;
+      // Measured at the left edge, where nothing squeezes its width.
+      tooltip.style.left = '0px';
+      // Above the element, or below it when there's no room, kept on screen.
+      const anchor = target.getBoundingClientRect();
+      const { width, height } = tooltip.getBoundingClientRect();
+      const left = Math.min(Math.max(anchor.left + anchor.width / 2 - width / 2, 8), window.innerWidth - width - 8);
+      const top = anchor.top - height - 6 >= 8 ? anchor.top - height - 6 : anchor.bottom + 6;
+      tooltip.style.left = `${left}px`;
+      tooltip.style.top = `${top}px`;
+      tooltip.classList.add('bcp-tooltip-visible');
+    };
+
+    this.wrapper.addEventListener('mouseover', (e) => {
+      const next = (e.target as Element).closest<HTMLElement>('[data-tooltip]');
+      if (next === target) return;
+      hide();
+      target = next && this.wrapper.contains(next) ? next : null;
+      if (!target) return;
+      // Text that only needs a tooltip when it's cut short, like the status line.
+      if (target.dataset.tooltipWhen === 'cut-off' && target.scrollWidth <= target.clientWidth) return;
+      showTimer = setTimeout(show, Date.now() - lastHiddenAt < 300 ? 0 : 250);
+    });
+    this.wrapper.addEventListener('mouseleave', () => {
+      hide();
+      target = null;
+    });
+    // A click acts on the control, so its tooltip stays away until the pointer
+    // moves on to another one.
+    this.wrapper.addEventListener('mousedown', hide);
+    // Follows the hovered element while its tooltip shows: hides it when the
+    // element is rebuilt or removed (the tabs on every loading tick, the queue),
+    // and shows its new text when that changes.
+    new MutationObserver(() => {
+      if (!target || !visible()) return;
+      if (!target.isConnected || !target.dataset.tooltip) hide();
+      else if (target.dataset.tooltip !== tooltip.textContent) show();
+    }).observe(this.wrapper, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-tooltip'] });
+  }
+
   private setupMediaSession() {
     if (!('mediaSession' in navigator)) return;
     navigator.mediaSession.setActionHandler('play', () => this.play());
@@ -1236,6 +1319,8 @@ export class Player {
   private toggleQueue() {
     this.queueVisible = !this.queueVisible;
     this.queueEl.classList.toggle('bcp-visible', this.queueVisible);
+    this.queueToggleBtn.classList.toggle('bcp-toggle-on', this.queueVisible);
+    this.queueToggleBtn.setAttribute('aria-pressed', String(this.queueVisible));
     if (this.queueVisible) this.scrollQueueToActive();
   }
 
@@ -1243,7 +1328,6 @@ export class Player {
     this.playerVisible = !this.playerVisible;
     this.wrapper.classList.toggle('bcp-collapsed', !this.playerVisible);
     this.collapseBtn.textContent = this.playerVisible ? 'Hide player ▼' : 'Show player ▲';
-    this.collapseBtn.title = this.playerVisible ? 'Hide player' : 'Show player';
     if (this.playerVisible && this.queueVisible) this.scrollQueueToActive();
   }
 
@@ -1281,9 +1365,14 @@ export class Player {
         removeBtn.disabled = false;
       });
 
-      const badge = el('span', 'bcp-in-cart-badge');
-      badge.textContent = inCartAsAlbum ? '✓ In cart (full album)' : '✓ In cart';
-      this.cartActionsEl.append(badge, removeBtn);
+      // Remove already says it's in the cart, so the badge only shows when
+      // "Add to named cart" doesn't (incognito), for lack of room for both.
+      if (!this.onTagTrack) {
+        const badge = el('span', 'bcp-in-cart-badge');
+        badge.textContent = inCartAsAlbum ? '✓ In cart (full album)' : '✓ In cart';
+        this.cartActionsEl.append(badge);
+      }
+      this.cartActionsEl.append(removeBtn);
     } else {
       // Always show both buttons so the layout is the same for every track.
       // A single-track release is added through "+ Track" (the track is the
@@ -1298,25 +1387,21 @@ export class Player {
 
       const addTrackBtn = btn('+ Track', 'bcp-cart-action-btn');
       if (trackAddType !== null && track.purchasable) {
-        addTrackBtn.title = 'Add this track to cart';
         addTrackBtn.addEventListener('click', async () => {
           addTrackBtn.disabled = true;
           const ok = await this.onCartAdd?.(track, trackAddType);
           if (ok === false) {
             addTrackBtn.classList.add('bcp-disabled');
-            addTrackBtn.title = 'Only full release for sale';
           } else {
             addTrackBtn.disabled = false;
           }
         });
       } else {
         addTrackBtn.classList.add('bcp-disabled');
-        addTrackBtn.title = 'Only full release for sale';
       }
 
       const addReleaseBtn = btn('+ Release', 'bcp-cart-action-btn');
       if (canAddRelease) {
-        addReleaseBtn.title = 'Add the full release to cart';
         addReleaseBtn.addEventListener('click', async () => {
           addReleaseBtn.disabled = true;
           await this.onCartAdd?.(track, isAlbum ? 'release' : 'album');
@@ -1324,27 +1409,28 @@ export class Player {
         });
       } else {
         addReleaseBtn.classList.add('bcp-disabled');
-        addReleaseBtn.title = 'Single-track release: use + Track';
       }
 
       this.cartActionsEl.append(addTrackBtn, addReleaseBtn);
     }
 
-    // Named-cart tagging only makes sense for items in the real Bandcamp cart.
-    if (this.activeId === 'cart' && this.onTagTrack) {
+    // Named-cart tagging only makes sense for items in the real Bandcamp cart,
+    // on whichever tab they're playing from.
+    if (this.onTagTrack && this.isInCart(track)) {
       this.cartActionsEl.appendChild(this.buildTagButton(track));
     }
   }
 
   private buildTagButton(track: PlaylistTrack): HTMLButtonElement {
     const ids = this.namedCartIdsFor(track);
-    const tagBtn = btn(ids.length > 0 ? `🏷 ${ids.length}` : '🏷', 'bcp-cart-action-btn bcp-tag-btn');
+    const tagBtn = btn(
+      ids.length > 0 ? `In ${ids.length} named cart${ids.length !== 1 ? 's' : ''}` : 'Add to named cart',
+      'bcp-cart-action-btn bcp-tag-btn'
+    );
     if (ids.length > 0) {
       const names = ids.map((id) => this.namedCarts.find((c) => c.id === id)?.name).filter(Boolean);
-      tagBtn.title = `In: ${names.join(', ')}`;
+      setTooltip(tagBtn, `In: ${names.join(', ')}`);
       tagBtn.classList.add('bcp-tag-btn-active');
-    } else {
-      tagBtn.title = 'Add to a named cart';
     }
     tagBtn.addEventListener('click', () => this.onTagTrack?.(track, this.cartItemKeyFor(track)));
     return tagBtn;
@@ -1398,8 +1484,8 @@ export class Player {
     const pct = (this.playbackRate - 1) * 100;
     const sign = pct >= 0 ? '+' : '';
     this.tempoResetBtn.textContent = `${sign}${pct.toFixed(1)}%`;
-    this.tempoRangeBtn.textContent = `(${range.label})`;
-    this.tempoMTBtn.classList.toggle('bcp-tempo-btn-active', this.preservesPitch);
+    this.tempoRangeBtn.textContent = range.label;
+    this.tempoMTBtn.classList.toggle('bcp-toggle-on', this.preservesPitch);
   }
 
   private setSeekPercent(percent: number) {
@@ -1486,7 +1572,16 @@ const ICON_PATHS = {
   pause: 'M6 5h4v14H6zm8 0h4v14h-4z',
   previous: 'M6 6h2v12H6zm3.5 6 8.5 6V6z',
   next: 'M16 6h2v12h-2zM6 18l8.5-6L6 6z',
+  queue: 'M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z',
+  reverse: 'M16 17.01V10h-2v7.01h-3L15 21l4-3.99h-3zM9 3 5 6.99h3V14h2V6.99h3L9 3z',
 } as const;
+
+// Gives a player control its tooltip (see setupTooltips), and screen readers the
+// same text as its description.
+function setTooltip(element: HTMLElement, text: string): void {
+  element.dataset.tooltip = text;
+  element.setAttribute('aria-description', text);
+}
 
 function icon(name: keyof typeof ICON_PATHS): SVGSVGElement {
   const ns = 'http://www.w3.org/2000/svg';

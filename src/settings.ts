@@ -3,6 +3,7 @@ export const SETTINGS_KEY = 'bcp_settings_v1';
 export interface BcpSettings {
   showCartHistoryBtn: boolean;
   darkMode: boolean;
+  namedCartsEnabled: boolean;
   // Reveals the advanced options in the popup. Hiding them does not change their values.
   showAdvanced: boolean;
   debugLogging: boolean;
@@ -11,6 +12,7 @@ export interface BcpSettings {
 export const DEFAULT_SETTINGS: BcpSettings = {
   showCartHistoryBtn: true,
   darkMode: false,
+  namedCartsEnabled: true,
   showAdvanced: false,
   debugLogging: false,
 };

@@ -4,7 +4,8 @@ import {
   createNamedCart,
   renameNamedCart,
   deleteNamedCart,
-  toggleItemInNamedCart,
+  countItemsInNamedCart,
+  setItemsInNamedCart,
   namedCartMembership,
   partitionByCart,
 } from '../src/named-carts';
@@ -101,38 +102,46 @@ describe('deleteNamedCart', () => {
   });
 });
 
-// --- toggleItemInNamedCart --------------------------------------------------------
+// --- countItemsInNamedCart / setItemsInNamedCart ----------------------------
 
-describe('toggleItemInNamedCart', () => {
-  it('adds the item when the cart does not already contain it', () => {
-    const existing = [namedCart('1', 'Cart')];
-    const result = toggleItemInNamedCart(existing, '1', item('a'));
-    expect(result[0]!.items).toHaveLength(1);
-    expect(result[0]!.items[0]!.url).toContain('a');
+describe('countItemsInNamedCart', () => {
+  it('counts the given items the cart already holds, ignoring a trailing slash', () => {
+    const cart = namedCart('1', 'Set', [item('a'), item('b')]);
+    const b = { ...item('b'), url: `${item('b').url}/` };
+    expect(countItemsInNamedCart(cart, [item('a'), b, item('c')])).toBe(2);
+  });
+});
+
+describe('setItemsInNamedCart', () => {
+  it('adds only the items the cart does not hold yet, after the existing ones', () => {
+    const carts = [namedCart('1', 'Set', [item('a')])];
+    const result = setItemsInNamedCart(carts, '1', [item('a'), item('b'), item('c')], true);
+    expect(result[0]!.items.map((i) => i.url)).toEqual([item('a').url, item('b').url, item('c').url]);
   });
 
-  it('removes the item when the cart already contains it', () => {
-    const existing = [namedCart('1', 'Cart', [item('a')])];
-    const result = toggleItemInNamedCart(existing, '1', item('a'));
-    expect(result[0]!.items).toHaveLength(0);
+  it('removes all the given items and keeps the rest', () => {
+    const carts = [namedCart('1', 'Set', [item('a'), item('b'), item('c')])];
+    const result = setItemsInNamedCart(carts, '1', [item('a'), item('c'), item('d')], false);
+    expect(result[0]!.items.map((i) => i.url)).toEqual([item('b').url]);
   });
 
-  it('normalises URLs when checking membership (case and trailing slash)', () => {
-    const existing = [namedCart('1', 'Cart', [{ url: 'https://a.bandcamp.com/album/FOO/', title: 'Foo' }])];
-    const result = toggleItemInNamedCart(existing, '1', { url: 'https://a.bandcamp.com/album/foo', title: 'Foo' });
-    expect(result[0]!.items).toHaveLength(0);
+  it('leaves other carts alone', () => {
+    const other = namedCart('2', 'Other', [item('x')]);
+    const result = setItemsInNamedCart([namedCart('1', 'Set'), other], '1', [item('a')], true);
+    expect(result[1]).toBe(other);
   });
 
-  it('leaves other carts untouched', () => {
-    const existing = [namedCart('1', 'A'), namedCart('2', 'B')];
-    const result = toggleItemInNamedCart(existing, '1', item('x'));
-    expect(result[1]!.items).toHaveLength(0);
+  it('matches items regardless of case and a trailing slash', () => {
+    const carts = [namedCart('1', 'Set', [{ url: 'https://a.bandcamp.com/album/FOO/', title: 'Foo' }])];
+    const foo = { url: 'https://a.bandcamp.com/album/foo', title: 'Foo' };
+    expect(setItemsInNamedCart(carts, '1', [foo], true)[0]!.items).toHaveLength(1);
+    expect(setItemsInNamedCart(carts, '1', [foo], false)[0]!.items).toHaveLength(0);
   });
 
-  it('does not mutate the input cart list or its items', () => {
-    const existing = [namedCart('1', 'Cart')];
-    toggleItemInNamedCart(existing, '1', item('a'));
-    expect(existing[0]!.items).toHaveLength(0);
+  it('does not change the cart list it was given', () => {
+    const carts = [namedCart('1', 'Set')];
+    setItemsInNamedCart(carts, '1', [item('a')], true);
+    expect(carts[0]!.items).toHaveLength(0);
   });
 });
 

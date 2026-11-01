@@ -18,16 +18,24 @@ export function deleteNamedCart(carts: NamedCart[], id: string): NamedCart[] {
   return carts.filter((c) => c.id !== id);
 }
 
-// Adds the item if the cart doesn't already contain it (by normalised URL), removes it otherwise.
-export function toggleItemInNamedCart(carts: NamedCart[], id: string, item: SavedCartItem): NamedCart[] {
+// How many of `items` the cart already contains, by normalised URL.
+export function countItemsInNamedCart(cart: NamedCart, items: SavedCartItem[]): number {
+  const held = new Set(cart.items.map((i) => normalizeUrl(i.url)));
+  return items.filter((i) => held.has(normalizeUrl(i.url))).length;
+}
+
+// Puts every one of `items` into the cart, skipping those it already contains,
+// or takes them all out: checking a whole selection in or out at once.
+export function setItemsInNamedCart(carts: NamedCart[], id: string, items: SavedCartItem[], include: boolean): NamedCart[] {
   return carts.map((c) => {
     if (c.id !== id) return c;
-    const normalized = normalizeUrl(item.url);
-    const has = c.items.some((i) => normalizeUrl(i.url) === normalized);
-    const items = has
-      ? c.items.filter((i) => normalizeUrl(i.url) !== normalized)
-      : [...c.items, item];
-    return { ...c, items };
+    const held = new Set(c.items.map((i) => normalizeUrl(i.url)));
+    if (include) {
+      const added = items.filter((i) => !held.has(normalizeUrl(i.url)));
+      return { ...c, items: [...c.items, ...added] };
+    }
+    const removed = new Set(items.map((i) => normalizeUrl(i.url)));
+    return { ...c, items: c.items.filter((i) => !removed.has(normalizeUrl(i.url))) };
   });
 }
 
