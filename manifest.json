@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Bandcamp Cart Upgrade",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Quality of life improvements to the bandcamp cart",
   "action": {
     "default_popup": "popup.html",
