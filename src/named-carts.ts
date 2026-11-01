@@ -31,6 +31,27 @@ export function toggleItemInNamedCart(carts: NamedCart[], id: string, item: Save
   });
 }
 
+// How many of `items` the cart already contains, by normalised URL.
+export function countItemsInNamedCart(cart: NamedCart, items: SavedCartItem[]): number {
+  const held = new Set(cart.items.map((i) => normalizeUrl(i.url)));
+  return items.filter((i) => held.has(normalizeUrl(i.url))).length;
+}
+
+// Puts every one of `items` into the cart, skipping those it already contains,
+// or takes them all out: checking a whole selection in or out at once.
+export function setItemsInNamedCart(carts: NamedCart[], id: string, items: SavedCartItem[], include: boolean): NamedCart[] {
+  return carts.map((c) => {
+    if (c.id !== id) return c;
+    const held = new Set(c.items.map((i) => normalizeUrl(i.url)));
+    if (include) {
+      const added = items.filter((i) => !held.has(normalizeUrl(i.url)));
+      return { ...c, items: [...c.items, ...added] };
+    }
+    const removed = new Set(items.map((i) => normalizeUrl(i.url)));
+    return { ...c, items: c.items.filter((i) => !removed.has(normalizeUrl(i.url))) };
+  });
+}
+
 // Maps a normalised item URL to the ids of every named cart containing it.
 export function namedCartMembership(carts: NamedCart[]): Map<string, string[]> {
   const map = new Map<string, string[]>();

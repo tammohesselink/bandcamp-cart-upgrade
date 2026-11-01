@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { SETTINGS_KEY, saveSetting } from '../src/settings';
+import { SETTINGS_KEY, saveSetting, withDefaults } from '../src/settings';
 
 let stored: Record<string, unknown>;
 let failReads: boolean;
@@ -23,6 +23,13 @@ beforeEach(() => {
       },
     },
   };
+});
+
+describe('withDefaults', () => {
+  it('turns named carts on unless they were switched off', () => {
+    expect(withDefaults(undefined).namedCartsEnabled).toBe(true);
+    expect(withDefaults({ namedCartsEnabled: false }).namedCartsEnabled).toBe(false);
+  });
 });
 
 describe('saveSetting', () => {

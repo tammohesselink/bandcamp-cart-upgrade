@@ -102,12 +102,15 @@ export function injectRestoreCartButton(snapshotCount: number): HTMLButtonElemen
   return button;
 }
 
-// Inserted directly below the "Checkout selected" partial-checkout button when
-// present (both use insertAdjacentElement('afterend') on the same anchor chain,
-// and this one runs after, so it lands below); falls back to the sidecart
-// anchor chain so it still appears when the cart is empty.
+// Inserted directly below the partial-checkout buttons ("Checkout selected"
+// and the "Add selected to named cart" below it) when present (they use
+// insertAdjacentElement('afterend') on the same anchor chain, and this one runs
+// after, so it lands below); falls back to the sidecart anchor chain so it
+// still appears when the cart is empty. Hidden until there is a named cart to
+// check out, to keep the sidecart uncluttered.
 export function injectCheckoutCartButton(namedCartCount: number): HTMLButtonElement | null {
-  const anchor = document.querySelector<HTMLElement>('.bcp-checkout-selected-btn')
+  const anchor = document.querySelector<HTMLElement>('.bcp-add-selected-btn')
+    ?? document.querySelector<HTMLElement>('.bcp-checkout-selected-btn')
     ?? document.getElementById('sidecart')
     ?? document.querySelector('#sidecartReveal')
     ?? document.getElementById('sidecartBody');
@@ -116,14 +119,14 @@ export function injectCheckoutCartButton(namedCartCount: number): HTMLButtonElem
   const existing = document.querySelector<HTMLButtonElement>('.bcp-checkout-cart-btn');
   if (existing) {
     existing.textContent = `Checkout a cart (${namedCartCount})`;
-    existing.disabled = namedCartCount === 0;
+    existing.hidden = namedCartCount === 0;
     return existing;
   }
 
   const button = document.createElement('button');
   button.className = 'bcp-checkout-cart-btn';
   button.textContent = `Checkout a cart (${namedCartCount})`;
-  button.disabled = namedCartCount === 0;
+  button.hidden = namedCartCount === 0;
   anchor.insertAdjacentElement('afterend', button);
   return button;
 }

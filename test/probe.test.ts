@@ -448,9 +448,9 @@ describe('injectCheckoutCartButton — falls back to the sidecart anchor chain',
     expect(sidecart.nextElementSibling).toBe(btn);
   });
 
-  it('is disabled when there are no named carts', () => {
+  it('is hidden when there are no named carts', () => {
     const btn = injectCheckoutCartButton(0);
-    expect(btn?.disabled).toBe(true);
+    expect(btn?.hidden).toBe(true);
   });
 
   it('does not double-inject', () => {
@@ -463,7 +463,7 @@ describe('injectCheckoutCartButton — falls back to the sidecart anchor chain',
     injectCheckoutCartButton(1);
     const btn = injectCheckoutCartButton(3);
     expect(btn?.textContent).toContain('3');
-    expect(btn?.disabled).toBe(false);
+    expect(btn?.hidden).toBe(false);
   });
 });
 
@@ -479,6 +479,16 @@ describe('injectCheckoutCartButton — inserted after an existing checkout-selec
     const btn = injectCheckoutCartButton(1);
     const selectedBtn = document.querySelector('.bcp-checkout-selected-btn')!;
     expect(selectedBtn.nextElementSibling).toBe(btn);
+  });
+
+  it('lands below "Add selected to named cart" when that follows the checkout-selected button', () => {
+    const addSelectedBtn = document.createElement('button');
+    addSelectedBtn.className = 'bcp-add-selected-btn';
+    document.querySelector('.bcp-checkout-selected-btn')!.insertAdjacentElement('afterend', addSelectedBtn);
+
+    const btn = injectCheckoutCartButton(1);
+
+    expect(addSelectedBtn.nextElementSibling).toBe(btn);
   });
 });
 

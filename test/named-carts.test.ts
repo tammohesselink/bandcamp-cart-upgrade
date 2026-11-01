@@ -5,6 +5,8 @@ import {
   renameNamedCart,
   deleteNamedCart,
   toggleItemInNamedCart,
+  countItemsInNamedCart,
+  setItemsInNamedCart,
   namedCartMembership,
   partitionByCart,
 } from '../src/named-carts';
@@ -133,6 +135,36 @@ describe('toggleItemInNamedCart', () => {
     const existing = [namedCart('1', 'Cart')];
     toggleItemInNamedCart(existing, '1', item('a'));
     expect(existing[0]!.items).toHaveLength(0);
+  });
+});
+
+// --- countItemsInNamedCart / setItemsInNamedCart ----------------------------
+
+describe('countItemsInNamedCart', () => {
+  it('counts the given items the cart already holds, ignoring a trailing slash', () => {
+    const cart = namedCart('1', 'Set', [item('a'), item('b')]);
+    const b = { ...item('b'), url: `${item('b').url}/` };
+    expect(countItemsInNamedCart(cart, [item('a'), b, item('c')])).toBe(2);
+  });
+});
+
+describe('setItemsInNamedCart', () => {
+  it('adds only the items the cart does not hold yet, after the existing ones', () => {
+    const carts = [namedCart('1', 'Set', [item('a')])];
+    const result = setItemsInNamedCart(carts, '1', [item('a'), item('b'), item('c')], true);
+    expect(result[0]!.items.map((i) => i.url)).toEqual([item('a').url, item('b').url, item('c').url]);
+  });
+
+  it('removes all the given items and keeps the rest', () => {
+    const carts = [namedCart('1', 'Set', [item('a'), item('b'), item('c')])];
+    const result = setItemsInNamedCart(carts, '1', [item('a'), item('c'), item('d')], false);
+    expect(result[0]!.items.map((i) => i.url)).toEqual([item('b').url]);
+  });
+
+  it('leaves other carts alone', () => {
+    const other = namedCart('2', 'Other', [item('x')]);
+    const result = setItemsInNamedCart([namedCart('1', 'Set'), other], '1', [item('a')], true);
+    expect(result[1]).toBe(other);
   });
 });
 

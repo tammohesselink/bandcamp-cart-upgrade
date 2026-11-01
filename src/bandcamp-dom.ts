@@ -134,6 +134,24 @@ export function readPageContext(latestSyncNum: number | null): BandcampPageConte
   return { syncNum: syncNum ?? 0, clientId, currency, fanId, countryCode };
 }
 
+/**
+ * The whole sidecart entry (title and price rows) holding `link`: its ancestor
+ * that is a direct child of the item list. Bandcamp wraps the entries in
+ * #item_list inside #sidecartBody, so walking up to #sidecartBody's own child
+ * would return the list itself and take every entry with it.
+ */
+export function sidecartItemFor(link: HTMLAnchorElement): Element | null {
+  const sidecartBody = document.querySelector<HTMLElement>(SEL_SIDECART_BODY);
+  const itemList = document.querySelector<HTMLElement>(SEL_SIDECART_ITEM_LIST);
+  const container = itemList?.contains(link) ? itemList : sidecartBody;
+  if (!container?.contains(link)) return null;
+  let item: Element | null = link;
+  while (item && item.parentElement !== container) {
+    item = item.parentElement;
+  }
+  return item;
+}
+
 // --- Checkout navigation ------------------------------------------------------
 
 /**
