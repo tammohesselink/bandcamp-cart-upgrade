@@ -192,6 +192,10 @@ export class Player {
     return this.showDiscographyButton;
   }
 
+  setDarkMode(enabled: boolean) {
+    this.wrapper.classList.toggle('bcp-dark', enabled);
+  }
+
   // Shows a greyed-out tab for a playlist that is loading, failed to load or
   // is empty; hovering or clicking it shows `reason`. Setting or adding tracks
   // to the playlist replaces it with the normal tab.
@@ -283,6 +287,8 @@ export class Player {
 
   showToast(msg: string, kind: StatusKind = 'info') {
     const toast = el('div', `bcp-toast bcp-toast-${kind}`);
+    // Toasts sit outside the wrapper, so they take its dark mode along themselves.
+    toast.classList.toggle('bcp-dark', this.wrapper.classList.contains('bcp-dark'));
     toast.setAttribute('aria-hidden', 'true');
     toast.textContent = msg;
     // Screen readers announce changes to an existing live region, not a newly

@@ -31,7 +31,7 @@ import {
 import { sendBcpMessage } from './messages';
 import { mapWithConcurrency } from './inflight';
 import { log, initDebugLogging } from './log';
-import { loadSettings } from './settings';
+import { loadSettings, onSettingsChanged } from './settings';
 
 // Appended to error messages: the [bcp] logs are silent until the user switches them on.
 const DEBUG_LOGGING_HINT = "Turn on debug logging in the extension's advanced options and check the browser console for details.";
@@ -1146,6 +1146,8 @@ async function main() {
   }
 
   const player = new Player([]);
+  player.setDarkMode(settings.darkMode);
+  onSettingsChanged((changed) => player.setDarkMode(changed.darkMode));
   document.body.appendChild(player.wrapper);
   activePlayer = player;
 

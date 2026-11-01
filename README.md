@@ -5,6 +5,7 @@ A Chrome extension that embeds a persistent playlist player into your Bandcamp c
 ## Features
 
 - **Cart player** — plays all tracks from your Bandcamp cart in a persistent bottom bar, laid out like the player docked at the bottom of a Bandcamp collection
+- **Dark mode** — turn on "Dark mode for the player" in the extension popup to give the player a dark theme (the rest of the Bandcamp page is left as it is)
 - **Label discography player** — on a label's `/music` page, loads and plays the full discography
 - **Play buttons** — injects ▶ buttons on each cart item and discography grid item
 - **Reverse order** — the ⇅ Reverse playlist order button at the right of the player plays the releases last to first (newest added first in the cart, oldest first for a label discography); tracks within a release keep their order, and the choice is remembered per playlist

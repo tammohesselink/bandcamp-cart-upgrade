@@ -153,6 +153,10 @@ async function init(): Promise<void> {
     chrome.storage.local.set({ showDiscographyButton: v });
   });
 
+  addToggle(container, 'Dark mode for the player', settings.darkMode, (v) => {
+    saveSetting('darkMode', v);
+  });
+
   addToggle(container, 'Show advanced functionality', settings.showAdvanced, (v) => {
     advanced.hidden = !v;
     saveSetting('showAdvanced', v);

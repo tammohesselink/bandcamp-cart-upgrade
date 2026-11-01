@@ -1,4 +1,4 @@
-import { SETTINGS_KEY, loadSettings, withDefaults, type BcpSettings } from './settings';
+import { loadSettings, onSettingsChanged } from './settings';
 
 // All extension logging goes through here so the "Debug logging" option in the popup's
 // advanced section can switch it on and off. Off by default, warnings and errors included.
@@ -11,10 +11,7 @@ export function setDebugLogging(enabled: boolean): void {
 // Reads the stored option and follows later changes, so flipping it in the popup
 // takes effect in open tabs without a reload.
 export async function initDebugLogging(): Promise<void> {
-  chrome.storage.onChanged.addListener((changes, areaName) => {
-    if (areaName !== 'local' || !(SETTINGS_KEY in changes)) return;
-    setDebugLogging(withDefaults(changes[SETTINGS_KEY]!.newValue as Partial<BcpSettings> | undefined).debugLogging);
-  });
+  onSettingsChanged((settings) => setDebugLogging(settings.debugLogging));
   setDebugLogging((await loadSettings()).debugLogging);
 }
 
