@@ -19,4 +19,12 @@ export default [
       '@typescript-eslint/no-explicit-any': 'warn',
     },
   },
+  {
+    // Logging goes through src/log.ts so the debug logging option can silence it.
+    files: ['src/**/*.ts'],
+    ignores: ['src/log.ts'],
+    rules: {
+      'no-console': 'error',
+    },
+  },
 ];

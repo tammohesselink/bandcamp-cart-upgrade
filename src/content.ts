@@ -33,8 +33,8 @@ import { mapWithConcurrency } from './inflight';
 import { log, initDebugLogging } from './log';
 import { loadSettings, onSettingsChanged } from './settings';
 
-// Appended to error messages: the [bcp] logs are silent until the user switches them on.
-const DEBUG_LOGGING_HINT = "Turn on debug logging in the extension's advanced options and check the browser console for details.";
+// Appended to error alerts: the [bcp] logs are silent until the user switches them on.
+const DEBUG_LOGGING_HINT = "To see why, turn on debug logging in the extension's advanced options, try again and check the browser console.";
 
 // Bandcamp's sync_num is an optimistic-concurrency counter — each cart mutation
 // increments it server-side and returns the new value in cart_data.sync_num.
@@ -737,7 +737,7 @@ async function checkoutInPrivateWindow(player: Player | null, items: SavedCartIt
     resolved.push({ u: item.url, id: target.tralbumId, t: target.tralbumType, pr: target.minPrice, b: target.bandId });
   }
   if (resolved.length === 0) {
-    const msg = `Could not resolve any selected items. ${DEBUG_LOGGING_HINT}`;
+    const msg = 'Could not resolve any selected items. Debug logging shows why.';
     if (player) player.showToast(msg, 'error'); else alert(msg);
     return false;
   }
@@ -856,7 +856,7 @@ function setupRemoveAlreadyOwnedButton(): void {
   });
 }
 
-main().catch(log.error);
+main().catch(log.fatal);
 
 // Loads (or reloads) the cart playlist: resolves track metadata, updates the
 // player's cart playlist, and re-injects sidecart UI elements.

@@ -907,4 +907,13 @@ describe('Player dark mode', () => {
     expect(player.wrapper.classList.contains('bcp-dark')).toBe(false);
     expect(document.querySelector('.bcp-toast')!.classList.contains('bcp-dark')).toBe(false);
   });
+
+  it('switches a toast that is already showing', () => {
+    const player = new Player([freshTrack(1)]);
+    player.showToast('Added to cart');
+
+    player.setDarkMode(true);
+
+    expect(document.querySelector('.bcp-toast')!.classList.contains('bcp-dark')).toBe(true);
+  });
 });

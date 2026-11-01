@@ -13,6 +13,7 @@ import { loadSettings, saveSetting } from './settings';
 // Chrome closes the action popup as soon as a file picker opens, so importing happens
 // in a tab that shows this same page.
 const IMPORT_TAB_PARAM = 'import';
+const isImportTab = new URLSearchParams(location.search).has(IMPORT_TAB_PARAM);
 
 async function loadShowDiscographyButton(): Promise<boolean> {
   const result = await chrome.storage.local.get('showDiscographyButton');
@@ -95,8 +96,6 @@ async function importHistory(file: File, statusElement: HTMLElement): Promise<vo
 }
 
 function addHistoryTransfer(container: HTMLElement): void {
-  const isImportTab = new URLSearchParams(location.search).has(IMPORT_TAB_PARAM);
-
   const heading = document.createElement('h2');
   heading.textContent = 'Cart history';
 
@@ -138,16 +137,21 @@ function addHistoryTransfer(container: HTMLElement): void {
   if (isImportTab) setStatus(statusElement, 'Click Import and choose an exported cart history file.');
 }
 
+function showAdvanced(advanced: HTMLElement, visible: boolean): void {
+  // The import tab exists only to import, so it keeps the cart history section either way.
+  advanced.hidden = !visible && !isImportTab;
+}
+
 async function init(): Promise<void> {
-  await initDebugLogging();
   const [settings, showDisco] = await Promise.all([
     loadSettings(),
     loadShowDiscographyButton(),
+    initDebugLogging(),
   ]);
 
   const container = document.getElementById('settings')!;
   const advanced = document.getElementById('advanced')!;
-  advanced.hidden = !settings.showAdvanced;
+  showAdvanced(advanced, settings.showAdvanced);
 
   addToggle(container, 'Show play button on top of label pages', showDisco, (v) => {
     chrome.storage.local.set({ showDiscographyButton: v });
@@ -158,7 +162,7 @@ async function init(): Promise<void> {
   });
 
   addToggle(container, 'Show advanced functionality', settings.showAdvanced, (v) => {
-    advanced.hidden = !v;
+    showAdvanced(advanced, v);
     saveSetting('showAdvanced', v);
   });
 
@@ -175,4 +179,4 @@ async function init(): Promise<void> {
   addHistoryTransfer(document.getElementById('history-transfer')!);
 }
 
-init().catch(log.error);
+init().catch(log.fatal);

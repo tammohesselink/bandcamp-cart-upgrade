@@ -19,10 +19,14 @@ export function withDefaults(stored: Partial<BcpSettings> | undefined): BcpSetti
   return { ...DEFAULT_SETTINGS, ...stored };
 }
 
+async function readStoredSettings(): Promise<BcpSettings> {
+  const result = await chrome.storage.local.get(SETTINGS_KEY);
+  return withDefaults(result[SETTINGS_KEY] as Partial<BcpSettings> | undefined);
+}
+
 export async function loadSettings(): Promise<BcpSettings> {
   try {
-    const result = await chrome.storage.local.get(SETTINGS_KEY);
-    return withDefaults(result[SETTINGS_KEY] as Partial<BcpSettings> | undefined);
+    return await readStoredSettings();
   } catch {
     return { ...DEFAULT_SETTINGS };
   }
@@ -36,7 +40,15 @@ export function onSettingsChanged(callback: (settings: BcpSettings) => void): vo
   });
 }
 
-export async function saveSetting<K extends keyof BcpSettings>(key: K, value: BcpSettings[K]): Promise<void> {
-  const current = await loadSettings();
-  await chrome.storage.local.set({ [SETTINGS_KEY]: { ...current, [key]: value } });
+// Saves run one after another, so two quick toggles can't both read the old settings and
+// undo each other. A failed read aborts the save instead of writing defaults over the rest.
+let saving: Promise<void> = Promise.resolve();
+
+export function saveSetting<K extends keyof BcpSettings>(key: K, value: BcpSettings[K]): Promise<void> {
+  const save = saving.then(async () => {
+    const current = await readStoredSettings();
+    await chrome.storage.local.set({ [SETTINGS_KEY]: { ...current, [key]: value } });
+  });
+  saving = save.catch(() => {});
+  return save;
 }

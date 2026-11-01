@@ -194,6 +194,7 @@ export class Player {
 
   setDarkMode(enabled: boolean) {
     this.wrapper.classList.toggle('bcp-dark', enabled);
+    for (const toast of document.querySelectorAll('.bcp-toast')) toast.classList.toggle('bcp-dark', enabled);
   }
 
   // Shows a greyed-out tab for a playlist that is loading, failed to load or
@@ -287,7 +288,7 @@ export class Player {
 
   showToast(msg: string, kind: StatusKind = 'info') {
     const toast = el('div', `bcp-toast bcp-toast-${kind}`);
-    // Toasts sit outside the wrapper, so they take its dark mode along themselves.
+    // Toasts sit outside the wrapper, so they carry its dark mode class themselves.
     toast.classList.toggle('bcp-dark', this.wrapper.classList.contains('bcp-dark'));
     toast.setAttribute('aria-hidden', 'true');
     toast.textContent = msg;

@@ -807,6 +807,8 @@ a.itemName.bcp-playing {
 
 #bcp-wrapper.bcp-dark {
   color: #e6e6e6;
+  /* Dark scrollbar for the queue. */
+  color-scheme: dark;
 }
 
 #bcp-wrapper.bcp-dark #bcp-collapse-btn,
@@ -955,6 +957,10 @@ a.itemName.bcp-playing {
 #bcp-wrapper.bcp-dark .bcp-tag-btn.bcp-tag-btn-active,
 #bcp-wrapper.bcp-dark .bcp-queue-tag-btn.bcp-queue-tag-btn-active {
   color: #d4ae2a;
+}
+
+#bcp-wrapper.bcp-dark .bcp-queue-tag-btn.bcp-queue-tag-btn-active:hover {
+  color: #f0c94a;
 }
 
 #bcp-wrapper.bcp-dark .bcp-status-loading {

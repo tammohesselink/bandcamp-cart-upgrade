@@ -75,6 +75,26 @@ describe('debug logging', () => {
     expect(consoleSpies.log).toHaveBeenCalledWith('[bcp] after switching on');
   });
 
+  it('keeps a change made while the stored option was still being read', async () => {
+    const consoleSpies = spyOnConsole();
+    const initialising = initDebugLogging();
+
+    for (const listener of changeListeners) listener({ [SETTINGS_KEY]: { newValue: { debugLogging: true } } }, 'local');
+    await initialising;
+    log.info('[bcp] on');
+
+    expect(consoleSpies.log).toHaveBeenCalledWith('[bcp] on');
+  });
+
+  it('always prints fatal errors', async () => {
+    const consoleSpies = spyOnConsole();
+    await initDebugLogging();
+
+    log.fatal('[bcp] crashed');
+
+    expect(consoleSpies.error).toHaveBeenCalledWith('[bcp] crashed');
+  });
+
   it('ignores changes to other storage keys', async () => {
     stored[SETTINGS_KEY] = { debugLogging: true };
     const consoleSpies = spyOnConsole();

@@ -11,8 +11,14 @@ export function setDebugLogging(enabled: boolean): void {
 // Reads the stored option and follows later changes, so flipping it in the popup
 // takes effect in open tabs without a reload.
 export async function initDebugLogging(): Promise<void> {
-  onSettingsChanged((settings) => setDebugLogging(settings.debugLogging));
-  setDebugLogging((await loadSettings()).debugLogging);
+  let changed = false;
+  onSettingsChanged((settings) => {
+    changed = true;
+    setDebugLogging(settings.debugLogging);
+  });
+  const settings = await loadSettings();
+  // A change that arrived while reading is newer than what the read returned.
+  if (!changed) setDebugLogging(settings.debugLogging);
 }
 
 export const log = {
@@ -27,5 +33,9 @@ export const log = {
   },
   error: (...args: unknown[]): void => {
     if (debugLogging) console.error(...args);
+  },
+  // Always printed: a crash at startup can break the popup, and with it the option itself.
+  fatal: (...args: unknown[]): void => {
+    console.error(...args);
   },
 };
