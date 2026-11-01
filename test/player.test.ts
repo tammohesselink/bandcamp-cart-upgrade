@@ -920,3 +920,30 @@ describe('Player reverse order', () => {
     expect(set).not.toHaveBeenCalled();
   });
 });
+
+describe('Player dark mode', () => {
+  it('starts light and switches the player and its toasts to dark and back', () => {
+    const player = new Player([freshTrack(1)]);
+    expect(player.wrapper.classList.contains('bcp-dark')).toBe(false);
+
+    player.setDarkMode(true);
+    player.showToast('Added to cart');
+    expect(player.wrapper.classList.contains('bcp-dark')).toBe(true);
+    expect(document.querySelector('.bcp-toast')!.classList.contains('bcp-dark')).toBe(true);
+
+    document.querySelector('.bcp-toast')!.remove();
+    player.setDarkMode(false);
+    player.showToast('Removed from cart');
+    expect(player.wrapper.classList.contains('bcp-dark')).toBe(false);
+    expect(document.querySelector('.bcp-toast')!.classList.contains('bcp-dark')).toBe(false);
+  });
+
+  it('switches a toast that is already showing', () => {
+    const player = new Player([freshTrack(1)]);
+    player.showToast('Added to cart');
+
+    player.setDarkMode(true);
+
+    expect(document.querySelector('.bcp-toast')!.classList.contains('bcp-dark')).toBe(true);
+  });
+});

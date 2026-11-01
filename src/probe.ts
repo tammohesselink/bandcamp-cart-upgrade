@@ -3,13 +3,14 @@
 // at module level and has side effects).
 
 import type { CartItem } from './types';
+import { log } from './log';
 
 // --- Cart DOM probe -----------------------------------------------------------
 
 export function probeCart(): CartItem[] {
   const sidecartBody = document.getElementById('sidecartBody');
   if (!sidecartBody) {
-    console.warn('[bcp] #sidecartBody not found — cart may be empty or DOM changed');
+    log.warn('[bcp] #sidecartBody not found — cart may be empty or DOM changed');
     return [];
   }
 
@@ -208,7 +209,7 @@ function readGridClientItems(): CartItem[] {
   try {
     parsed = JSON.parse(raw);
   } catch {
-    console.warn('[bcp] Could not parse #music-grid data-client-items');
+    log.warn('[bcp] Could not parse #music-grid data-client-items');
     return [];
   }
   if (!Array.isArray(parsed)) return [];
