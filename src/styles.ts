@@ -802,6 +802,187 @@ a.itemName.bcp-playing {
   cursor: default;
 }
 
+/* Dark mode, switched on in the extension options. It covers the player and its
+   toasts only: modals and the controls injected into Bandcamp's page stay light. */
+
+#bcp-wrapper.bcp-dark {
+  color: #e6e6e6;
+  /* Dark scrollbar for the queue. */
+  color-scheme: dark;
+}
+
+#bcp-wrapper.bcp-dark #bcp-collapse-btn,
+#bcp-wrapper.bcp-dark #bcp-queue,
+#bcp-wrapper.bcp-dark #bcp-bar {
+  background: #1f1f1f;
+  border-color: #3a3a3a;
+}
+
+#bcp-wrapper.bcp-dark #bcp-collapse-btn {
+  color: #a0a0a0;
+}
+
+#bcp-wrapper.bcp-dark #bcp-collapse-btn:hover,
+#bcp-wrapper.bcp-dark .bcp-btn:hover:not(:disabled),
+#bcp-wrapper.bcp-dark .bcp-tab:hover {
+  color: #fff;
+}
+
+#bcp-wrapper.bcp-dark .bcp-queue-item {
+  border-bottom-color: #2c2c2c;
+}
+
+#bcp-wrapper.bcp-dark .bcp-queue-item:hover {
+  background: #2a2a2a;
+}
+
+#bcp-wrapper.bcp-dark .bcp-queue-item.bcp-active {
+  background: #17323b;
+}
+
+#bcp-wrapper.bcp-dark .bcp-queue-title,
+#bcp-wrapper.bcp-dark .bcp-release-title,
+#bcp-wrapper.bcp-dark .bcp-track-artist,
+#bcp-wrapper.bcp-dark .bcp-track-title,
+#bcp-wrapper.bcp-dark .bcp-time,
+#bcp-wrapper.bcp-dark .bcp-in-cart-badge {
+  color: #e6e6e6;
+}
+
+#bcp-wrapper.bcp-dark .bcp-btn,
+#bcp-wrapper.bcp-dark .bcp-tempo-label,
+#bcp-wrapper.bcp-dark .bcp-tempo-btn,
+#bcp-wrapper.bcp-dark .bcp-status,
+#bcp-wrapper.bcp-dark .bcp-tab {
+  color: #a0a0a0;
+}
+
+#bcp-wrapper.bcp-dark .bcp-queue-num,
+#bcp-wrapper.bcp-dark .bcp-queue-sub,
+#bcp-wrapper.bcp-dark .bcp-nav-btn,
+#bcp-wrapper.bcp-dark .bcp-tabs-label,
+#bcp-wrapper.bcp-dark .bcp-cart-actions > * + *::before {
+  color: #8a8a8a;
+}
+
+#bcp-wrapper.bcp-dark .bcp-btn:disabled,
+#bcp-wrapper.bcp-dark .bcp-cart-action-btn:disabled,
+#bcp-wrapper.bcp-dark .bcp-cart-action-btn.bcp-disabled,
+#bcp-wrapper.bcp-dark .bcp-queue-tag-btn {
+  color: #555;
+}
+
+#bcp-wrapper.bcp-dark .bcp-queue-tag-btn:hover {
+  color: #a0a0a0;
+}
+
+#bcp-wrapper.bcp-dark #bcp-artwork {
+  background: #333;
+}
+
+#bcp-wrapper.bcp-dark .bcp-btn-play {
+  color: #eee;
+  background: #2a2a2a;
+  border-color: #444;
+}
+
+#bcp-wrapper.bcp-dark .bcp-btn-play:hover:not(:disabled) {
+  color: #fff;
+  border-color: #777;
+}
+
+#bcp-wrapper.bcp-dark .bcp-btn-play:disabled {
+  color: #555;
+}
+
+#bcp-wrapper.bcp-dark .bcp-spinner {
+  border-color: rgba(255, 255, 255, 0.2);
+  border-top-color: #ddd;
+}
+
+#bcp-wrapper.bcp-dark input[type=range].bcp-range {
+  background: linear-gradient(to right, #888 var(--bcp-fill, 0%), #3d3d3d var(--bcp-fill, 0%));
+}
+
+#bcp-wrapper.bcp-dark input[type=range].bcp-range::-webkit-slider-thumb {
+  background: #ccc;
+}
+
+#bcp-wrapper.bcp-dark input[type=range].bcp-seek {
+  background: linear-gradient(to right, #999 var(--bcp-fill, 0%), #3a3a3a var(--bcp-fill, 0%));
+}
+
+#bcp-wrapper.bcp-dark input[type=range].bcp-seek::-webkit-slider-thumb {
+  background: #ddd;
+}
+
+#bcp-wrapper.bcp-dark .bcp-tempo-btn,
+#bcp-wrapper.bcp-dark .bcp-tab {
+  border-color: #555;
+}
+
+#bcp-wrapper.bcp-dark .bcp-tempo-btn:hover:not(:disabled),
+#bcp-wrapper.bcp-dark .bcp-tab:hover {
+  border-color: #888;
+}
+
+#bcp-wrapper.bcp-dark .bcp-tempo-btn-active,
+#bcp-wrapper.bcp-dark .bcp-tab.bcp-tab-active {
+  color: #1da0c3;
+  border-color: #1da0c3;
+}
+
+#bcp-wrapper.bcp-dark .bcp-tab.bcp-tab-unavailable {
+  color: #666;
+  border-color: #3a3a3a;
+}
+
+#bcp-wrapper.bcp-dark .bcp-tab.bcp-tab-unavailable.bcp-tab-error,
+#bcp-wrapper.bcp-dark .bcp-tab.bcp-tab-unavailable.bcp-tab-warn {
+  color: #d79a6a;
+  border-color: #5a4030;
+}
+
+/* The light reds and yellows are too dark to read on the dark background. */
+#bcp-wrapper.bcp-dark .bcp-no-stream,
+#bcp-wrapper.bcp-dark .bcp-remove-btn,
+#bcp-wrapper.bcp-dark .bcp-status-error {
+  color: #e06c6c;
+}
+
+#bcp-wrapper.bcp-dark .bcp-status-warn {
+  color: #d9a441;
+}
+
+#bcp-wrapper.bcp-dark .bcp-tag-btn.bcp-tag-btn-active,
+#bcp-wrapper.bcp-dark .bcp-queue-tag-btn.bcp-queue-tag-btn-active {
+  color: #d4ae2a;
+}
+
+#bcp-wrapper.bcp-dark .bcp-queue-tag-btn.bcp-queue-tag-btn-active:hover {
+  color: #f0c94a;
+}
+
+#bcp-wrapper.bcp-dark .bcp-status-loading {
+  color: #1da0c3;
+}
+
+.bcp-toast.bcp-dark {
+  background: #262626;
+  border-color: #444;
+  color: #e6e6e6;
+}
+
+.bcp-toast.bcp-dark.bcp-toast-error {
+  border-color: #6b3535;
+  color: #e06c6c;
+}
+
+.bcp-toast.bcp-dark.bcp-toast-warn {
+  border-color: #6b5430;
+  color: #d9a441;
+}
+
 @media (max-width: 1440px) {
   .bcp-tempo-label {
     display: none;

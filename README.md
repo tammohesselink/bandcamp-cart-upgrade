@@ -5,11 +5,12 @@ A Chrome extension that embeds a persistent playlist player into your Bandcamp c
 ## Features
 
 - **Cart player** — plays all tracks from your Bandcamp cart in a persistent bottom bar, laid out like the player docked at the bottom of a Bandcamp collection
+- **Dark mode** — turn on "Dark mode for the player" in the extension popup to give the player a dark theme (the rest of the Bandcamp page is left as it is)
 - **Label discography player** — on a label's `/music` page, loads and plays the full discography
 - **Play buttons** — injects ▶ buttons on each cart item and discography grid item
 - **Reverse order** — the ⇅ Reverse playlist order button at the right of the player plays the releases last to first (newest added first in the cart, oldest first for a label discography); tracks within a release keep their order, and the choice is remembered per playlist
 - **Cart management** — add/remove releases from your cart directly in the player
-- **Cart history export/import** — move your cart history to another browser or laptop: click Export in the extension popup, then Import the JSON file there (imported snapshots are merged with the existing history)
+- **Cart history export/import** — move your cart history to another browser or laptop: turn on "Show advanced functionality" in the extension popup, click Export, then Import the JSON file there (imported snapshots are merged with the existing history)
 - **Caching** — track details are cached for six months; stream links are refreshed when a track is about to play if they are more than an hour old
 
 ## Development
@@ -25,6 +26,8 @@ make zip          # build and package as bandcamp-cart-player.zip
 ```
 
 Built output goes to `dist/`. To load the extension in Chrome: open `chrome://extensions`, enable Developer Mode, click "Load unpacked", and select the `dist/` folder.
+
+The extension logs nothing to the browser console by default. To see its `[bcp]` logs, turn on "Show advanced functionality" and then "Debug logging in the browser console" in the extension popup.
 
 ## Releasing
 

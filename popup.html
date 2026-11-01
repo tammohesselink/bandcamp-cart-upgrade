@@ -36,6 +36,10 @@
       border-bottom: none;
     }
 
+    #advanced-settings {
+      border-top: 1px solid #313244;
+    }
+
     .setting-label {
       color: #bac2de;
       line-height: 1.4;
@@ -138,7 +142,10 @@
 <body>
   <h1>Options</h1>
   <div id="settings"></div>
-  <div id="history-transfer"></div>
+  <div id="advanced" hidden>
+    <div id="advanced-settings"></div>
+    <div id="history-transfer"></div>
+  </div>
   <script src="popup.js"></script>
 </body>
 </html>

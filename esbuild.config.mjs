@@ -13,8 +13,9 @@ const sharedOptions = {
   target: 'es2022',
   sourcemap: watch ? 'inline' : false,
   minify: !watch,
-  // Strip all console/debugger output from production bundles; keep it during dev watch.
-  drop: watch ? [] : ['console', 'debugger'],
+  // Console output stays in production bundles: src/log.ts only lets it through when
+  // "Debug logging" is switched on in the popup's advanced options.
+  drop: watch ? [] : ['debugger'],
 };
 
 const entries = [

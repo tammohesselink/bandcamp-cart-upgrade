@@ -7,26 +7,13 @@ import {
   parseHistoryExport,
   saveSnapshots,
 } from './cart-history';
+import { log, initDebugLogging } from './log';
+import { loadSettings, saveSetting } from './settings';
 
-const SETTINGS_KEY = 'bcp_settings_v1';
 // Chrome closes the action popup as soon as a file picker opens, so importing happens
 // in a tab that shows this same page.
 const IMPORT_TAB_PARAM = 'import';
-
-interface BcpSettings {
-  showCartHistoryBtn: boolean;
-}
-
-async function loadSettings(): Promise<BcpSettings> {
-  const result = await chrome.storage.local.get(SETTINGS_KEY);
-  const stored = result[SETTINGS_KEY] as Partial<BcpSettings> | undefined;
-  return { showCartHistoryBtn: true, ...stored };
-}
-
-async function saveSetting<K extends keyof BcpSettings>(key: K, value: BcpSettings[K]): Promise<void> {
-  const current = await loadSettings();
-  await chrome.storage.local.set({ [SETTINGS_KEY]: { ...current, [key]: value } });
-}
+const isImportTab = new URLSearchParams(location.search).has(IMPORT_TAB_PARAM);
 
 async function loadShowDiscographyButton(): Promise<boolean> {
   const result = await chrome.storage.local.get('showDiscographyButton');
@@ -109,8 +96,6 @@ async function importHistory(file: File, statusElement: HTMLElement): Promise<vo
 }
 
 function addHistoryTransfer(container: HTMLElement): void {
-  const isImportTab = new URLSearchParams(location.search).has(IMPORT_TAB_PARAM);
-
   const heading = document.createElement('h2');
   heading.textContent = 'Cart history';
 
@@ -152,23 +137,46 @@ function addHistoryTransfer(container: HTMLElement): void {
   if (isImportTab) setStatus(statusElement, 'Click Import and choose an exported cart history file.');
 }
 
+function showAdvanced(advanced: HTMLElement, visible: boolean): void {
+  // The import tab exists only to import, so it keeps the cart history section either way.
+  advanced.hidden = !visible && !isImportTab;
+}
+
 async function init(): Promise<void> {
   const [settings, showDisco] = await Promise.all([
     loadSettings(),
     loadShowDiscographyButton(),
+    initDebugLogging(),
   ]);
 
   const container = document.getElementById('settings')!;
-
-  addToggle(container, 'Show cart history button', settings.showCartHistoryBtn, (v) => {
-    saveSetting('showCartHistoryBtn', v);
-  });
+  const advanced = document.getElementById('advanced')!;
+  showAdvanced(advanced, settings.showAdvanced);
 
   addToggle(container, 'Show play button on top of label pages', showDisco, (v) => {
     chrome.storage.local.set({ showDiscographyButton: v });
   });
 
+  addToggle(container, 'Dark mode for the player', settings.darkMode, (v) => {
+    saveSetting('darkMode', v);
+  });
+
+  addToggle(container, 'Show advanced functionality', settings.showAdvanced, (v) => {
+    showAdvanced(advanced, v);
+    saveSetting('showAdvanced', v);
+  });
+
+  const advancedSettings = document.getElementById('advanced-settings')!;
+
+  addToggle(advancedSettings, 'Show cart history button', settings.showCartHistoryBtn, (v) => {
+    saveSetting('showCartHistoryBtn', v);
+  });
+
+  addToggle(advancedSettings, 'Debug logging in the browser console', settings.debugLogging, (v) => {
+    saveSetting('debugLogging', v);
+  });
+
   addHistoryTransfer(document.getElementById('history-transfer')!);
 }
 
-init().catch(console.error);
+init().catch(log.fatal);

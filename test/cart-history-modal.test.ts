@@ -119,7 +119,6 @@ describe('openCartHistoryModal', () => {
       initialItems: [item('a')],
       prepareAdds: vi.fn().mockRejectedValue(new Error('offline')),
     });
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
     const closed = openCartHistoryModal(deps);
 
     (snapshotRows()[0]!.querySelector('.bcp-snap-restore-all') as HTMLButtonElement).click();
