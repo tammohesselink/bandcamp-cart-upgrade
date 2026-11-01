@@ -428,40 +428,45 @@ describe('injectCheckoutCartButton — falls back to the sidecart anchor chain',
   beforeEach(() => loadFixture('sidecart-with-data-cart.html'));
 
   it('returns a button element', () => {
-    const btn = injectCheckoutCartButton(2);
+    const btn = injectCheckoutCartButton(2, true);
     expect(btn?.tagName).toBe('BUTTON');
   });
 
   it('button has bcp-checkout-cart-btn class', () => {
-    const btn = injectCheckoutCartButton(2);
+    const btn = injectCheckoutCartButton(2, true);
     expect(btn?.classList.contains('bcp-checkout-cart-btn')).toBe(true);
   });
 
   it('button text contains the named-cart count', () => {
-    const btn = injectCheckoutCartButton(2);
+    const btn = injectCheckoutCartButton(2, true);
     expect(btn?.textContent).toContain('2');
   });
 
   it('is inserted after #sidecart when no checkout-selected button is present', () => {
-    const btn = injectCheckoutCartButton(2);
+    const btn = injectCheckoutCartButton(2, true);
     const sidecart = document.getElementById('sidecart')!;
     expect(sidecart.nextElementSibling).toBe(btn);
   });
 
   it('is hidden when there are no named carts', () => {
-    const btn = injectCheckoutCartButton(0);
+    const btn = injectCheckoutCartButton(0, true);
+    expect(btn?.hidden).toBe(true);
+  });
+
+  it('is hidden while named carts are off', () => {
+    const btn = injectCheckoutCartButton(2, false);
     expect(btn?.hidden).toBe(true);
   });
 
   it('does not double-inject', () => {
-    injectCheckoutCartButton(2);
-    injectCheckoutCartButton(2);
+    injectCheckoutCartButton(2, true);
+    injectCheckoutCartButton(2, true);
     expect(document.querySelectorAll('.bcp-checkout-cart-btn')).toHaveLength(1);
   });
 
   it('updates the label on a second call instead of leaving a stale count', () => {
-    injectCheckoutCartButton(1);
-    const btn = injectCheckoutCartButton(3);
+    injectCheckoutCartButton(1, true);
+    const btn = injectCheckoutCartButton(3, true);
     expect(btn?.textContent).toContain('3');
     expect(btn?.hidden).toBe(false);
   });
@@ -476,19 +481,9 @@ describe('injectCheckoutCartButton — inserted after an existing checkout-selec
   });
 
   it('lands directly after the checkout-selected button', () => {
-    const btn = injectCheckoutCartButton(1);
+    const btn = injectCheckoutCartButton(1, true);
     const selectedBtn = document.querySelector('.bcp-checkout-selected-btn')!;
     expect(selectedBtn.nextElementSibling).toBe(btn);
-  });
-
-  it('lands below "Add selected to named cart" when that follows the checkout-selected button', () => {
-    const addSelectedBtn = document.createElement('button');
-    addSelectedBtn.className = 'bcp-add-selected-btn';
-    document.querySelector('.bcp-checkout-selected-btn')!.insertAdjacentElement('afterend', addSelectedBtn);
-
-    const btn = injectCheckoutCartButton(1);
-
-    expect(addSelectedBtn.nextElementSibling).toBe(btn);
   });
 });
 
@@ -498,7 +493,7 @@ describe('injectCheckoutCartButton — no sidecart anchor', () => {
   });
 
   it('returns null when #sidecart, #sidecartReveal and #sidecartBody are absent', () => {
-    expect(injectCheckoutCartButton(1)).toBeNull();
+    expect(injectCheckoutCartButton(1, true)).toBeNull();
   });
 });
 

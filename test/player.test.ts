@@ -490,7 +490,7 @@ describe('Player playlist tabs', () => {
 
     const status = player.wrapper.querySelector('#bcp-tabs > .bcp-status');
     expect(status?.textContent).toBe('1 release (1 track)');
-    expect((status as HTMLElement).title).toBe('1 release (1 track)');
+    expect((status as HTMLElement).dataset.tooltip).toBe('1 release (1 track)');
     expect(status?.nextElementSibling?.classList.contains('bcp-tab-list')).toBe(true);
   });
 
@@ -499,11 +499,11 @@ describe('Player playlist tabs', () => {
     const queueButton = player.wrapper.querySelector<HTMLButtonElement>('.bcp-queue-toggle')!;
 
     queueButton.click();
-    expect(queueButton.classList.contains('bcp-btn-on')).toBe(true);
+    expect(queueButton.classList.contains('bcp-toggle-on')).toBe(true);
     expect(queueButton.getAttribute('aria-pressed')).toBe('true');
 
     queueButton.click();
-    expect(queueButton.classList.contains('bcp-btn-on')).toBe(false);
+    expect(queueButton.classList.contains('bcp-toggle-on')).toBe(false);
     expect(queueButton.getAttribute('aria-pressed')).toBe('false');
   });
 
@@ -514,7 +514,7 @@ describe('Player playlist tabs', () => {
     const tab = tabNamed(player, 'Cart (empty)');
 
     expect(tab?.getAttribute('aria-disabled')).toBe('true');
-    expect(tab?.title).toBe('Your cart is empty.');
+    expect(tab?.dataset.tooltip).toBe('Your cart is empty.');
   });
 
   it('shows the reason as a message, also announced to screen readers, when the greyed-out tab is clicked', async () => {
@@ -585,7 +585,7 @@ describe('Player queue', () => {
   }
 
   function queueButton(player: Player): HTMLButtonElement {
-    return player.wrapper.querySelector<HTMLButtonElement>('button[title="Toggle queue"]')!;
+    return player.wrapper.querySelector<HTMLButtonElement>('.bcp-queue-toggle')!;
   }
 
   it('opens scrolled to the playing track, centred in the list', async () => {
@@ -681,7 +681,7 @@ describe('Player cart buttons', () => {
     const track = freshTrack(1);
     const player = new Player([track]);
     const onTagTrack = vi.fn();
-    player.onTagTrack = onTagTrack;
+    player.setOnTagTrack(onTagTrack);
     player.setCartUrls(new Set([normalizeUrl(track.releaseUrl)]));
 
     const actions = Array.from(player.wrapper.querySelector('.bcp-cart-actions')!.children).map((a) => a.textContent);
@@ -695,7 +695,7 @@ describe('Player cart buttons', () => {
     const inCart = freshTrack(1);
     const notInCart = freshTrack(2, { releaseUrl: 'https://solardrift.bandcamp.com/album/other', releaseId: 6000 });
     const player = new Player([]);
-    player.onTagTrack = vi.fn();
+    player.setOnTagTrack(vi.fn());
     player.setPlaylist('discography', 'Label discography', [inCart, notInCart]);
     player.setCartUrls(new Set([normalizeUrl(inCart.releaseUrl)]));
 
@@ -712,11 +712,10 @@ describe('Player cart buttons', () => {
   it('drops the named-cart link and brings back the badge when named carts are switched off', () => {
     const track = freshTrack(1);
     const player = new Player([track]);
-    player.onTagTrack = vi.fn();
+    player.setOnTagTrack(vi.fn());
     player.setCartUrls(new Set([normalizeUrl(track.releaseUrl)]));
 
-    player.onTagTrack = undefined;
-    player.setNamedCarts([]);
+    player.setOnTagTrack(null);
 
     const actions = Array.from(player.wrapper.querySelector('.bcp-cart-actions')!.children).map((a) => a.textContent);
     expect(actions).toEqual(['✓ In cart (full album)', 'Remove']);
@@ -736,7 +735,7 @@ describe('Player cart buttons', () => {
   it('names how many named carts the playing release is in', async () => {
     const track = freshTrack(1);
     const player = new Player([track]);
-    player.onTagTrack = vi.fn();
+    player.setOnTagTrack(vi.fn());
     player.setCartUrls(new Set([normalizeUrl(track.releaseUrl)]));
     const item = { url: track.releaseUrl, title: 'Echoes of the Void' };
     player.setNamedCarts([
@@ -744,7 +743,7 @@ describe('Player cart buttons', () => {
       { id: 'b', name: 'Later', createdAt: 0, items: [item] },
     ]);
 
-    expect(cartButton(player, 'In 2 named carts').title).toBe('In: Birthday, Later');
+    expect(cartButton(player, 'In 2 named carts').dataset.tooltip).toBe('In: Birthday, Later');
   });
 });
 
@@ -981,7 +980,7 @@ describe('Player reverse order', () => {
     reverseButton(player).click();
 
     expect(reverseButton(player).getAttribute('aria-disabled')).toBe('true');
-    expect(reverseButton(player).title).toBe('Reverse playlist order: only one release');
+    expect(reverseButton(player).dataset.tooltip).toBe('Reverse playlist order: only one release');
     expect(set).not.toHaveBeenCalled();
   });
 });
@@ -989,6 +988,13 @@ describe('Player reverse order', () => {
 describe('Player tooltips', () => {
   function hover(target: Element) {
     target.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+  }
+
+  // happy-dom delivers mutation records on a real timer of its own (browsers
+  // use a microtask), which fake timers don't reach.
+  async function mutationsDelivered() {
+    vi.useRealTimers();
+    await new Promise((resolve) => setTimeout(resolve, 10));
   }
 
   // On the page, as the tooltip only shows for elements that are.
@@ -1002,7 +1008,7 @@ describe('Player tooltips', () => {
     return player.wrapper.querySelector<HTMLElement>('.bcp-tooltip')!;
   }
 
-  it('shows the title in its own tooltip after a short pause, instead of the browser\'s', () => {
+  it('shows the tooltip after a short pause, with no browser tooltip alongside it', () => {
     vi.useFakeTimers();
     try {
       const player = playerOnPage();
@@ -1072,18 +1078,72 @@ describe('Player tooltips', () => {
     expect(playButton.getAttribute('aria-label')).toBe('Play');
   });
 
-  it('puts the title back when the pointer leaves', () => {
+  it('hides when the pointer leaves the player', () => {
     vi.useFakeTimers();
     try {
       const player = playerOnPage();
-      const queueButton = player.wrapper.querySelector<HTMLButtonElement>('.bcp-queue-toggle')!;
-      hover(queueButton);
+      hover(player.wrapper.querySelector('.bcp-queue-toggle')!);
       vi.advanceTimersByTime(250);
 
       player.wrapper.dispatchEvent(new MouseEvent('mouseleave'));
 
-      expect(queueButton.title).toBe('Toggle queue');
       expect(tooltip(player).classList.contains('bcp-tooltip-visible')).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stays hidden after a click until the pointer moves on to another control', () => {
+    vi.useFakeTimers();
+    try {
+      const player = playerOnPage();
+      const mt = Array.from(player.wrapper.querySelectorAll<HTMLButtonElement>('.bcp-tempo-btn')).find((b) => b.textContent === 'MT')!;
+      hover(mt);
+      vi.advanceTimersByTime(250);
+
+      mt.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      hover(mt);
+      vi.advanceTimersByTime(250);
+
+      expect(tooltip(player).classList.contains('bcp-tooltip-visible')).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('hides when the hovered control is rebuilt', async () => {
+    vi.useFakeTimers();
+    try {
+      const player = playerOnPage();
+      player.setPlaylistUnavailable('discography', 'Label discography (loading 1 / 5)', 'Loading the label.');
+      hover(Array.from(player.wrapper.querySelectorAll('.bcp-tab')).find((tab) => tab.textContent?.startsWith('Label'))!);
+      vi.advanceTimersByTime(250);
+      expect(tooltip(player).classList.contains('bcp-tooltip-visible')).toBe(true);
+
+      player.setPlaylistUnavailable('discography', 'Label discography (loading 2 / 5)', 'Loading the label.');
+      await mutationsDelivered();
+
+      expect(tooltip(player).classList.contains('bcp-tooltip-visible')).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('follows the text of the hovered control while it shows', async () => {
+    vi.useFakeTimers();
+    try {
+      const player = playerOnPage();
+      player.setPlaylistStatus('cart', 'Loading releases: 1 / 28', 'loading');
+      const status = player.wrapper.querySelector<HTMLElement>('.bcp-status')!;
+      Object.defineProperty(status, 'scrollWidth', { value: 300, configurable: true });
+      Object.defineProperty(status, 'clientWidth', { value: 180, configurable: true });
+      hover(status);
+      vi.advanceTimersByTime(250);
+
+      player.setPlaylistStatus('cart', 'Loading releases: 2 / 28', 'loading');
+      await mutationsDelivered();
+
+      expect(tooltip(player).textContent).toBe('Loading releases: 2 / 28');
     } finally {
       vi.useRealTimers();
     }

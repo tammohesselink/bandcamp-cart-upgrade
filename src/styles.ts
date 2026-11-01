@@ -268,18 +268,18 @@ export const PLAYER_CSS = `
 }
 
 /* A toggle that is switched on: Master Tempo, the open queue, reversed order. */
-.bcp-btn.bcp-btn-on,
-.bcp-btn.bcp-btn-on:hover:not(:disabled) {
+.bcp-btn.bcp-toggle-on,
+.bcp-btn.bcp-toggle-on:hover:not(:disabled) {
   color: #1da0c3;
 }
 
-.bcp-btn.bcp-btn-unavailable,
-.bcp-btn.bcp-btn-unavailable:hover {
+.bcp-btn.bcp-control-unavailable,
+.bcp-btn.bcp-control-unavailable:hover {
   color: #ccc;
   cursor: default;
 }
 
-.bcp-icon-btn {
+.bcp-icon-button {
   padding: 4px;
   font-size: 20px;
 }
@@ -426,8 +426,10 @@ input[type=range].bcp-tempo {
 }
 
 /* Cut short, rather than widening the playlist column, when it is longer than
-   the switch below it; the full text is in its tooltip. */
+   the switch below it; the full text is in its tooltip. Selectable, unlike the
+   switch around it, so an error can be copied. */
 .bcp-status {
+  user-select: text;
   font-size: 11px;
   line-height: 17px;
   color: #999;
@@ -714,7 +716,9 @@ input[type=range].bcp-tempo {
   transform: translateX(-50%) translateY(calc(-50% + 12px));
   transition: opacity 0.2s ease, transform 0.2s ease;
   white-space: nowrap;
-  z-index: 2147483646;
+  /* The top layer, like the player and the named-cart windows; added last, so
+     it shows above an open window's backdrop. */
+  z-index: 2147483647;
 }
 
 .bcp-toast-visible {
@@ -847,7 +851,7 @@ a.itemName.bcp-playing {
 }
 
 /* Secondary to "Checkout selected" above it, so outlined rather than filled. */
-.bcp-add-selected-btn {
+.bcp-add-selected-button {
   display: block;
   margin: 4px 0 0;
   padding: 5px 10px;
@@ -861,11 +865,11 @@ a.itemName.bcp-playing {
   transition: opacity 0.15s;
 }
 
-.bcp-add-selected-btn:hover {
+.bcp-add-selected-button:hover {
   opacity: 0.85;
 }
 
-.bcp-add-selected-btn[hidden] {
+.bcp-add-selected-button[hidden] {
   display: none;
 }
 
@@ -944,13 +948,13 @@ a.itemName.bcp-playing {
   background: #333;
 }
 
-#bcp-wrapper.bcp-dark .bcp-btn.bcp-btn-on,
-#bcp-wrapper.bcp-dark .bcp-btn.bcp-btn-on:hover:not(:disabled) {
+#bcp-wrapper.bcp-dark .bcp-btn.bcp-toggle-on,
+#bcp-wrapper.bcp-dark .bcp-btn.bcp-toggle-on:hover:not(:disabled) {
   color: #1da0c3;
 }
 
-#bcp-wrapper.bcp-dark .bcp-btn.bcp-btn-unavailable,
-#bcp-wrapper.bcp-dark .bcp-btn.bcp-btn-unavailable:hover {
+#bcp-wrapper.bcp-dark .bcp-btn.bcp-control-unavailable,
+#bcp-wrapper.bcp-dark .bcp-btn.bcp-control-unavailable:hover {
   color: #555;
 }
 
@@ -1117,7 +1121,7 @@ a.itemName.bcp-playing {
 // named-cart modals, plus the named-cart modal's own rules
 // and the sidecart's "Checkout a cart" button, which shows without a player.
 export const MODAL_CSS = `
-  .bcp-hb{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:999999;display:flex;align-items:center;justify-content:center}
+  .bcp-hb{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:2147483647;display:flex;align-items:center;justify-content:center}
   .bcp-hm{background:#fff;color:#1a1a1a;border-radius:8px;padding:20px 24px;max-width:520px;width:90%;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,.3);font-family:inherit;font-size:14px}
   .bcp-hm h3{margin:0 0 14px;font-size:15px;font-weight:600}
   .bcp-hl{list-style:none;margin:0 0 16px;padding:0;overflow-y:auto;flex:1 1 auto}

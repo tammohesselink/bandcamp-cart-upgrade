@@ -18,6 +18,7 @@ export function isTrackOrAlbumPage(): boolean {
 // Cart sidebar
 export const SEL_SIDECART_BODY = '#sidecartBody';
 export const SEL_SIDECART_ITEM_LIST = '#item_list';
+export const SEL_SIDECART_ITEM = '.item';
 export const SEL_SIDECART_ITEM_LINK = 'a.itemName[href]';
 
 // Discography grid (label pages)
@@ -135,21 +136,18 @@ export function readPageContext(latestSyncNum: number | null): BandcampPageConte
 }
 
 /**
- * The whole sidecart entry (title and price rows) holding `link`: its ancestor
- * that is a direct child of the item list. Bandcamp wraps the entries in
- * #item_list inside #sidecartBody, so walking up to #sidecartBody's own child
- * would return the list itself and take every entry with it.
+ * The whole sidecart entry (title and price rows) holding `link`: its `.item`
+ * ancestor inside #sidecartBody, the class Bandcamp's entries carry and
+ * addSidecartItem copies. Matching the entry itself, rather than walking up to
+ * a container's child, keeps a wrapper around the entries (Bandcamp's
+ * #item_list, or any other) from being taken for one entry and removed with all
+ * of them. Null when there is no such entry, so nothing is removed.
  */
 export function sidecartItemFor(link: HTMLAnchorElement): Element | null {
   const sidecartBody = document.querySelector<HTMLElement>(SEL_SIDECART_BODY);
-  const itemList = document.querySelector<HTMLElement>(SEL_SIDECART_ITEM_LIST);
-  const container = itemList?.contains(link) ? itemList : sidecartBody;
-  if (!container?.contains(link)) return null;
-  let item: Element | null = link;
-  while (item && item.parentElement !== container) {
-    item = item.parentElement;
-  }
-  return item;
+  if (!sidecartBody?.contains(link)) return null;
+  const item = link.closest(SEL_SIDECART_ITEM);
+  return item && item !== sidecartBody && sidecartBody.contains(item) ? item : null;
 }
 
 // --- Checkout navigation ------------------------------------------------------

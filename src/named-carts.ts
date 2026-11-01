@@ -18,19 +18,6 @@ export function deleteNamedCart(carts: NamedCart[], id: string): NamedCart[] {
   return carts.filter((c) => c.id !== id);
 }
 
-// Adds the item if the cart doesn't already contain it (by normalised URL), removes it otherwise.
-export function toggleItemInNamedCart(carts: NamedCart[], id: string, item: SavedCartItem): NamedCart[] {
-  return carts.map((c) => {
-    if (c.id !== id) return c;
-    const normalized = normalizeUrl(item.url);
-    const has = c.items.some((i) => normalizeUrl(i.url) === normalized);
-    const items = has
-      ? c.items.filter((i) => normalizeUrl(i.url) !== normalized)
-      : [...c.items, item];
-    return { ...c, items };
-  });
-}
-
 // How many of `items` the cart already contains, by normalised URL.
 export function countItemsInNamedCart(cart: NamedCart, items: SavedCartItem[]): number {
   const held = new Set(cart.items.map((i) => normalizeUrl(i.url)));
