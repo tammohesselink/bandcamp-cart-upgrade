@@ -1,0 +1,76 @@
+name: Publish
+
+on:
+  push:
+    branches: [main]
+    paths: [manifest.json]
+
+# Let a running publish finish before the next one uploads.
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.version.outputs.changed }}
+      version: ${{ steps.version.outputs.version }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compare the manifest version with the one before this push
+        id: version
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          version=$(jq -r .version manifest.json)
+          previous_version=$(git show "$BEFORE:manifest.json" | jq -r .version)
+          echo "Manifest version: $previous_version -> $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ "$version" != "$previous_version" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  publish:
+    needs: check-version
+    if: needs.check-version.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - run: npm ci
+
+      - run: make typecheck
+
+      - run: make lint
+
+      - run: make test
+
+      - run: make zip
+
+      - name: Upload to the Chrome Web Store and submit for review
+        env:
+          CHROME_WEB_STORE_SERVICE_ACCOUNT_KEY: ${{ secrets.CHROME_WEB_STORE_SERVICE_ACCOUNT_KEY }}
+          CHROME_WEB_STORE_PUBLISHER_ID: ${{ vars.CHROME_WEB_STORE_PUBLISHER_ID }}
+          CHROME_WEB_STORE_ITEM_ID: ${{ vars.CHROME_WEB_STORE_ITEM_ID }}
+        run: node scripts/publish-chrome-web-store.mjs bandcamp-cart-player.zip
+
+      - name: Tag the released commit
+        env:
+          VERSION: ${{ needs.check-version.outputs.version }}
+        run: |
+          git tag "v$VERSION"
+          git push origin "v$VERSION"

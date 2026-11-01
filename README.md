@@ -26,6 +26,16 @@ make zip          # build and package as bandcamp-cart-player.zip
 
 Built output goes to `dist/`. To load the extension in Chrome: open `chrome://extensions`, enable Developer Mode, click "Load unpacked", and select the `dist/` folder.
 
+## Releasing
+
+Bump `version` in `manifest.json` in a PR. When it merges, the Publish workflow builds the zip, uploads it to the Chrome Web Store, submits it for review and tags the commit `v<version>`. The new version goes live once Google approves it.
+
+One-time setup for the workflow:
+
+1. In the Google Cloud Console, create a project, enable the Chrome Web Store API, create a service account and download a JSON key for it.
+2. In the Chrome Web Store Developer Dashboard, add the service account's email under **Account**.
+3. In the GitHub repo settings, add the JSON key as the secret `CHROME_WEB_STORE_SERVICE_ACCOUNT_KEY`, and add the variables `CHROME_WEB_STORE_PUBLISHER_ID` (from **Publisher > Settings** in the dashboard) and `CHROME_WEB_STORE_ITEM_ID` (the extension's ID).
+
 ## Stack
 
 - TypeScript + esbuild
