@@ -43,7 +43,6 @@ export class Player {
   readonly wrapper: HTMLElement;
   private bar: HTMLElement;
   private queueEl: HTMLElement;
-  private headerEl: HTMLElement;
 
   private audio: HTMLAudioElement;
   private playlists = new Map<PlaylistId, PlaylistState>();
@@ -51,7 +50,8 @@ export class Player {
 
   private artworkEl!: HTMLImageElement;
   private titleEl!: HTMLAnchorElement;
-  private subEl!: HTMLElement;
+  private releaseEl!: HTMLAnchorElement;
+  private artistEl!: HTMLElement;
   private playPauseBtn!: HTMLButtonElement;
   private prevBtn!: HTMLButtonElement;
   private nextBtn!: HTMLButtonElement;
@@ -70,8 +70,6 @@ export class Player {
   private reversedPlaylists: Partial<Record<PlaylistId, boolean>> = {};
   private statusEl!: HTMLElement;
   private queueToggleBtn!: HTMLButtonElement;
-  private reloadBtn!: HTMLButtonElement;
-  private cacheBtn!: HTMLButtonElement;
 
   private queueVisible = false;
   private playerVisible = true;
@@ -103,6 +101,8 @@ export class Player {
   private announcer!: HTMLElement;
   private cartUrls = new Set<string>();
   private cartActionsEl!: HTMLElement;
+  private playlistTabsEl!: HTMLElement;
+  private reverseSlot!: HTMLElement;
 
   private namedCarts: NamedCart[] = [];
   private namedCartMembership = new Map<string, string[]>();
@@ -117,8 +117,6 @@ export class Player {
   onTrackChange?: (id: PlaylistId, index: number) => void;
   onSeek?: (fraction: number) => void;
   onDiscographyButtonVisibilityChange?: (show: boolean) => void;
-  onReloadPlaylist?: () => Promise<void>;
-  onShowCache?: () => Promise<void> | void;
   // Updates the track's streamUrl in place; `force` skips any cached copy and
   // `bulk` queues the fetch behind ones the user is waiting on.
   onRefreshStream?: (track: PlaylistTrack, force: boolean, bulk?: boolean) => Promise<void>;
@@ -138,12 +136,10 @@ export class Player {
     this.collapseBtn.addEventListener('click', () => this.togglePlayer());
 
     this.queueEl = this.buildQueueEl();
-    this.headerEl = this.buildHeaderEl();
     this.bar = this.buildBarEl();
 
     this.wrapper.appendChild(this.collapseBtn);
     this.wrapper.appendChild(this.queueEl);
-    this.wrapper.appendChild(this.headerEl);
     this.wrapper.appendChild(this.bar);
 
     this.announcer = el('div', 'bcp-visually-hidden');
@@ -173,7 +169,7 @@ export class Player {
         for (const [id, state] of this.playlists) {
           this.applyReversed(id, state, !!this.reversedPlaylists[id]);
         }
-        this.updateHeader();
+        this.updatePlaylistTabs();
         this.updateQueueEl();
         this.updateNavButtons();
       }
@@ -186,7 +182,7 @@ export class Player {
     if (initialPlaylist.length > 0) {
       this.setPlaylist('cart', 'Cart', initialPlaylist);
     } else {
-      this.updateHeader();
+      this.updatePlaylistTabs();
     }
   }
 
@@ -201,14 +197,14 @@ export class Player {
   // to the playlist replaces it with the normal tab.
   setPlaylistUnavailable(id: PlaylistId, label: string, reason: string, kind: StatusKind = 'info') {
     this.unavailablePlaylists.set(id, { label, reason, kind });
-    this.updateHeader();
+    this.updatePlaylistTabs();
   }
 
   // Shows a clickable tab for a playlist that only loads when asked; `onLoad`
   // runs on click and is expected to set or grey out the playlist.
   setPlaylistOnDemand(id: PlaylistId, label: string, hint: string, onLoad: () => void) {
     this.unavailablePlaylists.set(id, { label, reason: hint, kind: 'info', onLoad });
-    this.updateHeader();
+    this.updatePlaylistTabs();
   }
 
   setPlaylist(id: PlaylistId, label: string, tracks: PlaylistTrack[]) {
@@ -231,7 +227,7 @@ export class Player {
     if (keptIndex === -1 && this.activeId === id && !this.audio.paused) state.nextIsCurrent = true;
     this.playlists.set(id, state);
     if (tracks.length > 0) this.unavailablePlaylists.delete(id);
-    this.updateHeader();
+    this.updatePlaylistTabs();
     if (!previous && this.playlists.size === 1) {
       this.selectPlaylist(id);
     } else if (this.activeId === id) {
@@ -260,12 +256,12 @@ export class Player {
       // stream URL changes, but not when the same track is reloaded — explicit
       // reset covers both cases.
       this.audio.currentTime = 0;
-      this.currentTimeEl.textContent = '0:00';
-      this.seekBar.value = '0';
+      this.currentTimeEl.textContent = fmtTime(0);
+      this.setSeekPercent(0);
     }
     if (this.activeId !== id) this.clearPreloaded();
     this.activeId = id;
-    this.updateHeader();
+    this.updatePlaylistTabs();
     this.updateQueueEl();
     // Always load silently: tab switches must not fire onCurrentPageTrackChange,
     // which clicks the native row and triggers a native 'play' event that echoes
@@ -376,7 +372,7 @@ export class Player {
     state.tracks.push(...toAdd);
     this.unavailablePlaylists.delete(id);
     // The reverse button depends on how many releases there are.
-    this.updateHeader();
+    this.updatePlaylistTabs();
     if (this.activeId === id) {
       // Selecting an empty playlist leaves the bar blank, so load its first
       // track now, unless a removed track is still playing.
@@ -417,7 +413,7 @@ export class Player {
   seekToFraction(fraction: number) {
     if (!isFinite(this.audio.duration)) return;
     this.audio.currentTime = fraction * this.audio.duration;
-    this.seekBar.value = String(fraction * 100);
+    this.setSeekPercent(fraction * 100);
   }
 
   // Makes the track at `pageUrl` the current one without changing whether the
@@ -460,7 +456,7 @@ export class Player {
     this.removeFromState(state, shouldRemove);
     if (this.activeId === id) {
       // Don't touch the audio — let the current stream finish naturally.
-      this.updateHeader();
+      this.updatePlaylistTabs();
       this.updateQueueEl();
       this.updateNavButtons();
     }
@@ -474,7 +470,7 @@ export class Player {
     if (idx === -1) return;
     this.removeFromState(state, (t) => t === state.tracks[idx]);
     if (this.activeId === id) {
-      this.updateHeader();
+      this.updatePlaylistTabs();
       this.updateQueueEl();
       this.updateNavButtons();
     }
@@ -547,21 +543,8 @@ export class Player {
     return this.playlists.get(this.activeId) ?? null;
   }
 
-  private buildHeaderEl(): HTMLElement {
-    const header = document.createElement('div');
-    header.id = 'bcp-header';
-    return header;
-  }
-
-  private updateHeader() {
-    this.headerEl.innerHTML = '';
-
-    const tabs = document.createElement('div');
-    tabs.id = 'bcp-tabs';
-
-    const label = document.createElement('span');
-    label.textContent = 'Playlist type:';
-    tabs.appendChild(label);
+  private updatePlaylistTabs() {
+    const tabs = el('div', 'bcp-tab-list');
 
     const ids: PlaylistId[] = ['currentpage', 'discography', 'cart'];
 
@@ -593,7 +576,7 @@ export class Player {
 
     const state = this.active();
     if (state && state.tracks.length > 0) {
-      const reverseBtn = btn('⇅ Reverse', 'bcp-tab bcp-reverse-btn');
+      const reverseBtn = btn('⇅ Reverse playlist order', 'bcp-tab bcp-reverse-btn');
       reverseBtn.setAttribute('aria-pressed', String(state.reversed));
       if (state.reversed) reverseBtn.classList.add('bcp-tab-active');
       if (releaseBlocks(state.tracks).length > 1) {
@@ -604,10 +587,14 @@ export class Player {
         reverseBtn.setAttribute('aria-disabled', 'true');
         reverseBtn.title = 'Only one release';
       }
-      tabs.appendChild(reverseBtn);
+      this.reverseSlot.replaceChildren(reverseBtn);
+    } else {
+      this.reverseSlot.replaceChildren();
     }
 
-    this.headerEl.appendChild(tabs);
+    const label = el('div', 'bcp-tabs-label');
+    label.textContent = 'Playlist type:';
+    this.playlistTabsEl.replaceChildren(label, tabs);
   }
 
   private buildBarEl(): HTMLElement {
@@ -618,41 +605,45 @@ export class Player {
     this.artworkEl.id = 'bcp-artwork';
     this.artworkEl.alt = '';
 
+    // Laid out like the player docked at the bottom of a Bandcamp collection:
+    // the release on the left, the track and its progress in the middle.
     const trackInfo = el('div', 'bcp-track-info');
+    this.releaseEl = document.createElement('a');
+    this.releaseEl.className = 'bcp-release-title';
+    this.releaseEl.target = '_blank';
+    this.releaseEl.rel = 'noopener noreferrer';
+    this.artistEl = el('div', 'bcp-track-artist');
+    this.cartActionsEl = el('div', 'bcp-cart-actions');
+    trackInfo.append(this.releaseEl, this.artistEl, this.cartActionsEl);
+
+    this.playPauseBtn = btn('', 'bcp-btn bcp-btn-play');
+    this.playPauseBtn.title = 'Play / Pause';
+    this.playPauseBtn.addEventListener('click', () => this.togglePlay());
+    this.setPlayButton('play');
+
     this.titleEl = document.createElement('a');
     this.titleEl.className = 'bcp-track-title';
     this.titleEl.textContent = 'No tracks loaded';
     this.titleEl.target = '_blank';
     this.titleEl.rel = 'noopener noreferrer';
-    this.subEl = el('div', 'bcp-track-sub');
-    trackInfo.append(this.titleEl, this.subEl);
 
-    this.prevBtn = btn('⏮', 'bcp-btn');
-    this.prevBtn.title = 'Previous';
-    this.prevBtn.addEventListener('click', () => this.prev());
+    this.currentTimeEl = el('span', 'bcp-time-current');
+    this.currentTimeEl.textContent = fmtTime(0);
+    this.totalTimeEl = el('span', 'bcp-time-total');
+    this.totalTimeEl.textContent = fmtTime(0);
+    const time = el('div', 'bcp-time');
+    time.append(this.currentTimeEl, ' / ', this.totalTimeEl);
 
-    this.playPauseBtn = btn('▶', 'bcp-btn bcp-btn-play');
-    this.playPauseBtn.title = 'Play / Pause';
-    this.playPauseBtn.addEventListener('click', () => this.togglePlay());
-
-    this.nextBtn = btn('⏭', 'bcp-btn');
-    this.nextBtn.title = 'Next';
-    this.nextBtn.addEventListener('click', () => this.next());
-
-    const controls = el('div', 'bcp-controls');
-    controls.append(this.prevBtn, this.playPauseBtn, this.nextBtn);
-
-    this.currentTimeEl = el('div', 'bcp-time bcp-time-current');
-    this.currentTimeEl.textContent = '0:00';
-    this.totalTimeEl = el('div', 'bcp-time bcp-time-total');
-    this.totalTimeEl.textContent = '0:00';
+    const trackRow = el('div', 'bcp-track-row');
+    trackRow.append(this.titleEl, time);
 
     this.seekBar = el('input', 'bcp-range bcp-seek') as HTMLInputElement;
     this.seekBar.type = 'range';
     this.seekBar.min = '0';
     this.seekBar.max = '100';
-    this.seekBar.value = '0';
+    this.setSeekPercent(0);
     this.seekBar.addEventListener('mousedown', () => (this.seeking = true));
+    this.seekBar.addEventListener('input', () => updateRangeFill(this.seekBar));
     this.seekBar.addEventListener('mouseup', () => {
       this.seeking = false;
       const fraction = parseFloat(this.seekBar.value) / 100;
@@ -662,8 +653,24 @@ export class Player {
       }
     });
 
-    const seekArea = el('div', 'bcp-seek-area');
-    seekArea.append(this.currentTimeEl, this.seekBar, this.totalTimeEl);
+    this.prevBtn = btn('', 'bcp-btn bcp-nav-btn');
+    this.prevBtn.title = 'Previous';
+    this.prevBtn.append(icon('previous'));
+    this.prevBtn.addEventListener('click', () => this.prev());
+
+    this.nextBtn = btn('', 'bcp-btn bcp-nav-btn');
+    this.nextBtn.title = 'Next';
+    this.nextBtn.append(icon('next'));
+    this.nextBtn.addEventListener('click', () => this.next());
+
+    const controls = el('div', 'bcp-controls');
+    controls.append(this.prevBtn, this.nextBtn);
+
+    const progress = el('div', 'bcp-progress');
+    progress.append(trackRow, this.seekBar, controls);
+
+    const center = el('div', 'bcp-center');
+    center.append(this.playPauseBtn, progress);
 
     this.tempoSlider = el('input', 'bcp-range bcp-tempo') as HTMLInputElement;
     this.tempoSlider.type = 'range';
@@ -707,38 +714,21 @@ export class Player {
     const tempoArea = el('div', 'bcp-tempo-area');
     tempoArea.append(tempoLabel, this.tempoSlider, this.tempoResetBtn, this.tempoRangeBtn, this.tempoMTBtn);
 
-    this.cartActionsEl = el('div', 'bcp-cart-actions');
-
-    this.queueToggleBtn = btn('☰', 'bcp-btn');
+    this.queueToggleBtn = btn('☰', 'bcp-btn bcp-queue-toggle');
     this.queueToggleBtn.title = 'Toggle queue';
     this.queueToggleBtn.addEventListener('click', () => this.toggleQueue());
 
-    this.cacheBtn = btn('🗄', 'bcp-btn');
-    this.cacheBtn.title = 'Show track cache contents';
-    this.cacheBtn.addEventListener('click', () => this.onShowCache?.());
-
-    this.reloadBtn = btn('⟳', 'bcp-btn');
-    this.reloadBtn.title = 'Reload playlist information (clears track cache)';
-    this.reloadBtn.addEventListener('click', async () => {
-      this.reloadBtn.disabled = true;
-      try { await this.onReloadPlaylist?.(); }
-      finally { this.reloadBtn.disabled = false; }
-    });
-
     this.statusEl = el('div', 'bcp-status');
 
-    bar.append(
-      this.artworkEl,
-      trackInfo,
-      this.cartActionsEl,
-      controls,
-      seekArea,
-      tempoArea,
-      this.queueToggleBtn,
-      this.statusEl,
-      this.cacheBtn,
-      this.reloadBtn
-    );
+    this.playlistTabsEl = el('div');
+    this.playlistTabsEl.id = 'bcp-tabs';
+
+    this.reverseSlot = el('div', 'bcp-reverse-slot');
+
+    const side = el('div', 'bcp-side');
+    side.append(this.statusEl, tempoArea, this.queueToggleBtn, this.reverseSlot);
+
+    bar.append(this.artworkEl, trackInfo, this.playlistTabsEl, center, side);
 
     return bar;
   }
@@ -832,20 +822,12 @@ export class Player {
     this.artworkEl.src = track.artworkUrl || '';
     this.titleEl.textContent = track.trackTitle || '(untitled)';
     this.titleEl.href = track.pageUrl;
-    this.subEl.innerHTML = '';
-    if (track.artist) this.subEl.appendChild(document.createTextNode(track.albumTitle ? `${track.artist} — ` : track.artist));
-    if (track.albumTitle) {
-      const albumLink = document.createElement('a');
-      albumLink.className = 'bcp-track-album-link';
-      albumLink.href = track.releaseUrl;
-      albumLink.target = '_blank';
-      albumLink.rel = 'noopener noreferrer';
-      albumLink.textContent = track.albumTitle;
-      this.subEl.appendChild(albumLink);
-    }
+    this.releaseEl.textContent = track.albumTitle || track.trackTitle || '(untitled)';
+    this.releaseEl.href = track.releaseUrl;
+    this.artistEl.textContent = track.artist ? `by ${track.artist}` : '';
     if (needsReload) {
-      this.currentTimeEl.textContent = '0:00';
-      this.seekBar.value = '0';
+      this.currentTimeEl.textContent = fmtTime(0);
+      this.setSeekPercent(0);
     }
     this.totalTimeEl.textContent = fmtTime(track.durationSec);
     this.updateNavButtons();
@@ -1010,7 +992,7 @@ export class Player {
       this.playPauseBtn.replaceChildren(spinner);
       this.playPauseBtn.setAttribute('aria-label', 'Loading');
     } else {
-      this.playPauseBtn.textContent = state === 'play' ? '▶' : '⏸';
+      this.playPauseBtn.replaceChildren(icon(state));
       this.playPauseBtn.setAttribute('aria-label', state === 'play' ? 'Play' : 'Pause');
     }
   }
@@ -1109,7 +1091,7 @@ export class Player {
     on('timeupdate', () => {
       if (this.seeking || !isFinite(this.audio.duration)) return;
       this.currentTimeEl.textContent = fmtTime(this.audio.currentTime);
-      this.seekBar.value = String((this.audio.currentTime / this.audio.duration) * 100);
+      this.setSeekPercent((this.audio.currentTime / this.audio.duration) * 100);
     });
 
     on('loadedmetadata', () => {
@@ -1228,7 +1210,7 @@ export class Player {
     });
     this.clearPreloaded();
     if (!this.audio.paused) void this.preloadUpcoming();
-    this.updateHeader();
+    this.updatePlaylistTabs();
     this.updateQueueEl();
     this.updateNavButtons();
   }
@@ -1413,6 +1395,12 @@ export class Player {
     this.tempoMTBtn.classList.toggle('bcp-tempo-btn-active', this.preservesPitch);
   }
 
+  private setSeekPercent(percent: number) {
+    this.seekBar.value = String(percent);
+    updateRangeFill(this.seekBar);
+  }
+
+
 
 }
 
@@ -1469,10 +1457,39 @@ function unloadAudio(audio: HTMLAudioElement) {
   audio.load();
 }
 
+// Zero-padded like Bandcamp's own player: 00:01 / 07:51.
 function fmtTime(seconds: number): string {
   const s = Math.max(0, Math.floor(seconds));
   const m = Math.floor(s / 60);
   const rem = s % 60;
-  return `${m}:${rem.toString().padStart(2, '0')}`;
+  return `${m.toString().padStart(2, '0')}:${rem.toString().padStart(2, '0')}`;
+}
+
+// Lets the stylesheet colour a range input's track up to its thumb.
+function updateRangeFill(input: HTMLInputElement) {
+  const min = parseFloat(input.min) || 0;
+  const max = parseFloat(input.max) || 100;
+  const fraction = (parseFloat(input.value) - min) / (max - min);
+  input.style.setProperty('--bcp-fill', `${Math.max(0, Math.min(1, fraction)) * 100}%`);
+}
+
+// 24x24 Material Design icon paths.
+const ICON_PATHS = {
+  play: 'M8 5v14l11-7z',
+  pause: 'M6 5h4v14H6zm8 0h4v14h-4z',
+  previous: 'M6 6h2v12H6zm3.5 6 8.5 6V6z',
+  next: 'M16 6h2v12h-2zM6 18l8.5-6L6 6z',
+} as const;
+
+function icon(name: keyof typeof ICON_PATHS): SVGSVGElement {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.classList.add('bcp-icon');
+  const path = document.createElementNS(ns, 'path');
+  path.setAttribute('d', ICON_PATHS[name]);
+  svg.appendChild(path);
+  return svg;
 }
 

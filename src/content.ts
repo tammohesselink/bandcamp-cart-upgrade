@@ -7,18 +7,14 @@ import { addSnapshotIfChanged, loadSnapshots, saveSnapshots } from './cart-histo
 import { openCartHistoryModal } from './cart-history-modal';
 import { createNamedCart, deleteNamedCart, toggleItemInNamedCart, partitionByCart } from './named-carts';
 import { normalizeUrl } from './url';
-import { formatTimestamp } from './format';
 import { ensureModalStyles } from './styles';
 import {
   readCache,
   readCacheBatch,
   needsPlayabilityRecheck,
   writeCache,
-  clearTrackCache,
-  listCacheEntries,
   TRACK_DETAILS_MAX_AGE_MS,
   LIVE_DATA_MAX_AGE_MS,
-  type CacheDump,
 } from './cache';
 import {
   readPageContext,
@@ -392,121 +388,6 @@ function showNamedCartCheckoutModal(player: Player | null): void {
       list.appendChild(li);
     }
   }
-  modal.appendChild(list);
-
-  const actions = document.createElement('div');
-  actions.className = 'bcp-ha';
-  const closeBtn = document.createElement('button');
-  closeBtn.className = 'bcp-hcl';
-  closeBtn.textContent = 'Close';
-  actions.appendChild(closeBtn);
-  modal.appendChild(actions);
-  backdrop.appendChild(modal);
-
-  const close = () => {
-    document.removeEventListener('keydown', onKey);
-    backdrop.remove();
-  };
-  const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
-  document.addEventListener('keydown', onKey);
-  backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
-  closeBtn.addEventListener('click', close);
-
-  document.body.appendChild(backdrop);
-}
-
-// --- Cache viewer modal -------------------------------------------------------
-
-function formatDuration(secs: number): string {
-  const m = Math.floor(secs / 60);
-  const s = Math.floor(secs % 60);
-  return `${m}:${s.toString().padStart(2, '0')}`;
-}
-
-function showCacheModal(entries: CacheDump[]): void {
-  ensureModalStyles();
-
-  const backdrop = document.createElement('div');
-  backdrop.className = 'bcp-hb';
-
-  const modal = document.createElement('div');
-  modal.className = 'bcp-hm bcp-cache-hm';
-
-  const title = document.createElement('h3');
-  title.textContent = `Track cache (${entries.length} entr${entries.length !== 1 ? 'ies' : 'y'})`;
-  modal.appendChild(title);
-
-  const list = document.createElement('ul');
-  list.className = 'bcp-hl';
-
-  if (entries.length === 0) {
-    const empty = document.createElement('li');
-    empty.className = 'bcp-cache-empty';
-    empty.textContent = 'Cache is empty';
-    list.appendChild(empty);
-  } else {
-    for (const entry of entries) {
-      const li = document.createElement('li');
-
-      const header = document.createElement('div');
-      header.style.cssText = 'display:flex;align-items:baseline;flex-wrap:wrap;gap:4px;margin-bottom:2px';
-
-      const urlLink = document.createElement('a');
-      urlLink.className = 'bcp-cache-url';
-      urlLink.href = entry.url;
-      urlLink.target = '_blank';
-      urlLink.rel = 'noopener noreferrer';
-      urlLink.textContent = entry.url;
-
-      const meta = document.createElement('span');
-      meta.className = 'bcp-cache-meta';
-      meta.textContent = `${entry.tracks.length} track${entry.tracks.length !== 1 ? 's' : ''} · cached ${formatTimestamp(entry.cachedAt)}`;
-
-      header.append(urlLink, meta);
-      li.appendChild(header);
-
-      const trackList = document.createElement('ul');
-      trackList.className = 'bcp-cache-tracks';
-
-      for (const track of entry.tracks) {
-        const row = document.createElement('li');
-
-        const titleSpan = document.createElement('span');
-        titleSpan.className = 'bcp-cache-track-title';
-        titleSpan.textContent = track.trackTitle || '(untitled)';
-
-        const detail = document.createElement('span');
-        detail.className = 'bcp-cache-track-detail';
-        const parts: string[] = [];
-        if (track.artist) parts.push(track.artist);
-        if (track.albumTitle) parts.push(track.albumTitle);
-        if (track.durationSec) parts.push(formatDuration(track.durationSec));
-        detail.textContent = parts.join(' · ');
-
-        const priceStr: string[] = [];
-        if (track.minPrice != null) priceStr.push(`release: ${track.minPrice} ${track.currency ?? ''}`);
-        if (track.trackMinPrice != null) priceStr.push(`track: ${track.trackMinPrice} ${track.currency ?? ''}`);
-        const flags: string[] = [];
-        if (!track.purchasable) flags.push('not purchasable');
-        if (track.unplayable) flags.push('unplayable');
-
-        row.append(titleSpan, detail);
-
-        if (priceStr.length > 0 || flags.length > 0) {
-          const extra = document.createElement('span');
-          extra.className = 'bcp-cache-flags';
-          extra.textContent = [...priceStr, ...flags].join(' · ');
-          row.appendChild(extra);
-        }
-
-        trackList.appendChild(row);
-      }
-
-      li.appendChild(trackList);
-      list.appendChild(li);
-    }
-  }
-
   modal.appendChild(list);
 
   const actions = document.createElement('div');
@@ -1513,11 +1394,6 @@ async function main() {
     refreshPlayButtons();
   };
 
-  player.onShowCache = async () => {
-    const entries = await listCacheEntries();
-    showCacheModal(entries);
-  };
-
   // The current page's tracks are already in the DOM, so they load before the
   // cart and discography, which each need a fetch per release. Being the first
   // playlist set, it also becomes the active one.
@@ -1526,13 +1402,10 @@ async function main() {
     : [];
   const pageLoadedAt = Date.now();
   for (const track of pageTracks) track.streamFetchedAt = pageLoadedAt;
-  const setCurrentPageStatus = () => {
-    const n = pageTracks.length;
-    player.setPlaylistStatus('currentpage', `${n} track${n !== 1 ? 's' : ''}`, 'info');
-  };
   if (pageTracks.length > 0) {
+    const n = pageTracks.length;
     player.setPlaylist('currentpage', 'Current page', pageTracks);
-    setCurrentPageStatus();
+    player.setPlaylistStatus('currentpage', `${n} track${n !== 1 ? 's' : ''}`, 'info');
     const teardown = setupNativePlayerSync(player);
     window.addEventListener('pagehide', teardown, { once: true });
   } else if (discoItems.length === 0) {
@@ -1670,22 +1543,6 @@ async function main() {
     };
     discoBtn.addEventListener('click', () => void playDiscographyWhenLoaded(playDiscographyFromStart, NO_DISCOGRAPHY_STREAMS));
   }
-
-  player.onReloadPlaylist = async () => {
-    player.setStatus('Reloading playlist info…', 'loading');
-    await clearTrackCache();
-    if (pageTracks.length > 0) setCurrentPageStatus();
-    if (cartItems.length > 0) {
-      await loadCartPlaylist(cartItems, player);
-    }
-    if (discoLoad) {
-      // Let a load that is still running finish, so two never run at once.
-      await discoLoad;
-      discoLoad = null;
-      discoLoaded = false;
-      await loadDiscography();
-    }
-  };
 
   if (cartItems.length > 0) {
     await loadCartPlaylist(cartItems, player);

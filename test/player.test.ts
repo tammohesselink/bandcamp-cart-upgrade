@@ -149,7 +149,7 @@ describe('Player stream link refresh', () => {
     expect(audioOf(player).src).toBe('https://t4.bcbits.com/stream/track-2-old');
   });
 
-  it('shows a spinner on the play button while a link is being refreshed and the play glyph after a pause', async () => {
+  it('shows a spinner on the play button while a link is being refreshed and the play icon after a pause', async () => {
     const player = new Player([expiredTrack(1)]);
     player.onRefreshStream = () => new Promise<void>(() => {});
     const playButton = player.wrapper.querySelector('.bcp-btn-play')!;
@@ -161,10 +161,10 @@ describe('Player stream link refresh', () => {
 
     expect(spinnerWhileRefreshing).not.toBeNull();
     expect(playButton.querySelector('.bcp-spinner')).toBeNull();
-    expect(playButton.textContent).toBe('▶');
+    expect(playButton.getAttribute('aria-label')).toBe('Play');
   });
 
-  it('shows the play glyph again when the browser refuses to play after a refresh', async () => {
+  it('shows the play icon again when the browser refuses to play after a refresh', async () => {
     const player = new Player([expiredTrack(1)]);
     refreshWith(player);
     vi.spyOn(audioOf(player), 'play').mockRejectedValue(new Error('NotAllowedError'));
@@ -174,7 +174,7 @@ describe('Player stream link refresh', () => {
     await settle();
 
     expect(playButton.querySelector('.bcp-spinner')).toBeNull();
-    expect(playButton.textContent).toBe('▶');
+    expect(playButton.getAttribute('aria-label')).toBe('Play');
   });
 
   it('does not start playback when pause is pressed while a link is being refreshed', async () => {
