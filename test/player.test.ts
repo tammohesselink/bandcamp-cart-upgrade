@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { Player } from '../src/player';
 import type { PlaylistTrack } from '../src/types';
+import { normalizeUrl } from '../src/url';
 import { makeTrack } from './track-factory';
 
 const HOUR = 60 * 60 * 1000;
@@ -641,15 +642,44 @@ describe('Player cart buttons', () => {
 
   it('shows a track page as in the cart once its album was added', async () => {
     const albumUrl = 'https://solardrift.bandcamp.com/album/echoes-of-the-void';
-    const player = await playing(freshTrack(1, {
+    const player = new Player([]);
+    player.setPlaylist('currentpage', 'This page', [freshTrack(1, {
       releaseType: 'track',
       releaseUrl: 'https://solardrift.bandcamp.com/track/track-1',
       albumUrl,
-    }));
+    })]);
 
     player.addCartUrl(albumUrl);
 
     expect(player.wrapper.querySelector('.bcp-in-cart-badge')?.textContent).toBe('✓ In cart (full album)');
+  });
+
+  it('offers "Add to named cart" beside Remove on the Cart tab, without the in-cart badge', async () => {
+    const track = freshTrack(1);
+    const player = new Player([track]);
+    const onTagTrack = vi.fn();
+    player.onTagTrack = onTagTrack;
+    player.setCartUrls(new Set([normalizeUrl(track.releaseUrl)]));
+
+    const actions = Array.from(player.wrapper.querySelector('.bcp-cart-actions')!.children).map((a) => a.textContent);
+    expect(actions).toEqual(['Remove', 'Add to named cart']);
+
+    cartButton(player, 'Add to named cart').click();
+    expect(onTagTrack).toHaveBeenCalledWith(track, track.releaseUrl);
+  });
+
+  it('names how many named carts the playing release is in', async () => {
+    const track = freshTrack(1);
+    const player = new Player([track]);
+    player.onTagTrack = vi.fn();
+    player.setCartUrls(new Set([normalizeUrl(track.releaseUrl)]));
+    const item = { url: track.releaseUrl, title: 'Echoes of the Void' };
+    player.setNamedCarts([
+      { id: 'a', name: 'Birthday', createdAt: 0, items: [item] },
+      { id: 'b', name: 'Later', createdAt: 0, items: [item] },
+    ]);
+
+    expect(cartButton(player, 'In 2 named carts').title).toBe('In: Birthday, Later');
   });
 });
 

@@ -1261,6 +1261,7 @@ export class Player {
       const inCartAsAlbum = !this.cartUrls.has(normalizeUrl(track.pageUrl));
 
       const removeBtn = btn('Remove', 'bcp-cart-action-btn bcp-remove-btn');
+      removeBtn.title = inCartAsAlbum ? 'Remove the full album from your cart' : 'Remove from your cart';
       removeBtn.addEventListener('click', async () => {
         const releaseLabel = track.albumTitle || track.trackTitle || 'this release';
         const confirmed = await this.showConfirm(
@@ -1273,9 +1274,14 @@ export class Player {
         removeBtn.disabled = false;
       });
 
-      const badge = el('span', 'bcp-in-cart-badge');
-      badge.textContent = inCartAsAlbum ? '✓ In cart (full album)' : '✓ In cart';
-      this.cartActionsEl.append(badge, removeBtn);
+      // Every track on the Cart tab is in the cart, so the badge is left off
+      // there, which leaves room for "Add to named cart" beside Remove.
+      if (this.activeId !== 'cart') {
+        const badge = el('span', 'bcp-in-cart-badge');
+        badge.textContent = inCartAsAlbum ? '✓ In cart (full album)' : '✓ In cart';
+        this.cartActionsEl.append(badge);
+      }
+      this.cartActionsEl.append(removeBtn);
     } else {
       // Always show both buttons so the layout is the same for every track.
       // A single-track release is added through "+ Track" (the track is the
@@ -1330,7 +1336,10 @@ export class Player {
 
   private buildTagButton(track: PlaylistTrack): HTMLButtonElement {
     const ids = this.namedCartIdsFor(track);
-    const tagBtn = btn(ids.length > 0 ? `🏷 ${ids.length}` : '🏷', 'bcp-cart-action-btn bcp-tag-btn');
+    const tagBtn = btn(
+      ids.length > 0 ? `In ${ids.length} named cart${ids.length !== 1 ? 's' : ''}` : 'Add to named cart',
+      'bcp-cart-action-btn bcp-tag-btn'
+    );
     if (ids.length > 0) {
       const names = ids.map((id) => this.namedCarts.find((c) => c.id === id)?.name).filter(Boolean);
       tagBtn.title = `In: ${names.join(', ')}`;

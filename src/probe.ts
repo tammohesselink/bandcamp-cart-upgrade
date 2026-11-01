@@ -142,7 +142,7 @@ export function injectRemoveAlreadyOwnedButton(): HTMLButtonElement | null {
 
   const button = document.createElement('button');
   button.className = 'buttonLink bcp-remove-owned-btn';
-  button.textContent = 'Remove already purchased items from cart';
+  button.textContent = 'Remove purchased items from cart';
   anchor.insertAdjacentElement('afterend', button);
   return button;
 }

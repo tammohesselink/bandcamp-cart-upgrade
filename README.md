@@ -9,6 +9,7 @@ A Chrome extension that embeds a persistent playlist player into your Bandcamp c
 - **Play buttons** — injects ▶ buttons on each cart item and discography grid item
 - **Reverse order** — the ⇅ Reverse playlist order button at the right of the player plays the releases last to first (newest added first in the cart, oldest first for a label discography); tracks within a release keep their order, and the choice is remembered per playlist
 - **Cart management** — add/remove releases from your cart directly in the player
+- **Named carts** — on the player's Cart tab, "Add to named cart" files the playing release into one or more named carts (or a new one); "Checkout a cart" below Bandcamp's cart then checks out just one named cart in a private window
 - **Cart history export/import** — move your cart history to another browser or laptop: click Export in the extension popup, then Import the JSON file there (imported snapshots are merged with the existing history)
 - **Caching** — track details are cached for six months; stream links are refreshed when a track is about to play if they are more than an hour old
 

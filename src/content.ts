@@ -339,7 +339,7 @@ function showNamedCartCheckoutModal(player: Player | null): void {
   if (namedCarts.length === 0) {
     const empty = document.createElement('li');
     empty.className = 'bcp-nc-empty';
-    empty.textContent = 'No named carts yet — tag tracks from the Cart tab in the player';
+    empty.textContent = 'No named carts yet — use "Add to named cart" on the player\'s Cart tab';
     list.appendChild(empty);
   } else {
     const current = probeCart();
@@ -793,7 +793,7 @@ async function isCartItemOwned(item: CartItem): Promise<boolean | null> {
 function setupRemoveAlreadyOwnedButton(): void {
   const btn = injectRemoveAlreadyOwnedButton();
   if (!btn) return;
-  const idleLabel = btn.textContent ?? 'Remove already purchased items from cart';
+  const idleLabel = btn.textContent ?? 'Remove purchased items from cart';
   const reset = () => {
     btn.disabled = false;
     btn.textContent = idleLabel;
