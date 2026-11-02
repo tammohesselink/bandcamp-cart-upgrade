@@ -33,6 +33,7 @@ import { sendBcpMessage } from './messages';
 import { mapWithConcurrency } from './inflight';
 import { log, initDebugLogging } from './log';
 import { loadSettings, onSettingsChanged } from './settings';
+import { NowPlayingMirror, needsNowPlayingMirror } from './now-playing-mirror';
 
 // Appended to error alerts: the [bcp] logs are silent until the user switches them on.
 const DEBUG_LOGGING_HINT = "To see why, turn on debug logging in the extension's advanced options, try again and check the browser console.";
@@ -78,6 +79,11 @@ const tracksByReleaseUrl: Record<'cart' | 'discography', Map<string, PlaylistTra
 // of the Player — can read the current values from its click handler.
 let namedCarts: NamedCart[] = [];
 let activePlayer: Player | null = null;
+
+// Lets extensions that read the playing track from the page see the player on
+// label and cart pages. Made before main() awaits anything, so it is on the page
+// before they load.
+const nowPlayingMirror = needsNowPlayingMirror(document) ? new NowPlayingMirror(document) : null;
 
 // Whether named carts show at all: the "Enable named carts" option, and never
 // in incognito (see main()). Switching the option applies straight away.
@@ -1249,6 +1255,7 @@ async function main() {
 
   player.onTrackChange = (id, index) => {
     const track = player.getPlaylistTracks(id)[index];
+    nowPlayingMirror?.setTrack(track ?? null);
     if (id === 'cart') {
       highlightCartItem(track ? releaseUrlForTrack('cart', track) : null);
       clearDiscoHighlight();
@@ -1260,6 +1267,8 @@ async function main() {
       clearDiscoHighlight();
     }
   };
+
+  player.onPlayStateChange = (playing) => nowPlayingMirror?.setPlaying(playing);
 
   // Wire up cart mutation callbacks.
   player.onCartAdd = async (pageTrack, requestedAddType) => {
