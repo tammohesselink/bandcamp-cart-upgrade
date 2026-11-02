@@ -683,6 +683,13 @@ describe('Player cart buttons', () => {
     expect(cartButton(player, '+ Release').classList.contains('bcp-disabled')).toBe(false);
   });
 
+  it('shows an album track bought on its own as purchased, still offering the album', async () => {
+    const player = await playing(freshTrack(1, { trackOwned: true }));
+
+    const actions = Array.from(player.wrapper.querySelector('.bcp-cart-actions')!.children).map((a) => a.textContent);
+    expect(actions).toEqual(['✓ Purchased', '+ Release']);
+  });
+
   it('shows a track page as in the cart once its album was added', async () => {
     const albumUrl = 'https://solardrift.bandcamp.com/album/echoes-of-the-void';
     const player = new Player([]);
