@@ -663,6 +663,26 @@ describe('Player cart buttons', () => {
     expect(onCartAdd).toHaveBeenCalledWith(expect.objectContaining({ trackId: 1 }), 'album');
   });
 
+  it('shows an owned album as purchased instead of offering to add it', async () => {
+    const player = await playing(freshTrack(1, { owned: true }));
+
+    const actions = Array.from(player.wrapper.querySelector('.bcp-cart-actions')!.children).map((a) => a.textContent);
+    expect(actions).toEqual(['✓ Purchased']);
+  });
+
+  it('still offers the album of an owned single track', async () => {
+    const player = await playing(freshTrack(1, {
+      releaseType: 'track',
+      releaseUrl: 'https://solardrift.bandcamp.com/track/track-1',
+      albumUrl: 'https://solardrift.bandcamp.com/album/echoes-of-the-void',
+      owned: true,
+    }));
+
+    const actions = Array.from(player.wrapper.querySelector('.bcp-cart-actions')!.children).map((a) => a.textContent);
+    expect(actions).toEqual(['✓ Purchased', '+ Release']);
+    expect(cartButton(player, '+ Release').classList.contains('bcp-disabled')).toBe(false);
+  });
+
   it('shows a track page as in the cart once its album was added', async () => {
     const albumUrl = 'https://solardrift.bandcamp.com/album/echoes-of-the-void';
     const player = new Player([]);
