@@ -879,7 +879,7 @@ export class Player {
     }
   }
 
-  private currentTrack(): PlaylistTrack | null {
+  currentTrack(): PlaylistTrack | null {
     const state = this.active();
     return state?.tracks[state.lastIndex] ?? null;
   }

@@ -52,9 +52,10 @@ export interface BandcampPageContext {
 /**
  * Reads auth/state values from Bandcamp's inline scripts and data attributes in
  * a single DOM pass. Returns zeros/empty strings for any value not found, and
- * logs a single warning (in development) listing which fields are missing.
+ * logs a single warning (in development) listing which fields are missing,
+ * unless `warn` is false.
  */
-export function readPageContext(latestSyncNum: number | null): BandcampPageContext {
+export function readPageContext(latestSyncNum: number | null, { warn = true } = {}): BandcampPageContext {
   let syncNum: number | null = latestSyncNum;
   let clientId = '';
   let currency = '';
@@ -125,7 +126,7 @@ export function readPageContext(latestSyncNum: number | null): BandcampPageConte
   if (syncNum === null) missing.push('sync_num');
   if (!clientId) missing.push('client_id');
   if (!fanId) missing.push('fan_id');
-  if (missing.length > 0) {
+  if (warn && missing.length > 0) {
     log.warn(
       `[bcp] Could not find ${missing.join(', ')} in page. ` +
         'Cart mutations may fail. Bandcamp may have changed their page format.'

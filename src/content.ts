@@ -1256,7 +1256,6 @@ async function main() {
   player.onTrackChange = (id, index) => {
     const track = player.getPlaylistTracks(id)[index];
     nowPlayingMirror?.setTrack(track ?? null);
-    if (track) void checkTrackOwnership(player, track);
     if (id === 'cart') {
       highlightCartItem(track ? releaseUrlForTrack('cart', track) : null);
       clearDiscoHighlight();
@@ -1269,7 +1268,11 @@ async function main() {
     }
   };
 
-  player.onPlayStateChange = (playing) => nowPlayingMirror?.setPlaying(playing);
+  player.onPlayStateChange = (playing) => {
+    nowPlayingMirror?.setPlaying(playing);
+    const track = player.currentTrack();
+    if (playing && track) void checkTrackOwnership(player, track);
+  };
 
   // Wire up cart mutation callbacks.
   player.onCartAdd = async (pageTrack, requestedAddType) => {
@@ -1306,23 +1309,21 @@ async function main() {
     // We also check purchasability here: album pages always produce purchasable=true since
     // the signal only exists on a track's own page. If the track page shows it's album-only,
     // abort — sending the request to Bandcamp can cause unexpected cart state changes.
-    if (addType === 'track' && minPrice === null) {
-      try {
-        const response = await sendBcpMessage({ type: 'fetch', url: track.pageUrl });
-        if (!response.error) {
-          const parsed = parseTralbum(response.html ?? '', track.pageUrl);
-          if (parsed.length > 0) {
-            if (!parsed[0]!.purchasable) {
-              player.showToast('Cannot purchase single track, only full release available', 'error');
-              return false;
-            }
-            if (parsed[0]!.minPrice !== null) {
-              minPrice = parsed[0]!.minPrice;
-            }
-          }
+    // The track page is also the only place that says the fan owns the track,
+    // which the bar may not know yet if it was clicked before that check returned.
+    if (addType === 'track') {
+      const parsed = await fetchTracksForUrl(track.pageUrl, LIVE_DATA_MAX_AGE_MS);
+      if (parsed[0]?.owned) {
+        player.showToast('You already own this track', 'info');
+        return;
+      }
+      if (minPrice === null && parsed.length > 0) {
+        if (!parsed[0]!.purchasable) {
+          player.showToast('Cannot purchase single track, only full release available', 'error');
+          return false;
         }
-      } catch {
-        // proceed with null → background sends unit_price=0
+        // A null price makes the background send unit_price=0.
+        minPrice = parsed[0]!.minPrice;
       }
     }
 
@@ -1947,18 +1948,21 @@ async function fetchRawHtml(url: string): Promise<string | null> {
 }
 
 // Album pages only say whether the fan owns the whole album, so a track bought
-// on its own is read from the track's own page once it starts playing. Only a
+// on its own is read from the track's own page whenever it starts playing. The
+// page is cached for an hour, so a replay re-checks without refetching. Only a
 // logged-in fan can own anything, so logged-out pages skip the fetch.
-let fanLoggedIn: boolean | null = null;
 async function checkTrackOwnership(player: Player, track: PlaylistTrack): Promise<void> {
   if (track.releaseType !== 'album' || track.owned || track.trackId === null) return;
-  if (track.trackOwned !== undefined || track.pageUrl === track.releaseUrl) return;
-  fanLoggedIn ??= !!readPageContext(latestSyncNum).fanId;
-  if (!fanLoggedIn) return;
+  if (track.pageUrl === track.releaseUrl) return;
+  if (!readPageContext(latestSyncNum, { warn: false }).fanId) return;
   const pageTracks = await fetchTracksForUrl(track.pageUrl, LIVE_DATA_MAX_AGE_MS);
   if (pageTracks.length === 0) return;
-  track.trackOwned = pageTracks[0]!.owned ?? false;
-  if (track.trackOwned) player.updateCartViews();
+  const owned = pageTracks[0]!.owned ?? false;
+  // The same track can sit in several playlists as separate copies.
+  for (const copy of allPlaylistTracks(player)) {
+    if (copy.pageUrl === track.pageUrl) copy.trackOwned = owned;
+  }
+  player.updateCartViews();
 }
 
 // The album's copy of a single-track page's track, which carries the album's
