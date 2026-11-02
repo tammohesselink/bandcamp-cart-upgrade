@@ -1256,6 +1256,7 @@ async function main() {
   player.onTrackChange = (id, index) => {
     const track = player.getPlaylistTracks(id)[index];
     nowPlayingMirror?.setTrack(track ?? null);
+    if (track) void checkTrackOwnership(player, track);
     if (id === 'cart') {
       highlightCartItem(track ? releaseUrlForTrack('cart', track) : null);
       clearDiscoHighlight();
@@ -1943,6 +1944,21 @@ async function fetchRawHtml(url: string): Promise<string | null> {
     log.error('[bcp] fetchRawHtml: exception for', url, err);
     return null;
   }
+}
+
+// Album pages only say whether the fan owns the whole album, so a track bought
+// on its own is read from the track's own page once it starts playing. Only a
+// logged-in fan can own anything, so logged-out pages skip the fetch.
+let fanLoggedIn: boolean | null = null;
+async function checkTrackOwnership(player: Player, track: PlaylistTrack): Promise<void> {
+  if (track.releaseType !== 'album' || track.owned || track.trackId === null) return;
+  if (track.trackOwned !== undefined || track.pageUrl === track.releaseUrl) return;
+  fanLoggedIn ??= !!readPageContext(latestSyncNum).fanId;
+  if (!fanLoggedIn) return;
+  const pageTracks = await fetchTracksForUrl(track.pageUrl, LIVE_DATA_MAX_AGE_MS);
+  if (pageTracks.length === 0) return;
+  track.trackOwned = pageTracks[0]!.owned ?? false;
+  if (track.trackOwned) player.updateCartViews();
 }
 
 // The album's copy of a single-track page's track, which carries the album's

@@ -59,6 +59,9 @@ export interface PlaylistTrack {
   // The logged-in fan already owns this release (for a track page, the track).
   // Missing on entries cached before it existed.
   owned?: boolean;
+  // The fan owns this album track on its own, read from the track's own page
+  // (album pages don't say). Missing until that page has been checked.
+  trackOwned?: boolean;
   // When streamUrl was fetched. Bandcamp stream links are signed and expire.
   streamFetchedAt?: number;
 }
