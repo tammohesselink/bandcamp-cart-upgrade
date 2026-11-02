@@ -1385,6 +1385,15 @@ export class Player {
         ? 'release'
         : track.trackId !== null ? 'track' : null;
 
+      // An owned album has nothing left to buy. An owned single track can
+      // still be on an album the fan doesn't own, so "+ Release" stays.
+      const ownedBadge = el('span', 'bcp-in-cart-badge');
+      ownedBadge.textContent = '✓ Purchased';
+      if (track.owned && isAlbum) {
+        this.cartActionsEl.append(ownedBadge);
+        return;
+      }
+
       const addTrackBtn = btn('+ Track', 'bcp-cart-action-btn');
       if (trackAddType !== null && track.purchasable) {
         addTrackBtn.addEventListener('click', async () => {
@@ -1411,7 +1420,7 @@ export class Player {
         addReleaseBtn.classList.add('bcp-disabled');
       }
 
-      this.cartActionsEl.append(addTrackBtn, addReleaseBtn);
+      this.cartActionsEl.append(track.owned ? ownedBadge : addTrackBtn, addReleaseBtn);
     }
 
     // Named-cart tagging only makes sense for items in the real Bandcamp cart,

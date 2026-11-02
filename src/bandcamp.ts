@@ -35,6 +35,7 @@ export function parseTralbum(html: string, pageUrl: string): PlaylistTrack[] {
     ? (data.album_url ?? extractIdHref(scanned, 'buyAlbumLink'))
     : null;
   const albumUrl = albumHref ? resolveUrl(albumHref, pageUrl) : null;
+  const owned = isOwned(data, html);
 
   return (data.trackinfo ?? []).map((t) => {
     // Per-track minimum price: prefer minimum_price (PWYW floor) when > 0,
@@ -65,6 +66,7 @@ export function parseTralbum(html: string, pageUrl: string): PlaylistTrack[] {
       currency: null,
       purchasable: !albumOnly,
       albumUrl,
+      owned,
     };
   });
 }
@@ -291,9 +293,15 @@ function stripUserContent(html: string): string {
 // present (true or false) — the rendered "you own this" buy panel is only a
 // fallback for pages where Bandcamp doesn't set the flag at all (null/undefined).
 export function isReleaseOwned(html: string): boolean {
-  const isPurchased = extractTralbumData(html)?.is_purchased;
+  return isOwned(extractTralbumData(html), html);
+}
+
+function isOwned(data: TralbumData | null, html: string): boolean {
+  const isPurchased = data?.is_purchased;
   if (isPurchased != null) return isPurchased;
 
+  // Most pages contain neither phrase, so they skip the costly strip.
+  if (!OWNED_PATTERNS.some((pattern) => pattern.test(html))) return false;
   return OWNED_PATTERNS.some((pattern) => pattern.test(stripUserContent(html)));
 }
 

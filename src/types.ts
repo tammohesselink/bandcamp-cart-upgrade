@@ -56,6 +56,9 @@ export interface PlaylistTrack {
   // Album a single-track page belongs to, read from the track's own page.
   // "+ Release" adds this album. Missing on entries cached before it existed.
   albumUrl?: string | null;
+  // The logged-in fan already owns this release (for a track page, the track).
+  // Missing on entries cached before it existed.
+  owned?: boolean;
   // When streamUrl was fetched. Bandcamp stream links are signed and expire.
   streamFetchedAt?: number;
 }

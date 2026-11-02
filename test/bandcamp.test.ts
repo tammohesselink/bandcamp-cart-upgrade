@@ -264,6 +264,26 @@ describe('parseTralbum — invalid HTML', () => {
   });
 });
 
+describe('parseTralbum — ownership', () => {
+  const pageUrl = 'https://solardrift.bandcamp.com/album/echoes-of-the-void';
+  const trackinfo = [{ id: 1, title: 'Intro' }];
+
+  it('marks tracks of a purchased release as owned', () => {
+    const tracks = parseTralbum(tralbumPage({ is_purchased: true, trackinfo }), pageUrl);
+    expect(tracks[0]!.owned).toBe(true);
+  });
+
+  it('does not mark tracks of an unpurchased release as owned', () => {
+    const tracks = parseTralbum(tralbumPage({ is_purchased: false, trackinfo }), pageUrl);
+    expect(tracks[0]!.owned).toBe(false);
+  });
+
+  it('falls back to the "you own this" buy panel when the flag is missing', () => {
+    const tracks = parseTralbum(tralbumPage({ trackinfo }) + '<p>You own this</p>', pageUrl);
+    expect(tracks[0]!.owned).toBe(true);
+  });
+});
+
 describe('isReleaseOwned', () => {
   const cases: Array<{ name: string; html: string; expected: boolean }> = [
     {

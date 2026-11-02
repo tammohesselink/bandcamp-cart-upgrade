@@ -1282,6 +1282,11 @@ async function main() {
       player.showToast('Could not check the current price, please try again', 'error');
       return;
     }
+    // Ownership can be missing or stale on a cached track; the live fetch is current.
+    if (releaseTracks[0]!.owned) {
+      player.showToast('You already own this release', 'info');
+      return;
+    }
     // A null track price makes the code below read it from the track's own page.
     let minPrice = addType === 'track'
       ? (releaseTracks.find((t) => t.trackId === track.trackId)?.trackMinPrice ?? null)
@@ -1957,6 +1962,7 @@ function applyFreshStreams(fresh: PlaylistTrack[], loaded: PlaylistTrack[]): voi
     track.streamUrl = match.streamUrl;
     track.unplayable = match.unplayable;
     track.streamFetchedAt = match.streamFetchedAt;
+    track.owned = match.owned;
   }
 }
 
