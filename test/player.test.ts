@@ -826,6 +826,19 @@ describe('Player reverse order', () => {
     expect(played).toEqual(['Track 6', 'Track 3', 'Track 4', 'Track 5', 'Track 1', 'Track 2']);
   });
 
+  it('enables Next as soon as tracks are added after the playing one', async () => {
+    stubStorage();
+    const [first, ...rest] = threeReleases();
+    const player = new Player([first!]);
+    player.jumpTo('cart', 0);
+    await settle();
+    expect(nextButton(player).disabled).toBe(true);
+
+    player.addTracksToPlaylist('cart', rest);
+
+    expect(nextButton(player).disabled).toBe(false);
+  });
+
   it('lists the queue in play order and plays the clicked track', async () => {
     stubStorage();
     const player = new Player(threeReleases());

@@ -2029,9 +2029,12 @@ async function recheckPlayability(urls: string[], player: Player): Promise<void>
 // queueing work it may not wait for, e.g. when the user navigates away.
 const RELEASE_FETCH_CONCURRENCY = 4;
 
+// `onReleaseLoaded` gets each release's tracks as soon as they are known:
+// cached ones straight away, fetched ones as each fetch returns.
 async function resolvePlaylist(
   items: CartItem[],
-  onProgress: (done: number) => void
+  onProgress: (done: number) => void,
+  onReleaseLoaded?: (item: CartItem, tracks: PlaylistTrack[]) => void
 ): Promise<{
   tracks: PlaylistTrack[];
   tracksByRelease: Map<string, PlaylistTrack[]>;
@@ -2044,11 +2047,16 @@ async function resolvePlaylist(
   const cached = await readCacheBatch(items.map((item) => item.url));
   let done = cached.size;
   onProgress(done);
+  for (const item of items) {
+    const entry = cached.get(item.url);
+    if (entry && entry.tracks.length > 0) onReleaseLoaded?.(item, entry.tracks);
+  }
 
   const misses = items.filter((item) => !cached.has(item.url));
-  const fetched = await mapWithConcurrency(misses, RELEASE_FETCH_CONCURRENCY, (item) => fetchRelease(item.url, { bulk: true }), () => {
+  const fetched = await mapWithConcurrency(misses, RELEASE_FETCH_CONCURRENCY, (item) => fetchRelease(item.url, { bulk: true }), (result, item) => {
     done++;
     onProgress(done);
+    if (result.tracks.length > 0) onReleaseLoaded?.(item, result.tracks);
   });
   const fetchedByUrl = new Map(misses.map((item, i) => [item.url, fetched[i]!]));
 
@@ -2325,16 +2333,29 @@ function setupCollectionPlaylist(player: Player, initialItems: CartItem[]): void
       player.setPlaylistStatus('collection', `Loading releases: ${progress}`, 'loading');
     };
     reportProgress(0);
-    const result = await resolvePlaylist(releases, reportProgress);
-    for (const item of batch) {
-      const key = collectionItemKey(item);
-      const releaseTracks = result.tracksByRelease.get(normalizeUrl(item.url));
-      // An item played before its batch loaded keeps the tracks it plays from.
-      if (releaseTracks && !tracksByReleaseUrl.collection.has(key)) {
+    // The playlist grows as each release arrives, rather than once the whole
+    // batch has, so an item played meanwhile can skip to the next straight away.
+    // Cached releases all arrive at once and are shown together.
+    let showScheduled = false;
+    const onReleaseLoaded = (release: CartItem, releaseTracks: PlaylistTrack[]) => {
+      const releaseUrl = normalizeUrl(release.url);
+      for (const item of batch) {
+        const key = collectionItemKey(item);
+        // An item played before its batch loaded keeps the tracks it plays from.
+        if (normalizeUrl(item.url) !== releaseUrl || tracksByReleaseUrl.collection.has(key)) continue;
         tracksByReleaseUrl.collection.set(key, collectionItemTracks(item, releaseTracks));
       }
+      if (showScheduled) return;
+      showScheduled = true;
+      queueMicrotask(() => {
+        showScheduled = false;
+        showPlaylist();
+      });
+    };
+    const result = await resolvePlaylist(releases, reportProgress, onReleaseLoaded);
+    for (const item of batch) {
       const problem = result.problems.get(item.url);
-      if (problem) problems.set(key, problem);
+      if (problem) problems.set(collectionItemKey(item), problem);
     }
 
     const tracks = showPlaylist();

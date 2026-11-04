@@ -400,7 +400,11 @@ export class Player {
       // Selecting an empty playlist leaves the bar blank, so load its first
       // track now, unless a removed track is still playing.
       if (startIndex === 0 && this.audio.paused) this.loadTrack(firstPlayable(state), true);
-      else this.updateQueueEl();
+      else {
+        this.updateQueueEl();
+        // The playing track may have been the last one, with nothing to skip to.
+        this.updateNavButtons();
+      }
     }
     return startIndex;
   }
