@@ -1157,8 +1157,6 @@ export const MODAL_CSS = `
   .bcp-restore-btn,
   .bcp-remove-owned-btn {
     display: block;
-    box-sizing: border-box;
-    width: 100%;
     margin: 4px 0 0;
     padding: 5px 10px;
     background: none;
@@ -1177,7 +1175,7 @@ export const MODAL_CSS = `
     opacity: 0.85;
   }
 
-  .bcp-restore-btn:disabled,
+  .bcp-checkout-cart-btn:disabled,
   .bcp-remove-owned-btn:disabled {
     border-color: #ccc;
     color: #999;
