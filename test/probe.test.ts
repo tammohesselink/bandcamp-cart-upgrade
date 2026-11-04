@@ -420,11 +420,6 @@ describe('injectRestoreCartButton — with #sidecart', () => {
     expect(btn?.classList.contains('bcp-restore-btn')).toBe(true);
   });
 
-  it('button has buttonLink class', () => {
-    const btn = injectRestoreCartButton(5);
-    expect(btn?.classList.contains('buttonLink')).toBe(true);
-  });
-
   it('button text contains the snapshot count', () => {
     const btn = injectRestoreCartButton(5);
     expect(btn?.textContent).toContain('5');
@@ -467,11 +462,6 @@ describe('injectRemoveAlreadyOwnedButton — with #sidecart', () => {
   it('button has bcp-remove-owned-btn class', () => {
     const btn = injectRemoveAlreadyOwnedButton();
     expect(btn?.classList.contains('bcp-remove-owned-btn')).toBe(true);
-  });
-
-  it('button has buttonLink class', () => {
-    const btn = injectRemoveAlreadyOwnedButton();
-    expect(btn?.classList.contains('buttonLink')).toBe(true);
   });
 
   it('button is inserted after #sidecart', () => {

@@ -1152,6 +1152,7 @@ async function main() {
       applyNamedCartsOption();
     });
     watchNamedCarts();
+    ensureModalStyles();
     setupRemoveAlreadyOwnedButton();
 
     const liveItems: SavedCartItem[] = cartItems.map((i) => ({ url: i.url, title: i.title, purchaseType: i.purchaseType }));
