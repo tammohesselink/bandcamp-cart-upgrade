@@ -1,8 +1,19 @@
-import type { CartItem, PlaylistTrack, SavedCartItem, NamedCart } from './types';
+import type { CartItem, PlaylistId, PlaylistTrack, SavedCartItem, NamedCart } from './types';
 import { hasTralbumData, parseTralbum, isReleaseOwned } from './bandcamp';
 import { Player } from './player';
 import { setupNativePlayerSync } from './native-sync';
-import { probeCart, probeDiscography, injectDiscographyButton, injectRestoreCartButton, injectRemoveAlreadyOwnedButton, injectCheckoutCartButton } from './probe';
+import {
+  probeCart,
+  probeDiscography,
+  probeCollection,
+  readCollectionItem,
+  collectionItemKey,
+  collectionItemTracks,
+  injectDiscographyButton,
+  injectRestoreCartButton,
+  injectRemoveAlreadyOwnedButton,
+  injectCheckoutCartButton,
+} from './probe';
 import { addSnapshotIfChanged, loadSnapshots, saveSnapshots } from './cart-history';
 import { openCartHistoryModal } from './cart-history-modal';
 import { createNamedCart, deleteNamedCart, countItemsInNamedCart, setItemsInNamedCart, partitionByCart } from './named-carts';
@@ -28,6 +39,10 @@ import {
   SEL_MUSIC_GRID,
   SEL_MUSIC_GRID_ITEM,
   SEL_GRID_ITEM_TITLE,
+  SEL_COLLECTION_ITEMS,
+  SEL_COLLECTION_ITEM,
+  SEL_COLLECTION_ITEM_PLAY,
+  SEL_COLLECTION_PLAYER,
 } from './bandcamp-dom';
 import { sendBcpMessage } from './messages';
 import { mapWithConcurrency } from './inflight';
@@ -64,13 +79,17 @@ let addSelectedButton: HTMLButtonElement | null = null;
 // stays disabled however the selection changes meanwhile.
 let checkoutSelectedInFlight = false;
 
+// The playlists made of releases listed on the page.
+type ReleasePlaylistId = Exclude<PlaylistId, 'currentpage'>;
+
 // Per playlist, normalised release URL → its tracks, for the ▶ buttons on the
 // page. The tracks are the playlist's own objects, so a button finds them
 // wherever they are in the playlist, and stream refetches that change their
 // playability show up here too.
-const tracksByReleaseUrl: Record<'cart' | 'discography', Map<string, PlaylistTrack[]>> = {
+const tracksByReleaseUrl: Record<ReleasePlaylistId, Map<string, PlaylistTrack[]>> = {
   cart: new Map(),
   discography: new Map(),
+  collection: new Map(),
 };
 
 // The live named-cart list and the Player instance for the current page, if any
@@ -1220,11 +1239,13 @@ async function main() {
   log.info('[bcp] Cart items found:');
   log.table(cartItems.map((it) => ({ type: it.type, title: it.title, artist: it.artist, url: it.url })));
 
-  // Probe discography early so we can show the player on label pages even when
-  // the cart is empty. Release pages always get the player for their own tracks.
+  // Probe discography and collection early so we can show the player on label
+  // and collection pages even when the cart is empty. Release pages always get
+  // the player for their own tracks.
   const discoItems = probeDiscography();
+  const collectionItems = probeCollection();
 
-  if (cartItems.length === 0 && discoItems.length === 0 && !isTrackOrAlbumPage()) {
+  if (cartItems.length === 0 && discoItems.length === 0 && collectionItems.length === 0 && !isTrackOrAlbumPage()) {
     log.warn(
       '[bcp] No cart items detected. The cart may be empty, or the selectors need updating. ' +
         'Open DevTools, inspect the cart item DOM nodes, and update probeCart() in src/content.ts.'
@@ -1256,16 +1277,11 @@ async function main() {
   player.onTrackChange = (id, index) => {
     const track = player.getPlaylistTracks(id)[index];
     nowPlayingMirror?.setTrack(track ?? null);
-    if (id === 'cart') {
-      highlightCartItem(track ? releaseUrlForTrack('cart', track) : null);
-      clearDiscoHighlight();
-    } else if (id === 'discography') {
-      clearCartHighlight();
-      highlightDiscoItem(track ? releaseUrlForTrack('discography', track) : null);
-    } else {
-      clearCartHighlight();
-      clearDiscoHighlight();
-    }
+    // Only the playing playlist's page item is highlighted; null clears the others.
+    const playingUrl = (playlist: ReleasePlaylistId) => (id === playlist && track ? releaseUrlForTrack(playlist, track) : null);
+    highlightCartItem(playingUrl('cart'));
+    highlightDiscoItem(playingUrl('discography'));
+    highlightCollectionItem(playingUrl('collection'));
   };
 
   player.onPlayStateChange = (playing) => {
@@ -1503,7 +1519,7 @@ async function main() {
     player.setPlaylistStatus('currentpage', `${n} track${n !== 1 ? 's' : ''}`, 'info');
     const teardown = setupNativePlayerSync(player);
     window.addEventListener('pagehide', teardown, { once: true });
-  } else if (discoItems.length === 0) {
+  } else if (discoItems.length === 0 && collectionItems.length === 0) {
     player.setPlaylistUnavailable(
       'currentpage',
       'Current page (nothing to play)',
@@ -1622,13 +1638,15 @@ async function main() {
 
     const onGridPlay = (item: CartItem) => void playGridRelease(item);
     injectDiscographyPlayButtons(discoItems, onGridPlay);
-    watchMusicGrid(() => {
+    watchGridItems(SEL_MUSIC_GRID, SEL_MUSIC_GRID_ITEM, () => {
       injectDiscographyPlayButtons(discoItems, onGridPlay);
       refreshPlayButtons();
       const track = player.currentPlaylistId === 'discography' ? player.getActiveTrack('discography') : null;
       highlightDiscoItem(track ? releaseUrlForTrack('discography', track) : null);
     });
   }
+
+  if (collectionItems.length > 0) setupCollectionPlaylist(player, collectionItems);
 
   if (discoBtn) {
     discoBtn.textContent = `Play label discography: ${discoItems.length} releases`;
@@ -1978,7 +1996,7 @@ async function fetchTracksForUrl(url: string, maxAgeMs = TRACK_DETAILS_MAX_AGE_M
 }
 
 function allPlaylistTracks(player: Player): PlaylistTrack[] {
-  return (['currentpage', 'cart', 'discography'] as const).flatMap((id) => player.getPlaylistTracks(id));
+  return (['currentpage', 'cart', 'discography', 'collection'] as const).flatMap((id) => player.getPlaylistTracks(id));
 }
 
 // Copies stream links and playability from freshly fetched tracks onto the
@@ -2071,7 +2089,7 @@ function describeNothingToPlay(itemCount: number, problems: Map<string, ItemProb
 
 // The page item a playing track belongs to, looked up by the track itself
 // because removals shift the tracks' positions in the playlist.
-function releaseUrlForTrack(id: 'cart' | 'discography', track: PlaylistTrack): string | null {
+function releaseUrlForTrack(id: ReleasePlaylistId, track: PlaylistTrack): string | null {
   const page = normalizeUrl(track.pageUrl);
   for (const [url, tracks] of tracksByReleaseUrl[id]) {
     if (tracks.some((t) => normalizeUrl(t.pageUrl) === page)) return url;
@@ -2094,16 +2112,10 @@ function highlightCartItem(activeUrl: string | null): void {
   }
 }
 
-function clearCartHighlight(): void {
-  const sidecartBody = document.querySelector<HTMLElement>(SEL_SIDECART_BODY);
-  if (!sidecartBody) return;
-  for (const el of Array.from(sidecartBody.querySelectorAll<HTMLElement>('.bcp-playing'))) {
-    el.classList.remove('bcp-playing');
-  }
-}
-
 function highlightDiscoItem(activeUrl: string | null): void {
-  clearDiscoHighlight();
+  for (const li of Array.from(document.querySelectorAll<HTMLElement>(`${SEL_MUSIC_GRID_ITEM}.bcp-playing`))) {
+    li.classList.remove('bcp-playing');
+  }
   if (!activeUrl) return;
   for (const li of Array.from(document.querySelectorAll<HTMLElement>(SEL_MUSIC_GRID_ITEM))) {
     const a = li.querySelector<HTMLAnchorElement>('a[href]');
@@ -2111,9 +2123,14 @@ function highlightDiscoItem(activeUrl: string | null): void {
   }
 }
 
-function clearDiscoHighlight(): void {
-  for (const li of Array.from(document.querySelectorAll<HTMLElement>(`${SEL_MUSIC_GRID_ITEM}.bcp-playing`))) {
+function highlightCollectionItem(activeUrl: string | null): void {
+  for (const li of Array.from(document.querySelectorAll<HTMLElement>(`${SEL_COLLECTION_ITEM}.bcp-playing`))) {
     li.classList.remove('bcp-playing');
+  }
+  if (!activeUrl) return;
+  for (const li of Array.from(document.querySelectorAll<HTMLElement>(`${SEL_COLLECTION_ITEMS} ${SEL_COLLECTION_ITEM}`))) {
+    const item = readCollectionItem(li);
+    if (item && collectionItemKey(item) === activeUrl) li.classList.add('bcp-playing');
   }
 }
 
@@ -2158,7 +2175,7 @@ function createReleasePlayButton(
 
 // Plays a release from its first streamable track; many releases only stream
 // some of their tracks. Returns false when the release is not in the playlist.
-function playRelease(player: Player, id: 'cart' | 'discography', releaseUrl: string): boolean {
+function playRelease(player: Player, id: ReleasePlaylistId, releaseUrl: string): boolean {
   const tracks = tracksByReleaseUrl[id].get(normalizeUrl(releaseUrl));
   if (!tracks) return false;
   // Matched by page URL: adding a release to the cart skips the tracks already
@@ -2241,15 +2258,154 @@ function injectDiscographyPlayButtons(
 }
 
 // Bandcamp draws a big label's remaining releases into #music-grid as the page
-// scrolls; `onItemsDrawn` runs after each batch so they get a ▶ too.
-function watchMusicGrid(onItemsDrawn: () => void): void {
-  const grid = document.querySelector<HTMLElement>(SEL_MUSIC_GRID);
+// scrolls, and more of a collection as the fan asks for it; `onItemsDrawn` runs
+// after each batch so they get a ▶, or join the collection playlist.
+function watchGridItems(gridSelector: string, itemSelector: string, onItemsDrawn: () => void): void {
+  const grid = document.querySelector<HTMLElement>(gridSelector);
   if (!grid) return;
   const isGridItem = (node: Node) =>
-    node instanceof HTMLElement && (node.matches(SEL_MUSIC_GRID_ITEM) || node.querySelector(SEL_MUSIC_GRID_ITEM) !== null);
+    node instanceof HTMLElement && (node.matches(itemSelector) || node.querySelector(itemSelector) !== null);
   const observer = new MutationObserver((mutations) => {
     if (mutations.some((m) => Array.from(m.addedNodes).some(isGridItem))) onItemsDrawn();
   });
   observer.observe(grid, { childList: true, subtree: true });
   window.addEventListener('pagehide', () => observer.disconnect(), { once: true });
+}
+
+// --- Collection pages ----------------------------------------------------------
+
+// Plays the items drawn in a fan's collection grid in the bottom player, in
+// place of Bandcamp's own player: clicking an item's artwork plays the release,
+// or just the track for a track bought on its own. Only what is on the page
+// joins the playlist; the items Bandcamp draws once the fan clicks "view all" or
+// scrolls further join it as they appear.
+//
+// tracksByReleaseUrl.collection is keyed by collectionItemKey(), not by URL, as
+// several items can link to the same album.
+function setupCollectionPlaylist(player: Player, initialItems: CartItem[]): void {
+  document.querySelector(SEL_COLLECTION_PLAYER)?.classList.add('bcp-replaced');
+
+  // Every item drawn so far, in page order, loaded or not.
+  const items: CartItem[] = [];
+  const problems = new Map<string, ItemProblem>();
+  // Batches load one after the other, so the playlist grows in page order.
+  let loadQueue: Promise<void> = Promise.resolve();
+
+  // Rebuilt from the page order, so an item played before its batch loaded
+  // still sits where it is on the page. A track the collection holds twice
+  // (bought on its own and with its album) plays once.
+  const showPlaylist = (): PlaylistTrack[] => {
+    const seenPages = new Set<string>();
+    const tracks: PlaylistTrack[] = [];
+    for (const item of items) {
+      for (const track of tracksByReleaseUrl.collection.get(collectionItemKey(item)) ?? []) {
+        const page = normalizeUrl(track.pageUrl);
+        if (seenPages.has(page)) continue;
+        seenPages.add(page);
+        tracks.push(track);
+      }
+    }
+    if (tracks.length > 0) player.setPlaylist('collection', 'Collection', tracks);
+    return tracks;
+  };
+
+  const loadItems = async (batch: CartItem[]): Promise<void> => {
+    // Each release page is fetched once, however many of its tracks were bought.
+    const releases = Array.from(new Map(batch.map((item) => [normalizeUrl(item.url), item])).values());
+    const reportProgress = (done: number) => {
+      const progress = `${done} / ${releases.length}`;
+      if (player.getPlaylistTracks('collection').length === 0) {
+        player.setPlaylistUnavailable(
+          'collection',
+          `Collection (loading ${progress})`,
+          `Loading track info for the releases on this page: ${done} of ${releases.length} done.`,
+          'loading'
+        );
+      }
+      player.setPlaylistStatus('collection', `Loading releases: ${progress}`, 'loading');
+    };
+    reportProgress(0);
+    const result = await resolvePlaylist(releases, reportProgress);
+    for (const item of batch) {
+      const key = collectionItemKey(item);
+      const releaseTracks = result.tracksByRelease.get(normalizeUrl(item.url));
+      // An item played before its batch loaded keeps the tracks it plays from.
+      if (releaseTracks && !tracksByReleaseUrl.collection.has(key)) {
+        tracksByReleaseUrl.collection.set(key, collectionItemTracks(item, releaseTracks));
+      }
+      const problem = result.problems.get(item.url);
+      if (problem) problems.set(key, problem);
+    }
+
+    const tracks = showPlaylist();
+    if (tracks.length === 0) {
+      const { label, reason } = describeNothingToPlay(items.length, problems, 'on this page');
+      player.setPlaylistUnavailable('collection', `Collection (${label})`, reason, 'error');
+      player.setPlaylistStatus('collection', `Collection: ${label}`, 'error');
+    } else {
+      const loaded = items.filter((item) => tracksByReleaseUrl.collection.has(collectionItemKey(item))).length;
+      player.setPlaylistStatus('collection', `${loaded} items (${tracks.length} tracks)`, 'info');
+    }
+    void recheckPlayability(result.recheckUrls, player);
+  };
+
+  const addItems = (found: CartItem[]) => {
+    const known = new Set(items.map(collectionItemKey));
+    const fresh = found.filter((item) => !known.has(collectionItemKey(item)));
+    if (fresh.length === 0) return;
+    items.push(...fresh);
+    log.info('[bcp] Collection items found:');
+    log.table(fresh.map((it) => ({ type: it.type, title: it.title, artist: it.artist, url: it.url })));
+    loadQueue = loadQueue
+      .then(() => loadItems(fresh))
+      .catch((err) => log.error('[bcp] collection: loading items failed', err));
+  };
+
+  // Like Bandcamp's own player, the artwork of the playing item pauses and
+  // resumes it. Any other plays its item as soon as that one is fetched.
+  const playItem = async (item: CartItem): Promise<void> => {
+    const key = collectionItemKey(item);
+    const playing = player.currentPlaylistId === 'collection' ? player.getActiveTrack('collection') : null;
+    if (playing && releaseUrlForTrack('collection', playing) === key) {
+      if (player.isPlayingOrPending) player.pause();
+      else player.play();
+      return;
+    }
+    if (playRelease(player, 'collection', key)) return;
+    const playStartsAtClick = player.playStartCount;
+    addItems(probeCollection());
+    const releaseTracks = await fetchTracksForUrl(item.url);
+    if (releaseTracks.length === 0) {
+      player.showToast('Could not load this release', 'error');
+      return;
+    }
+    if (!tracksByReleaseUrl.collection.has(key)) {
+      tracksByReleaseUrl.collection.set(key, collectionItemTracks(item, releaseTracks));
+      showPlaylist();
+    }
+    if (player.playStartCount !== playStartsAtClick) return;
+    if (!playRelease(player, 'collection', key)) player.showToast(NO_RELEASE_STREAMS, 'warn');
+  };
+
+  // Captured on the window, before Bandcamp's own handlers further down can
+  // start its player.
+  const onActivate = (event: MouseEvent | KeyboardEvent) => {
+    if (event instanceof KeyboardEvent && event.key !== 'Enter' && event.key !== ' ') return;
+    const artwork = event.target instanceof Element ? event.target.closest(SEL_COLLECTION_ITEM_PLAY) : null;
+    const li = artwork?.closest(SEL_COLLECTION_ITEM);
+    if (!li?.closest(SEL_COLLECTION_ITEMS)) return;
+    const item = readCollectionItem(li);
+    if (!item) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    void playItem(item);
+  };
+  window.addEventListener('click', onActivate, true);
+  window.addEventListener('keydown', onActivate, true);
+
+  // Made the active playlist straight away, even before anything has loaded,
+  // as the collection is what this page is for.
+  player.setPlaylist('collection', 'Collection', []);
+  addItems(initialItems);
+  watchGridItems(SEL_COLLECTION_ITEMS, SEL_COLLECTION_ITEM, () => addItems(probeCollection()));
 }

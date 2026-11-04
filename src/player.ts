@@ -17,6 +17,14 @@ const TEMPO_RANGES = [
 
 type StatusKind = 'loading' | 'error' | 'warn' | 'info';
 
+// Tab labels for playlists that are first made by adding tracks to them.
+const PLAYLIST_LABELS: Record<PlaylistId, string> = {
+  currentpage: 'Current page',
+  cart: 'Cart',
+  discography: 'Label discography',
+  collection: 'Collection',
+};
+
 // How many upcoming tracks get a fresh stream link and start buffering while
 // the current one plays.
 const PRELOAD_AHEAD = 4;
@@ -377,7 +385,7 @@ export class Player {
     if (!state) {
       // Initialise the playlist on first add (e.g. cart was empty at page load).
       if (tracks.length === 0) return null;
-      this.setPlaylist(id, id === 'cart' ? 'Cart' : 'Label discography', []);
+      this.setPlaylist(id, PLAYLIST_LABELS[id], []);
       state = this.playlists.get(id)!;
     }
     const existingPages = new Set(state.tracks.map((t) => t.pageUrl));
@@ -561,7 +569,7 @@ export class Player {
   private updatePlaylistTabs() {
     const tabs = el('div', 'bcp-tab-list');
 
-    const ids: PlaylistId[] = ['currentpage', 'discography', 'cart'];
+    const ids: PlaylistId[] = ['currentpage', 'collection', 'discography', 'cart'];
 
     for (const id of ids) {
       const state = this.playlists.get(id);
