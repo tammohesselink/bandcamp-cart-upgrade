@@ -806,9 +806,15 @@ a.itemName.bcp-playing {
   font-weight: 600;
 }
 
-.music-grid-item.bcp-playing p.title {
+.music-grid-item.bcp-playing p.title,
+.collection-item-container.bcp-playing .collection-item-title {
   color: #1da0c3 !important;
   font-weight: 600;
+}
+
+/* The bottom player replaces Bandcamp's own one on collection pages. */
+#collection-player.bcp-replaced {
+  display: none !important;
 }
 
 /* Partial-checkout: checkboxes and button injected into Bandcamp's sidecart */

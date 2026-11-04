@@ -1,7 +1,20 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { describe, it, expect, beforeEach } from 'vitest';
-import { probeCart, probeDiscography, injectDiscographyButton, readDataCart, injectRestoreCartButton, injectRemoveAlreadyOwnedButton, injectCheckoutCartButton, type DataCartItem } from '../src/probe';
+import {
+  probeCart,
+  probeDiscography,
+  probeCollection,
+  collectionItemKey,
+  collectionItemTracks,
+  injectDiscographyButton,
+  readDataCart,
+  injectRestoreCartButton,
+  injectRemoveAlreadyOwnedButton,
+  injectCheckoutCartButton,
+  type DataCartItem,
+} from '../src/probe';
+import { makeTrack } from './track-factory';
 import { findCheckoutControl, clickCheckout } from '../src/bandcamp-dom';
 
 function fixture(name: string): string {
@@ -93,6 +106,69 @@ describe('probeCart — no sidecartBody', () => {
 
   it('returns empty array when #sidecartBody is absent', () => {
     expect(probeCart()).toEqual([]);
+  });
+});
+
+// --- probeCollection ---------------------------------------------------------
+
+describe('probeCollection — fan collection page', () => {
+  beforeEach(() => loadFixture('collection.html'));
+
+  it('returns the collection items drawn on the page, in page order', () => {
+    expect(probeCollection().map((i) => i.url)).toEqual([
+      'https://amadeupsound.bandcamp.com/album/ex-libris-004',
+      'https://spacelab.bandcamp.com/album/dusk-illusions',
+      'https://earlyreflex.bandcamp.com/album/zahyo',
+    ]);
+  });
+
+  it('leaves out the wishlist', () => {
+    expect(probeCollection().some((i) => i.url.includes('wished-for'))).toBe(false);
+  });
+
+  it('reads the title without the hidden "(gift given)" label, and the artist without "by"', () => {
+    const first = probeCollection()[0]!;
+    expect(first.title).toBe('ex_libris - 004');
+    expect(first.artist).toBe('ex_libris');
+  });
+
+  it('tells a track bought on its own from an album, though it links to its album', () => {
+    const items = probeCollection();
+    expect(items[0]).toMatchObject({ type: 'album', tralbumType: 'a', tralbumId: 2017834381 });
+    expect(items[2]).toMatchObject({ type: 'track', tralbumType: 't', tralbumId: 1625256874, title: 'Ue' });
+  });
+
+  it('keeps two tracks bought from the same album apart', () => {
+    const grid = document.querySelector('#collection-items ol.collection-grid')!;
+    const copy = grid.querySelector('#collection-item-container_1625256874')!.cloneNode(true) as HTMLElement;
+    copy.setAttribute('data-tralbumid', '1625256875');
+    grid.appendChild(copy);
+    const items = probeCollection();
+    expect(items).toHaveLength(4);
+    expect(new Set(items.map(collectionItemKey)).size).toBe(4);
+  });
+
+  it('returns nothing on a page without a collection', () => {
+    loadFixture('label-with-music-grid.html');
+    expect(probeCollection()).toEqual([]);
+  });
+});
+
+describe('collectionItemTracks', () => {
+  const album = [makeTrack({ trackId: 1, pageUrl: 'https://a.bandcamp.com/track/one' }), makeTrack({ trackId: 2, pageUrl: 'https://a.bandcamp.com/track/two' })];
+  const item = (type: 'track' | 'album', tralbumId: number) =>
+    ({ url: 'https://a.bandcamp.com/album/x', type, title: '', artist: '', thumbnailUrl: '', tralbumId });
+
+  it('plays the whole release for an album', () => {
+    expect(collectionItemTracks(item('album', 99), album)).toEqual(album);
+  });
+
+  it('plays only the bought track for a track bought on its own', () => {
+    expect(collectionItemTracks(item('track', 2), album)).toEqual([album[1]]);
+  });
+
+  it('falls back to the whole release when the track is not on it', () => {
+    expect(collectionItemTracks(item('track', 3), album)).toEqual(album);
   });
 });
 

@@ -28,6 +28,17 @@ export const SEL_MUSIC_GRID_ITEM = '.music-grid-item';
 export const SEL_GRID_ITEM_TITLE = 'p.title';
 export const SEL_FEATURED_GRID = 'ol.featured-grid';
 
+// Fan collection grid (bandcamp.com/<username>). Search results and the
+// wishlist sit in grids of their own, outside #collection-items.
+export const SEL_COLLECTION_ITEMS = '#collection-items';
+export const SEL_COLLECTION_ITEM = 'li.collection-item-container';
+export const SEL_COLLECTION_ITEM_LINK = '.collection-title-details a.item-link[href]';
+export const SEL_COLLECTION_ITEM_TITLE = '.collection-title-details .collection-item-title';
+export const SEL_COLLECTION_ITEM_ARTIST = '.collection-title-details .collection-item-artist';
+// The artwork, which plays the item's featured track in Bandcamp's player.
+export const SEL_COLLECTION_ITEM_PLAY = '.track_play_auxiliary';
+export const SEL_COLLECTION_PLAYER = '#collection-player';
+
 // Page context data attributes
 export const SEL_DATA_SYNC_NUM = '[data-sync-num]';
 export const SEL_DATA_BLOB = '[data-blob]';
