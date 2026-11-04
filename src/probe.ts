@@ -104,7 +104,7 @@ export function injectRestoreCartButton(snapshotCount: number): HTMLButtonElemen
   if (existing) return existing;
 
   const button = document.createElement('button');
-  button.className = 'buttonLink bcp-restore-btn';
+  button.className = 'bcp-restore-btn';
   button.textContent = `Cart history (${snapshotCount} save${snapshotCount !== 1 ? 's' : ''})`;
   anchor.insertAdjacentElement('afterend', button);
   return button;
@@ -152,7 +152,7 @@ export function injectRemoveAlreadyOwnedButton(): HTMLButtonElement | null {
   if (existing) return existing;
 
   const button = document.createElement('button');
-  button.className = 'buttonLink bcp-remove-owned-btn';
+  button.className = 'bcp-remove-owned-btn';
   button.textContent = 'Remove purchased items from cart';
   anchor.insertAdjacentElement('afterend', button);
   return button;

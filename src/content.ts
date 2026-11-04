@@ -1152,6 +1152,7 @@ async function main() {
       applyNamedCartsOption();
     });
     watchNamedCarts();
+    ensureModalStyles();
     setupRemoveAlreadyOwnedButton();
 
     const liveItems: SavedCartItem[] = cartItems.map((i) => ({ url: i.url, title: i.title, purchaseType: i.purchaseType }));
@@ -1218,7 +1219,6 @@ async function main() {
     const versionBeforeLoad = namedCartsVersion;
     const loaded = await loadNamedCarts();
     if (namedCartsVersion === versionBeforeLoad) namedCarts = loaded;
-    ensureModalStyles();
     const checkoutCartBtn = injectCheckoutCartButton(namedCarts.length, namedCartsOn);
     checkoutCartBtn?.addEventListener('click', () => showNamedCartCheckoutModal(activePlayer));
   } else if (settings.showCartHistoryBtn) {
