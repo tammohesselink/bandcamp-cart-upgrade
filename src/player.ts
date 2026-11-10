@@ -23,6 +23,8 @@ const PLAYLIST_LABELS: Record<PlaylistId, string> = {
   cart: 'Cart',
   discography: 'Label discography',
   collection: 'Collection',
+  feed: 'Feed',
+  newreleases: 'New releases',
 };
 
 // How many upcoming tracks get a fresh stream link and start buffering while
@@ -573,7 +575,7 @@ export class Player {
   private updatePlaylistTabs() {
     const tabs = el('div', 'bcp-tab-list');
 
-    const ids: PlaylistId[] = ['currentpage', 'collection', 'discography', 'cart'];
+    const ids: PlaylistId[] = ['currentpage', 'collection', 'feed', 'newreleases', 'discography', 'cart'];
 
     for (const id of ids) {
       const state = this.playlists.get(id);

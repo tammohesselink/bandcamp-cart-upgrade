@@ -28,16 +28,50 @@ export const SEL_MUSIC_GRID_ITEM = '.music-grid-item';
 export const SEL_GRID_ITEM_TITLE = 'p.title';
 export const SEL_FEATURED_GRID = 'ol.featured-grid';
 
+// A grid of releases on a fan's pages, each item with artwork that plays its
+// featured track in Bandcamp's own player.
+export interface ReleaseGrid {
+  // Holds the items; other grids on the page sit outside it.
+  container: string;
+  item: string;
+  link: string;
+  title: string;
+  artist: string;
+}
+
+// The artwork, which plays the item's featured track in Bandcamp's player.
+export const SEL_RELEASE_GRID_ITEM_PLAY = '.track_play_auxiliary';
+
 // Fan collection grid (bandcamp.com/<username>). Search results and the
 // wishlist sit in grids of their own, outside #collection-items.
-export const SEL_COLLECTION_ITEMS = '#collection-items';
-export const SEL_COLLECTION_ITEM = 'li.collection-item-container';
-export const SEL_COLLECTION_ITEM_LINK = '.collection-title-details a.item-link[href]';
-export const SEL_COLLECTION_ITEM_TITLE = '.collection-title-details .collection-item-title';
-export const SEL_COLLECTION_ITEM_ARTIST = '.collection-title-details .collection-item-artist';
-// The artwork, which plays the item's featured track in Bandcamp's player.
-export const SEL_COLLECTION_ITEM_PLAY = '.track_play_auxiliary';
+export const COLLECTION_GRID: ReleaseGrid = {
+  container: '#collection-items',
+  item: 'li.collection-item-container',
+  link: '.collection-title-details a.item-link[href]',
+  title: '.collection-title-details .collection-item-title',
+  artist: '.collection-title-details .collection-item-artist',
+};
 export const SEL_COLLECTION_PLAYER = '#collection-player';
+
+// Fan feed (bandcamp.com/<username>/feed), "Fan Activity": a story per new
+// release or purchase. Stories of a fan buying several releases have no
+// artwork to play, and no item container.
+export const FEED_STORIES_GRID: ReleaseGrid = {
+  container: '#story-list',
+  item: '.story-innards.collection-item-container',
+  link: '.tralbum-details a.item-link[href]',
+  title: '.tralbum-details .collection-item-title',
+  artist: '.tralbum-details .collection-item-artist',
+};
+
+// Fan feed sidebar, "New Releases from artists you follow".
+export const FEED_NEW_RELEASES_GRID: ReleaseGrid = {
+  container: '#new-releases-vm',
+  item: 'li.collection-item-container',
+  link: '.collection-item-gallery-container a.item-link[href]',
+  title: '.collection-item-gallery-container .collection-item-title',
+  artist: '.collection-item-gallery-container .collection-item-artist',
+};
 
 // Page context data attributes
 export const SEL_DATA_SYNC_NUM = '[data-sync-num]';

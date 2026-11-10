@@ -4,9 +4,9 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import {
   probeCart,
   probeDiscography,
-  probeCollection,
-  collectionItemKey,
-  collectionItemTracks,
+  probeReleaseGrid,
+  releaseGridItemKey,
+  releaseGridItemTracks,
   injectDiscographyButton,
   readDataCart,
   injectRestoreCartButton,
@@ -15,7 +15,7 @@ import {
   type DataCartItem,
 } from '../src/probe';
 import { makeTrack } from './track-factory';
-import { findCheckoutControl, clickCheckout } from '../src/bandcamp-dom';
+import { findCheckoutControl, clickCheckout, COLLECTION_GRID, FEED_STORIES_GRID, FEED_NEW_RELEASES_GRID } from '../src/bandcamp-dom';
 
 function fixture(name: string): string {
   return readFileSync(join(__dirname, 'fixtures', name), 'utf-8');
@@ -109,13 +109,13 @@ describe('probeCart — no sidecartBody', () => {
   });
 });
 
-// --- probeCollection ---------------------------------------------------------
+// --- probeReleaseGrid --------------------------------------------------------
 
-describe('probeCollection — fan collection page', () => {
+describe('probeReleaseGrid — fan collection page', () => {
   beforeEach(() => loadFixture('collection.html'));
 
   it('returns the collection items drawn on the page, in page order', () => {
-    expect(probeCollection().map((i) => i.url)).toEqual([
+    expect(probeReleaseGrid(COLLECTION_GRID).map((i) => i.url)).toEqual([
       'https://amadeupsound.bandcamp.com/album/ex-libris-004',
       'https://spacelab.bandcamp.com/album/dusk-illusions',
       'https://earlyreflex.bandcamp.com/album/zahyo',
@@ -123,17 +123,17 @@ describe('probeCollection — fan collection page', () => {
   });
 
   it('leaves out the wishlist', () => {
-    expect(probeCollection().some((i) => i.url.includes('wished-for'))).toBe(false);
+    expect(probeReleaseGrid(COLLECTION_GRID).some((i) => i.url.includes('wished-for'))).toBe(false);
   });
 
   it('reads the title without the hidden "(gift given)" label, and the artist without "by"', () => {
-    const first = probeCollection()[0]!;
+    const first = probeReleaseGrid(COLLECTION_GRID)[0]!;
     expect(first.title).toBe('ex_libris - 004');
     expect(first.artist).toBe('ex_libris');
   });
 
   it('tells a track bought on its own from an album, though it links to its album', () => {
-    const items = probeCollection();
+    const items = probeReleaseGrid(COLLECTION_GRID);
     expect(items[0]).toMatchObject({ type: 'album', tralbumType: 'a', tralbumId: 2017834381 });
     expect(items[2]).toMatchObject({ type: 'track', tralbumType: 't', tralbumId: 1625256874, title: 'Ue' });
   });
@@ -143,32 +143,74 @@ describe('probeCollection — fan collection page', () => {
     const copy = grid.querySelector('#collection-item-container_1625256874')!.cloneNode(true) as HTMLElement;
     copy.setAttribute('data-tralbumid', '1625256875');
     grid.appendChild(copy);
-    const items = probeCollection();
+    const items = probeReleaseGrid(COLLECTION_GRID);
     expect(items).toHaveLength(4);
-    expect(new Set(items.map(collectionItemKey)).size).toBe(4);
+    expect(new Set(items.map(releaseGridItemKey)).size).toBe(4);
   });
 
   it('returns nothing on a page without a collection', () => {
     loadFixture('label-with-music-grid.html');
-    expect(probeCollection()).toEqual([]);
+    expect(probeReleaseGrid(COLLECTION_GRID)).toEqual([]);
   });
 });
 
-describe('collectionItemTracks', () => {
+describe('probeReleaseGrid — fan feed page', () => {
+  beforeEach(() => loadFixture('feed.html'));
+
+  it('returns the stories that have a release to play, without the "?from=" referral', () => {
+    expect(probeReleaseGrid(FEED_STORIES_GRID).map((i) => i.url)).toEqual([
+      'https://cryingoutcast.bandcamp.com/album/bella',
+      'https://soccercommittee.bandcamp.com/album/belongs',
+    ]);
+  });
+
+  it('reads a story\'s title and artist', () => {
+    expect(probeReleaseGrid(FEED_STORIES_GRID)[0]).toMatchObject({
+      type: 'album',
+      title: 'Bella',
+      artist: 'Annis',
+      tralbumId: 2162350188,
+    });
+  });
+
+  it('returns the sidebar new releases, apart from the stories', () => {
+    const items = probeReleaseGrid(FEED_NEW_RELEASES_GRID);
+    expect(items.map((i) => i.url)).toEqual([
+      'https://guyfromdownstairs.bandcamp.com/album/the-son-of-knuf-ep-gfd012',
+      'https://naturalrhythm.bandcamp.com/album/mis-bandidos',
+    ]);
+    expect(items[1]).toMatchObject({ title: 'Mis Bandidos', artist: 'DJ OSIRIS' });
+  });
+
+  it('lists a release once when two stories show it', () => {
+    const list = document.querySelector('#story-list')!;
+    list.appendChild(list.querySelector('li.story.nr')!.cloneNode(true));
+    expect(probeReleaseGrid(FEED_STORIES_GRID)).toHaveLength(2);
+  });
+
+  it('finds no feed on a collection page, nor a collection on the feed', () => {
+    expect(probeReleaseGrid(COLLECTION_GRID)).toEqual([]);
+    loadFixture('collection.html');
+    expect(probeReleaseGrid(FEED_STORIES_GRID)).toEqual([]);
+    expect(probeReleaseGrid(FEED_NEW_RELEASES_GRID)).toEqual([]);
+  });
+});
+
+describe('releaseGridItemTracks', () => {
   const album = [makeTrack({ trackId: 1, pageUrl: 'https://a.bandcamp.com/track/one' }), makeTrack({ trackId: 2, pageUrl: 'https://a.bandcamp.com/track/two' })];
   const item = (type: 'track' | 'album', tralbumId: number) =>
     ({ url: 'https://a.bandcamp.com/album/x', type, title: '', artist: '', thumbnailUrl: '', tralbumId });
 
   it('plays the whole release for an album', () => {
-    expect(collectionItemTracks(item('album', 99), album)).toEqual(album);
+    expect(releaseGridItemTracks(item('album', 99), album)).toEqual(album);
   });
 
   it('plays only the bought track for a track bought on its own', () => {
-    expect(collectionItemTracks(item('track', 2), album)).toEqual([album[1]]);
+    expect(releaseGridItemTracks(item('track', 2), album)).toEqual([album[1]]);
   });
 
   it('falls back to the whole release when the track is not on it', () => {
-    expect(collectionItemTracks(item('track', 3), album)).toEqual(album);
+    expect(releaseGridItemTracks(item('track', 3), album)).toEqual(album);
   });
 });
 

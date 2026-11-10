@@ -8,6 +8,7 @@ A Chrome extension that embeds a persistent playlist player into your Bandcamp c
 - **Dark mode** — turn on "Dark mode for the player" in the extension popup to give the player a dark theme (the rest of the Bandcamp page is left as it is)
 - **Label discography player** — on a label's `/music` page, loads and plays the full discography
 - **Collection player** — on a fan's collection page (`bandcamp.com/<username>`), the player replaces Bandcamp's own one: clicking an item's artwork plays it, a track bought on its own plays just that track, and the Collection playlist holds the items shown on the page. Items Bandcamp shows after you click "view all" or scroll further join it as they appear
+- **Feed player** — on your feed (`bandcamp.com/<username>/feed`), the player replaces Bandcamp's own one in the same way: the Feed playlist holds the releases in the Fan Activity stories, and the New releases playlist holds the "New Releases from artists you follow" sidebar. Clicking a release's artwork plays it, and older stories join the Feed playlist as Bandcamp shows them
 - **Play buttons** — injects ▶ buttons on each cart item and discography grid item
 - **Reverse order** — the ⇅ button (Reverse playlist order) at the right of the player plays the releases last to first (newest added first in the cart, oldest first for a label discography); tracks within a release keep their order, and the choice is remembered per playlist
 - **Cart management** — add/remove releases from your cart directly in the player
