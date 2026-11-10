@@ -1,4 +1,4 @@
-import type { BcpRequest, FetchResponse } from './messages';
+import type { BcpRequest, CartMutationResponse, FetchResponse, WishlistRemoveRequest } from './messages';
 import { createLimiter, dedupeInFlight, type Priority } from './inflight';
 import { pruneTrackCache } from './cache';
 import { isCartAddRejected } from './bandcamp';
@@ -111,6 +111,18 @@ chrome.runtime.onMessage.addListener((message: BcpRequest, sender, sendResponse)
     return true;
   }
 
+  if (message.type === 'wishlist-remove') {
+    // Endpoint: POST {artist}.bandcamp.com/uncollect_item_cb
+    // Body fields captured via DevTools: fan_id, item_id, item_type, band_id, crumb
+    const origin = bandcampOrigin(message.releaseUrl);
+    if (!origin) {
+      sendResponse({ ok: false, error: 'Invalid releaseUrl' });
+      return false;
+    }
+    removeFromWishlist(origin, message).then(sendResponse);
+    return true;
+  }
+
   if (message.type === 'incognito-access') {
     chrome.extension.isAllowedIncognitoAccess()
       .then((allowed) => sendResponse({ allowed }))
@@ -190,3 +202,43 @@ chrome.runtime.onMessage.addListener((message: BcpRequest, sender, sendResponse)
 
   return false;
 });
+
+// Bandcamp answers a missing or expired crumb with error "invalid_crumb" and a
+// fresh crumb, so a failed first try is retried once with that one.
+async function removeFromWishlist(origin: string, message: WishlistRemoveRequest): Promise<CartMutationResponse> {
+  let crumb = message.crumb ?? '';
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const body = new URLSearchParams({
+      fan_id: message.fanId,
+      item_id: String(message.itemId),
+      item_type: message.itemType,
+      band_id: String(message.bandId),
+      crumb,
+    });
+    let json: Record<string, unknown> | null = null;
+    try {
+      const res = await fetch(`${origin}/uncollect_item_cb`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        credentials: 'include',
+        body: body.toString(),
+      });
+      if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+      try {
+        const parsed: unknown = await res.json();
+        if (parsed && typeof parsed === 'object') json = parsed as Record<string, unknown>;
+      } catch {
+        json = null;
+      }
+    } catch (err: unknown) {
+      return { ok: false, error: String(err) };
+    }
+    if (!json?.error) return { ok: true, body: json };
+    if (json.error === 'invalid_crumb' && typeof json.crumb === 'string' && attempt === 0) {
+      crumb = json.crumb;
+      continue;
+    }
+    return { ok: false, error: String(json.error), body: json };
+  }
+  return { ok: false, error: 'invalid_crumb' };
+}

@@ -243,10 +243,11 @@ function readGridClientItems(): CartItem[] {
 
 // --- Collection DOM probe ----------------------------------------------------
 
-// The items drawn in a fan's collection grid, in page order. Only what is on
-// the page: the rest of a big collection is drawn as the fan asks for more.
-export function probeCollection(): CartItem[] {
-  const container = document.querySelector(SEL_COLLECTION_ITEMS);
+// The items drawn in a fan's collection grid, or another grid drawn the same
+// way such as the wishlist, in page order. Only what is on the page: the rest of
+// a big collection is drawn as the fan asks for more.
+export function probeCollection(gridSelector: string = SEL_COLLECTION_ITEMS): CartItem[] {
+  const container = document.querySelector(gridSelector);
   if (!container) return [];
 
   const seen = new Set<string>();

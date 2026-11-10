@@ -28,9 +28,11 @@ export const SEL_MUSIC_GRID_ITEM = '.music-grid-item';
 export const SEL_GRID_ITEM_TITLE = 'p.title';
 export const SEL_FEATURED_GRID = 'ol.featured-grid';
 
-// Fan collection grid (bandcamp.com/<username>). Search results and the
-// wishlist sit in grids of their own, outside #collection-items.
+// Fan collection and wishlist grids (bandcamp.com/<username> and
+// bandcamp.com/<username>/wishlist). Both draw their items the same way. Search
+// results sit in grids of their own, outside these.
 export const SEL_COLLECTION_ITEMS = '#collection-items';
+export const SEL_WISHLIST_ITEMS = '#wishlist-items';
 export const SEL_COLLECTION_ITEM = 'li.collection-item-container';
 export const SEL_COLLECTION_ITEM_LINK = '.collection-title-details a.item-link[href]';
 export const SEL_COLLECTION_ITEM_TITLE = '.collection-title-details .collection-item-title';
@@ -229,4 +231,35 @@ export function isLoggedIn(): boolean {
     } catch { /* continue */ }
   }
   return false;
+}
+
+// The logged-in fan's id on their own fan page (bandcamp.com/<username>), or
+// null on someone else's page or when logged out. Read from the page's
+// data-blob, whose fan_data describes the page's fan.
+export function readOwnFanPageFanId(): string | null {
+  for (const el of Array.from(document.querySelectorAll(SEL_DATA_BLOB))) {
+    try {
+      const blob = JSON.parse(el.getAttribute('data-blob')!) as Record<string, unknown>;
+      const fanData = blob.fan_data as Record<string, unknown> | undefined;
+      if (!fanData) continue;
+      const fanId = fanData.fan_id;
+      const viewer = (blob.identities as Record<string, unknown> | undefined)?.fan as Record<string, unknown> | undefined;
+      const isOwnPage = fanData.is_own_page === true || (typeof viewer?.id === 'number' && viewer.id === fanId);
+      return isOwnPage && typeof fanId === 'number' ? String(fanId) : null;
+    } catch { /* continue */ }
+  }
+  return null;
+}
+
+// The crumb Bandcamp gives the page for one of its endpoints, such as
+// uncollect_item_cb, or null when the page has none.
+export function readPageCrumb(endpoint: string): string | null {
+  const el = document.querySelector('#js-crumbs-data');
+  try {
+    const crumbs = JSON.parse(el?.getAttribute('data-crumbs') ?? '{}') as Record<string, unknown>;
+    const crumb = crumbs[endpoint];
+    return typeof crumb === 'string' ? crumb : null;
+  } catch {
+    return null;
+  }
 }
