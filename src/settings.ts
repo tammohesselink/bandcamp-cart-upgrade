@@ -7,6 +7,9 @@ export interface BcpSettings {
   // Reveals the advanced options in the popup. Hiding them does not change their values.
   showAdvanced: boolean;
   debugLogging: boolean;
+  // Detects the BPM of tracks as they play. Needs the optional bcbits.com host
+  // permission, which the popup asks for when this is turned on.
+  tempoAnalysis: boolean;
 }
 
 export const DEFAULT_SETTINGS: BcpSettings = {
@@ -15,6 +18,7 @@ export const DEFAULT_SETTINGS: BcpSettings = {
   namedCartsEnabled: true,
   showAdvanced: false,
   debugLogging: false,
+  tempoAnalysis: false,
 };
 
 export function withDefaults(stored: Partial<BcpSettings> | undefined): BcpSettings {

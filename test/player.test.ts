@@ -3,6 +3,7 @@ import { Player } from '../src/player';
 import type { PlaylistTrack } from '../src/types';
 import { normalizeUrl } from '../src/url';
 import { makeTrack } from './track-factory';
+import { TempoAnalyzer } from '../src/tempo-analyzer';
 
 const HOUR = 60 * 60 * 1000;
 
@@ -48,7 +49,12 @@ function refreshWith(player: Player, { unplayable = [] as string[] } = {}) {
 beforeEach(() => {
   document.body.innerHTML = '';
   (globalThis as unknown as { chrome: unknown }).chrome = {
-    storage: { local: { get: (_keys: unknown, callback?: (result: object) => void) => callback?.({}) } },
+    storage: {
+      local: {
+        get: (_keys: unknown, callback?: (result: object) => void) => callback?.({}),
+        set: () => Promise.resolve(),
+      },
+    },
   };
 });
 
@@ -1214,5 +1220,202 @@ describe('Player dark mode', () => {
     player.setDarkMode(true);
 
     expect(document.querySelector('.bcp-toast')!.classList.contains('bcp-dark')).toBe(true);
+  });
+});
+
+describe('Player tempo analysis', () => {
+  function withAnalyzer(tracks: PlaylistTrack[]) {
+    const analyzer = new TempoAnalyzer({
+      refreshStream: async () => {},
+      fetchAudio: async () => ({ noPermission: true }),
+      decode: async () => new Float32Array(0),
+      analyse: () => null,
+      read: async () => new Map(),
+      write: () => {},
+    });
+    analyzer.setEnabled(true);
+    const player = new Player(tracks);
+    document.body.appendChild(player.wrapper);
+    player.setTempoAnalyzer(analyzer);
+    return { player, analyzer };
+  }
+
+  const bpmButton = () => document.querySelector<HTMLButtonElement>('.bcp-bpm-btn')!;
+  const slider = () => document.querySelector<HTMLInputElement>('.bcp-tempo')!;
+  const panelInput = (label: string) => document.querySelector<HTMLInputElement>(`#bcp-tempo-panel input[aria-label="${label}"]`)!;
+  const panelButton = (text: string) =>
+    [...document.querySelectorAll<HTMLButtonElement>('#bcp-tempo-panel button')].find((b) => b.textContent === text)!;
+  const playbackRate = (player: Player) => (player as unknown as { playbackRate: number }).playbackRate;
+  const type = (input: HTMLInputElement, value: string) => {
+    input.value = value;
+    input.dispatchEvent(new Event('change'));
+  };
+
+  it('shows the BPM the track is heard at, following the tempo slider', async () => {
+    const tracks = [freshTrack(1)];
+    const { analyzer } = withAnalyzer(tracks);
+    analyzer.setBpm(tracks[0]!, 125);
+    await settle();
+    expect(bpmButton().textContent).toBe('125.0 BPM');
+
+    slider().value = '1.024';
+    slider().dispatchEvent(new Event('input'));
+
+    expect(bpmButton().textContent).toBe('128.0 BPM');
+  });
+
+  it('moves the tempo slider to play the track at a typed BPM', async () => {
+    const tracks = [freshTrack(1)];
+    const { player, analyzer } = withAnalyzer(tracks);
+    analyzer.setBpm(tracks[0]!, 125);
+    bpmButton().click();
+    await settle();
+
+    type(panelInput('Playing at BPM'), '128');
+
+    expect(playbackRate(player)).toBeCloseTo(1.024);
+    expect(bpmButton().textContent).toBe('128.0 BPM');
+  });
+
+  it('widens the slider range when the typed BPM is out of reach', async () => {
+    const tracks = [freshTrack(1)];
+    const { player, analyzer } = withAnalyzer(tracks);
+    analyzer.setBpm(tracks[0]!, 100);
+    bpmButton().click();
+    await settle();
+
+    type(panelInput('Playing at BPM'), '130');
+
+    expect(playbackRate(player)).toBeCloseTo(1.3);
+    expect(slider().max).toBe('2');
+  });
+
+  it('keeps a BPM across tracks, at half or double time when that is closer', async () => {
+    const tracks = [freshTrack(1), freshTrack(2), freshTrack(3)];
+    const { player, analyzer } = withAnalyzer(tracks);
+    analyzer.setBpm(tracks[0]!, 125);
+    analyzer.setBpm(tracks[1]!, 130);
+    analyzer.setBpm(tracks[2]!, 63);
+    bpmButton().click();
+    await settle();
+    type(panelInput('Playing at BPM'), '128');
+    panelButton('Keep this BPM').click();
+
+    player.jumpTo('cart', 1);
+    await settle();
+    expect(playbackRate(player)).toBeCloseTo(128 / 130);
+
+    player.jumpTo('cart', 2);
+    await settle();
+    expect(playbackRate(player)).toBeCloseTo(64 / 63);
+  });
+
+  it('applies the kept BPM once a track’s BPM is found', async () => {
+    const tracks = [freshTrack(1), freshTrack(2)];
+    const { player, analyzer } = withAnalyzer(tracks);
+    analyzer.setBpm(tracks[0]!, 120);
+    bpmButton().click();
+    await settle();
+    panelButton('Keep this BPM').click();
+
+    player.jumpTo('cart', 1);
+    await settle();
+    expect(playbackRate(player)).toBe(1);
+
+    analyzer.setBpm(tracks[1]!, 124);
+    await settle();
+    expect(playbackRate(player)).toBeCloseTo(120 / 124);
+  });
+
+  it('halves a BPM that was detected at double time', async () => {
+    const tracks = [freshTrack(1)];
+    const { analyzer } = withAnalyzer(tracks);
+    analyzer.setBpm(tracks[0]!, 174);
+    bpmButton().click();
+    await settle();
+
+    panelButton('÷2').click();
+    await settle();
+
+    expect(analyzer.get(tracks[0]!)).toMatchObject({ bpm: 87, source: 'manual' });
+    expect(bpmButton().textContent).toBe('87.0 BPM');
+  });
+
+  it('saves a typed track BPM', async () => {
+    const tracks = [freshTrack(1)];
+    const { analyzer } = withAnalyzer(tracks);
+    bpmButton().click();
+    await settle();
+
+    type(panelInput('Track BPM'), '122.5');
+
+    expect(analyzer.get(tracks[0]!).bpm).toBe(122.5);
+  });
+
+  it('shows each track’s BPM in the queue', async () => {
+    const tracks = [freshTrack(1), freshTrack(2)];
+    const { analyzer } = withAnalyzer(tracks);
+    analyzer.setBpm(tracks[1]!, 140);
+    await settle();
+
+    const labels = [...document.querySelectorAll('.bcp-queue-bpm')].map((e) => e.textContent);
+    expect(labels).toEqual(['', '140.0']);
+  });
+
+  it('hides the BPM controls while "Detect track BPMs" is off, and shows them when it is turned on', async () => {
+    const tracks = [freshTrack(1)];
+    const { analyzer } = withAnalyzer(tracks);
+    analyzer.setBpm(tracks[0]!, 125);
+    bpmButton().click();
+    await settle();
+
+    analyzer.setEnabled(false);
+    await settle();
+    expect(bpmButton().hidden).toBe(true);
+    expect(document.querySelector('#bcp-tempo-panel')!.classList.contains('bcp-visible')).toBe(false);
+    expect(document.querySelector('.bcp-queue-bpm')).toBeNull();
+
+    analyzer.setEnabled(true);
+    await settle();
+    expect(bpmButton().hidden).toBe(false);
+    expect(document.querySelector('.bcp-queue-bpm')!.textContent).toBe('125.0');
+  });
+
+  it('has no playlist-wide detection', async () => {
+    withAnalyzer([freshTrack(1)]);
+    bpmButton().click();
+    await settle();
+    expect(panelButton('Detect all')).toBeUndefined();
+  });
+
+  it('hides the BPM controls without an analyzer', () => {
+    const player = new Player([freshTrack(1)]);
+    document.body.appendChild(player.wrapper);
+    expect(bpmButton().hidden).toBe(true);
+    expect(document.querySelector('.bcp-queue-bpm')).toBeNull();
+  });
+});
+
+describe('Player tempo detection timing', () => {
+  it('detects the BPM once a track plays, not when it is only cued', async () => {
+    const analyzer = new TempoAnalyzer({
+      refreshStream: async () => {},
+      fetchAudio: async () => ({ noPermission: true }),
+      decode: async () => new Float32Array(0),
+      analyse: () => null,
+      read: async () => new Map(),
+      write: () => {},
+    });
+    analyzer.setEnabled(true);
+    const analyse = vi.spyOn(analyzer, 'analyse');
+    const player = new Player([freshTrack(1)]);
+    player.setTempoAnalyzer(analyzer);
+    await settle();
+    expect(analyse).not.toHaveBeenCalled();
+
+    player.jumpTo('cart', 0);
+    audioOf(player).dispatchEvent(new Event('playing'));
+
+    expect(analyse).toHaveBeenCalledWith(player.currentTrack());
   });
 });

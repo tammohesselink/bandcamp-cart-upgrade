@@ -10,6 +10,7 @@
   "permissions": ["storage", "unlimitedStorage"],
   "incognito": "split",
   "host_permissions": ["https://bandcamp.com/*", "https://*.bandcamp.com/*"],
+  "optional_host_permissions": ["https://*.bcbits.com/*"],
   "background": {
     "service_worker": "background.js",
     "scripts": ["background.js"]

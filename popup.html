@@ -45,6 +45,18 @@
       line-height: 1.4;
     }
 
+    .setting-description {
+      color: #a6adc8;
+      font-size: 12px;
+      line-height: 1.4;
+      padding: 0 0 10px;
+      border-bottom: 1px solid #313244;
+    }
+
+    .setting:has(+ .setting-description) {
+      border-bottom: none;
+    }
+
     /* Toggle switch */
     .toggle {
       position: relative;

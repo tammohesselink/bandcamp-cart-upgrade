@@ -10,6 +10,12 @@ A Chrome extension that embeds a persistent playlist player into your Bandcamp c
 - **Collection player** — on a fan's collection page (`bandcamp.com/<username>`), the player replaces Bandcamp's own one: clicking an item's artwork plays it, a track bought on its own plays just that track, and the Collection playlist holds the items shown on the page. Items Bandcamp shows after you click "view all" or scroll further join it as they appear
 - **Play buttons** — injects ▶ buttons on each cart item and discography grid item
 - **Reverse order** — the ⇅ button (Reverse playlist order) at the right of the player plays the releases last to first (newest added first in the cart, oldest first for a label discography); tracks within a release keep their order, and the choice is remembered per playlist
+- **Tempo analysis (BPM)** — turn on "Detect track BPMs" in the extension popup (it asks to read Bandcamp's audio streams on bcbits.com). The player then shows a BPM button next to the tempo slider with the BPM the playing track is heard at, and each track's BPM in the queue. The button opens a tempo panel:
+  - type the BPM you want it played at and the slider moves to match (widening its range when needed)
+  - fix a detection that is off by an octave with ÷2 / ×2, type the BPM, or tap along
+  - "Keep this BPM" makes every next track play at the same BPM, at half or double time when that is the smaller change
+
+  Only the playing track and the next few in the queue are analysed: the first ~2.5 minutes of each are downloaded and analysed in the browser. BPMs are remembered per track, and the ones you set are never overwritten by automatic detection. With the setting off, none of this shows and nothing is downloaded
 - **Cart management** — add/remove releases from your cart directly in the player
 - **Named carts** — for a release in your cart, "Add to named cart" in the player files it into one or more named carts (or a new one); to file several at once, tick them in Bandcamp's cart and click "Add selected to named cart". "Checkout a cart" below Bandcamp's cart then checks out just one named cart in a private window. Turn off "Enable named carts" in the extension popup to hide all of this; your named carts are kept for when you turn it back on
 - **Cart history export/import** — move your cart history to another browser or laptop: turn on "Show advanced functionality" in the extension popup, click Export, then Import the JSON file there (imported snapshots are merged with the existing history)

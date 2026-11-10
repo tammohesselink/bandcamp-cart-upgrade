@@ -1,5 +1,6 @@
 import type { CartItem, PlaylistId, PlaylistTrack, SavedCartItem, NamedCart } from './types';
 import { hasTralbumData, parseTralbum, isReleaseOwned } from './bandcamp';
+import { createTempoAnalyzer } from './tempo-analyzer';
 import { Player } from './player';
 import { setupNativePlayerSync } from './native-sync';
 import {
@@ -1504,6 +1505,13 @@ async function main() {
     applyFreshStreams(fresh, [track, ...allPlaylistTracks(player)]);
     refreshPlayButtons();
   };
+
+  // Detects BPMs while "Tempo analysis" is on in the popup; BPMs found or set
+  // before show either way.
+  const tempoAnalyzer = createTempoAnalyzer((track, bulk) => player.onRefreshStream!(track, false, bulk));
+  tempoAnalyzer.setEnabled(settings.tempoAnalysis);
+  onSettingsChanged((changed) => tempoAnalyzer.setEnabled(changed.tempoAnalysis));
+  player.setTempoAnalyzer(tempoAnalyzer);
 
   // The current page's tracks are already in the DOM, so they load before the
   // cart and discography, which each need a fetch per release. Being the first

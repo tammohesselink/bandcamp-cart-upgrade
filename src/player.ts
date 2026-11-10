@@ -4,6 +4,15 @@ import { PLAYER_CSS } from './styles';
 import { normalizeUrl } from './url';
 import { isStreamFresh } from './cache';
 import { log } from './log';
+import type { TempoAnalyzer, TrackTempo } from './tempo-analyzer';
+import {
+  LOW_CONFIDENCE,
+  addTap,
+  formatBpm,
+  rateForTargetBpm,
+  rateToMatchBpm,
+  tappedBpm,
+} from './tempo-analysis';
 
 // 'album' adds the album a single-track page belongs to (track.albumUrl).
 type CartAddType = 'track' | 'release' | 'album';
@@ -70,6 +79,38 @@ export class Player {
   private tempoResetBtn!: HTMLButtonElement;
   private tempoRangeBtn!: HTMLButtonElement;
   private tempoMTBtn!: HTMLButtonElement;
+  // Detects and remembers track BPMs. Null hides the BPM controls.
+  private tempoAnalyzer: TempoAnalyzer | null = null;
+  private bpmBtn!: HTMLButtonElement;
+  private tempoPanel!: HTMLElement;
+  private tempoPanelVisible = false;
+  private tempoPanelTrackEl!: HTMLElement;
+  private trackBpmInput!: HTMLInputElement;
+  private halveBpmBtn!: HTMLButtonElement;
+  private doubleBpmBtn!: HTMLButtonElement;
+  private detectBpmBtn!: HTMLButtonElement;
+  private tempoNoteEl!: HTMLElement;
+  private playingBpmInput!: HTMLInputElement;
+  private playingPercentEl!: HTMLElement;
+  private tapBtn!: HTMLButtonElement;
+  private tapReadoutEl!: HTMLElement;
+  private tapSaveBtn!: HTMLButtonElement;
+  private keepBpmBtn!: HTMLButtonElement;
+  private keepBpmNoteEl!: HTMLElement;
+  // Whether the BPM controls show: only while "Detect track BPMs" is on.
+  private tempoShown = false;
+  // Taps of the tap tempo button in the current run, in milliseconds.
+  private tapTimes: number[] = [];
+  private tapTrack: PlaylistTrack | null = null;
+  // While set, every track plays at this BPM: the tempo slider moves to match
+  // each one as it loads (see applyKeepBpm).
+  private keptBpm: number | null = null;
+  // The track keptBpm was last applied to, so it is applied once per track and
+  // moving the slider afterwards isn't undone.
+  private keptBpmAppliedTo: PlaylistTrack | null = null;
+  // BPM labels in the queue, updated in place as BPMs are found.
+  private queueBpmEls = new Map<PlaylistTrack, HTMLElement>();
+  private tempoRenderScheduled = false;
   private playbackRate = 1;
   private preservesPitch = true;
   private tempoRangeIndex = 1;
@@ -145,10 +186,12 @@ export class Player {
     this.collapseBtn.addEventListener('click', () => this.togglePlayer());
 
     this.queueEl = this.buildQueueEl();
+    this.tempoPanel = this.buildTempoPanel();
     this.bar = this.buildBarEl();
 
     this.wrapper.appendChild(this.collapseBtn);
     this.wrapper.appendChild(this.queueEl);
+    this.wrapper.appendChild(this.tempoPanel);
     this.wrapper.appendChild(this.bar);
 
     this.announcer = el('div', 'bcp-visually-hidden');
@@ -222,7 +265,17 @@ export class Player {
     this.updatePlaylistTabs();
   }
 
+  // Shows the BPM of tracks next to the tempo controls and in the queue, and
+  // detects them as they play while the analyzer is enabled.
+  setTempoAnalyzer(analyzer: TempoAnalyzer) {
+    this.tempoAnalyzer = analyzer;
+    analyzer.onChange(() => this.scheduleTempoRender());
+    for (const state of this.playlists.values()) void analyzer.load(state.tracks);
+    this.syncTempoVisibility();
+  }
+
   setPlaylist(id: PlaylistId, label: string, tracks: PlaylistTrack[]) {
+    void this.tempoAnalyzer?.load(tracks);
     const previous = this.playlists.get(id);
     // A reloaded playlist that has played keeps its cued or playing track, so
     // next() carries on from it, and still counts as played. Otherwise cue the
@@ -391,6 +444,7 @@ export class Player {
     const existingPages = new Set(state.tracks.map((t) => t.pageUrl));
     const toAdd = tracks.filter((t) => !existingPages.has(t.pageUrl));
     if (toAdd.length === 0) return null;
+    void this.tempoAnalyzer?.load(toAdd);
     const startIndex = state.tracks.length;
     state.tracks.push(...toAdd);
     this.unavailablePlaylists.delete(id);
@@ -705,6 +759,7 @@ export class Player {
     this.tempoSlider.addEventListener('input', () => {
       this.playbackRate = parseFloat(this.tempoSlider.value);
       this.audio.playbackRate = this.playbackRate;
+      this.onTempoChangedByUser();
       this.updateTempoUI();
     });
 
@@ -713,6 +768,7 @@ export class Player {
     this.tempoResetBtn.addEventListener('click', () => {
       this.playbackRate = 1;
       this.audio.playbackRate = 1;
+      this.onTempoChangedByUser();
       this.updateTempoUI();
     });
 
@@ -724,6 +780,7 @@ export class Player {
       this.playbackRate = Math.max(range.min, Math.min(range.max, this.playbackRate));
       this.audio.playbackRate = this.playbackRate;
       chrome.storage.local.set({ tempoRangeIndex: this.tempoRangeIndex });
+      this.onTempoChangedByUser();
       this.updateTempoUI();
     });
 
@@ -738,8 +795,14 @@ export class Player {
 
     const tempoLabel = el('span', 'bcp-tempo-label');
     tempoLabel.textContent = 'Tempo';
+    this.bpmBtn = btn('BPM', 'bcp-btn bcp-tempo-btn bcp-bpm-btn');
+    this.bpmBtn.hidden = true;
+    this.bpmBtn.setAttribute('aria-expanded', 'false');
+    this.bpmBtn.setAttribute('aria-controls', 'bcp-tempo-panel');
+    this.bpmBtn.addEventListener('click', () => this.toggleTempoPanel());
+
     const tempoArea = el('div', 'bcp-tempo-area');
-    tempoArea.append(tempoLabel, this.tempoSlider, this.tempoResetBtn, this.tempoRangeBtn, this.tempoMTBtn);
+    tempoArea.append(tempoLabel, this.tempoSlider, this.tempoResetBtn, this.tempoRangeBtn, this.tempoMTBtn, this.bpmBtn);
 
     this.queueToggleBtn = btn('', 'bcp-btn bcp-icon-button bcp-queue-toggle');
     this.queueToggleBtn.append(icon('queue'));
@@ -773,6 +836,7 @@ export class Player {
   private updateQueueEl() {
     const state = this.active();
     this.queueEl.innerHTML = '';
+    this.queueBpmEls.clear();
     if (!state) return;
 
     playOrder(state).forEach((i, position) => {
@@ -792,6 +856,13 @@ export class Player {
       text.append(title, sub);
 
       item.append(num, text);
+
+      if (this.tempoShown) {
+        const bpmEl = el('div', 'bcp-queue-bpm');
+        this.queueBpmEls.set(track, bpmEl);
+        this.renderQueueBpm(track, bpmEl);
+        item.append(bpmEl);
+      }
 
       const inCart = this.isInCart(track);
       if (inCart) {
@@ -867,6 +938,10 @@ export class Player {
     this.updateQueueEl();
     this.updateCartActions(track);
     this.updateMediaSessionMetadata(track);
+    if (track !== this.tapTrack) this.resetTaps();
+    if (this.tempoPanelVisible) this.tempoAnalyzer?.analyse(track);
+    this.applyKeepBpm();
+    this.renderTempo();
 
     if (!silent && this.activeId === 'currentpage') {
       this.onCurrentPageTrackChange?.(track.pageUrl);
@@ -1073,6 +1148,8 @@ export class Player {
       this.updateQueueEl();
       this.updateNavButtons();
     }
+    // Their BPMs are ready by the time they play, which "Keep BPM" needs.
+    for (const track of upcoming) this.tempoAnalyzer?.analyse(track, { bulk: true });
 
     const wanted = upcoming
       .filter((t) => !t.unplayable && t.streamUrl && (!this.onRefreshStream || isStreamFresh(t)))
@@ -1137,6 +1214,9 @@ export class Player {
 
     on('playing', () => {
       this.streamRetriedFor = null;
+      // Detected once it plays rather than when cued, so opening a page
+      // downloads nothing extra.
+      if (this.sourceTrack) this.tempoAnalyzer?.analyse(this.sourceTrack);
       void this.preloadUpcoming();
     });
 
@@ -1499,6 +1579,281 @@ export class Player {
     });
   }
 
+  // --- Tempo analysis (BPM) ------------------------------------------------
+
+  private buildTempoPanel(): HTMLElement {
+    const panel = el('div');
+    panel.id = 'bcp-tempo-panel';
+    panel.setAttribute('role', 'region');
+    panel.setAttribute('aria-label', 'Tempo and BPM');
+    // Keys typed into its fields mustn't reach Bandcamp's own shortcuts.
+    panel.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Escape') this.toggleTempoPanel(false);
+    });
+
+    const header = el('div', 'bcp-tempo-panel-header');
+    const heading = el('div', 'bcp-tempo-panel-heading');
+    heading.textContent = 'Tempo';
+    this.tempoPanelTrackEl = el('div', 'bcp-tempo-panel-track');
+    const closeBtn = btn('✕', 'bcp-btn bcp-tempo-panel-close');
+    closeBtn.setAttribute('aria-label', 'Close tempo panel');
+    closeBtn.addEventListener('click', () => this.toggleTempoPanel(false));
+    header.append(heading, this.tempoPanelTrackEl, closeBtn);
+
+    // The track's own BPM: detected, or typed, halved, doubled or tapped.
+    this.trackBpmInput = bpmInput('Track BPM');
+    this.trackBpmInput.addEventListener('change', () => {
+      const track = this.currentTrack();
+      const bpm = parseFloat(this.trackBpmInput.value);
+      if (track && bpm > 0) this.tempoAnalyzer?.setBpm(track, bpm);
+      else this.renderTempo();
+    });
+    this.halveBpmBtn = btn('÷2', 'bcp-btn bcp-tempo-panel-btn');
+    setTooltip(this.halveBpmBtn, 'Halve the BPM (it was detected at double time)');
+    this.halveBpmBtn.addEventListener('click', () => this.scaleTrackBpm(0.5));
+    this.doubleBpmBtn = btn('×2', 'bcp-btn bcp-tempo-panel-btn');
+    setTooltip(this.doubleBpmBtn, 'Double the BPM (it was detected at half time)');
+    this.doubleBpmBtn.addEventListener('click', () => this.scaleTrackBpm(2));
+    this.detectBpmBtn = btn('Detect', 'bcp-btn bcp-tempo-panel-btn');
+    this.detectBpmBtn.addEventListener('click', () => {
+      const track = this.currentTrack();
+      if (track) this.tempoAnalyzer?.analyse(track, { force: true });
+    });
+    const trackRow = tempoRow('Track', this.trackBpmInput, unit(), this.halveBpmBtn, this.doubleBpmBtn, this.detectBpmBtn);
+    this.tempoNoteEl = el('div', 'bcp-tempo-note');
+
+    // The BPM it is heard at; typing one moves the tempo slider to match.
+    this.playingBpmInput = bpmInput('Playing at BPM');
+    this.playingBpmInput.addEventListener('change', () => {
+      const target = parseFloat(this.playingBpmInput.value);
+      const bpm = this.currentTempo()?.bpm;
+      if (bpm && target > 0) {
+        this.setPlaybackRate(rateForTargetBpm(bpm, target));
+        if (this.keptBpm !== null) this.keptBpm = this.playbackRate * bpm;
+      }
+      this.renderTempo();
+    });
+    this.playingPercentEl = el('span', 'bcp-tempo-percent');
+    const playingRow = tempoRow('Playing at', this.playingBpmInput, unit(), this.playingPercentEl);
+
+    this.tapBtn = btn('Tap', 'bcp-btn bcp-tempo-panel-btn bcp-tap-btn');
+    setTooltip(this.tapBtn, 'Tap along with the beat to measure the BPM');
+    this.tapBtn.addEventListener('pointerdown', (e) => {
+      // On press rather than click, so the timing follows the finger.
+      e.preventDefault();
+      this.tap();
+    });
+    this.tapBtn.addEventListener('keydown', (e) => {
+      if (e.key === ' ' || e.key === 'Enter') {
+        e.preventDefault();
+        if (!e.repeat) this.tap();
+      }
+    });
+    this.tapReadoutEl = el('span', 'bcp-tap-readout');
+    this.tapSaveBtn = btn('Use as track BPM', 'bcp-btn bcp-tempo-panel-btn');
+    this.tapSaveBtn.addEventListener('click', () => {
+      const track = this.currentTrack();
+      const tapped = tappedBpm(this.tapTimes);
+      // Taps follow the audio as heard, at the current playback rate.
+      if (track && tapped) this.tempoAnalyzer?.setBpm(track, tapped / this.playbackRate);
+      this.resetTaps();
+    });
+    const tapRow = tempoRow('Tap', this.tapBtn, this.tapReadoutEl, this.tapSaveBtn);
+
+    this.keepBpmBtn = btn('Keep this BPM', 'bcp-btn bcp-tempo-panel-btn bcp-keep-bpm-btn');
+    this.keepBpmBtn.setAttribute('aria-pressed', 'false');
+    this.keepBpmBtn.addEventListener('click', () => this.toggleKeepBpm());
+    this.keepBpmNoteEl = el('span', 'bcp-tempo-note-inline');
+    const keepRow = tempoRow('Next tracks', this.keepBpmBtn, this.keepBpmNoteEl);
+
+    panel.append(header, trackRow, this.tempoNoteEl, playingRow, tapRow, keepRow);
+    return panel;
+  }
+
+  private toggleTempoPanel(visible = !this.tempoPanelVisible) {
+    this.tempoPanelVisible = visible;
+    this.tempoPanel.classList.toggle('bcp-visible', visible);
+    this.bpmBtn.classList.toggle('bcp-toggle-on', visible);
+    this.bpmBtn.setAttribute('aria-expanded', String(visible));
+    if (!visible) this.resetTaps();
+    const track = this.currentTrack();
+    if (visible && track) this.tempoAnalyzer?.analyse(track);
+    this.renderTempo();
+  }
+
+  // Shows or hides the BPM controls as "Detect track BPMs" is turned on or off.
+  private syncTempoVisibility() {
+    const shown = !!this.tempoAnalyzer?.isEnabled;
+    if (shown === this.tempoShown) return;
+    this.tempoShown = shown;
+    this.bpmBtn.hidden = !shown;
+    if (!shown) {
+      this.keptBpm = null;
+      if (this.tempoPanelVisible) this.toggleTempoPanel(false);
+    }
+    this.updateQueueEl();
+    this.renderTempo();
+  }
+
+  private currentTempo(): TrackTempo | null {
+    const track = this.currentTrack();
+    return track && this.tempoAnalyzer ? this.tempoAnalyzer.get(track) : null;
+  }
+
+  // Sets the playback rate, widening the slider's range when it doesn't reach.
+  private setPlaybackRate(rate: number) {
+    const widest = TEMPO_RANGES[TEMPO_RANGES.length - 1]!;
+    const clamped = Math.max(widest.min, Math.min(widest.max, rate));
+    const current = TEMPO_RANGES[this.tempoRangeIndex]!;
+    if (clamped < current.min || clamped > current.max) {
+      this.tempoRangeIndex = TEMPO_RANGES.findIndex((r) => clamped >= r.min && clamped <= r.max);
+      chrome.storage.local.set({ tempoRangeIndex: this.tempoRangeIndex });
+    }
+    this.playbackRate = clamped;
+    this.audio.playbackRate = clamped;
+    this.updateTempoUI();
+  }
+
+  // With "Keep this BPM" on, moving the slider sets the BPM to keep.
+  private onTempoChangedByUser() {
+    if (this.keptBpm === null) return;
+    const bpm = this.currentTempo()?.bpm;
+    if (bpm) this.keptBpm = bpm * this.playbackRate;
+  }
+
+  private toggleKeepBpm() {
+    const bpm = this.currentTempo()?.bpm;
+    if (this.keptBpm !== null || !bpm) {
+      this.keptBpm = null;
+    } else {
+      this.keptBpm = bpm * this.playbackRate;
+      this.keptBpmAppliedTo = this.currentTrack();
+    }
+    this.renderTempo();
+  }
+
+  // Plays the current track at the kept BPM, once its BPM is known.
+  private applyKeepBpm() {
+    if (this.keptBpm === null) return;
+    const track = this.currentTrack();
+    if (!track || track === this.keptBpmAppliedTo) return;
+    const bpm = this.tempoAnalyzer?.get(track).bpm;
+    if (!bpm) return;
+    this.keptBpmAppliedTo = track;
+    this.setPlaybackRate(rateToMatchBpm(bpm, this.keptBpm));
+  }
+
+  private scaleTrackBpm(factor: number) {
+    const track = this.currentTrack();
+    const bpm = this.currentTempo()?.bpm;
+    if (!track || !bpm) return;
+    this.tempoAnalyzer?.setBpm(track, bpm * factor);
+    // Keep playing at the same speed; only the number was off.
+    if (this.keptBpm !== null) this.keptBpm = bpm * factor * this.playbackRate;
+  }
+
+  private tap() {
+    const track = this.currentTrack();
+    if (!track) return;
+    if (track !== this.tapTrack) this.tapTimes = [];
+    this.tapTrack = track;
+    this.tapTimes = addTap(this.tapTimes, performance.now());
+    this.renderTempo();
+  }
+
+  private resetTaps() {
+    this.tapTimes = [];
+    this.tapTrack = null;
+  }
+
+  // Analyzer updates come in bursts while a playlist is being detected.
+  private scheduleTempoRender() {
+    if (this.tempoRenderScheduled) return;
+    this.tempoRenderScheduled = true;
+    setTimeout(() => {
+      this.tempoRenderScheduled = false;
+      this.syncTempoVisibility();
+      this.applyKeepBpm();
+      this.renderTempo();
+      for (const [track, bpmEl] of this.queueBpmEls) this.renderQueueBpm(track, bpmEl);
+    }, 0);
+  }
+
+  private renderQueueBpm(track: PlaylistTrack, bpmEl: HTMLElement) {
+    const tempo = this.tempoAnalyzer?.get(track);
+    if (!tempo) return;
+    if (tempo.bpm !== null) {
+      const rough = tempo.source === 'detected' && tempo.confidence < LOW_CONFIDENCE;
+      bpmEl.textContent = `${rough ? '~' : ''}${formatBpm(tempo.bpm)}`;
+      setTooltip(bpmEl, `${formatBpm(tempo.bpm)} BPM${rough ? ' (rough guess)' : ''}${tempo.source === 'manual' ? ' (set by you)' : ''}`);
+    } else if (tempo.status === 'queued' || tempo.status === 'analyzing') {
+      bpmEl.textContent = '…';
+      setTooltip(bpmEl, 'Detecting BPM');
+    } else {
+      bpmEl.textContent = '';
+      delete bpmEl.dataset.tooltip;
+      bpmEl.removeAttribute('aria-description');
+    }
+  }
+
+  private renderTempo() {
+    const analyzer = this.tempoAnalyzer;
+    if (!analyzer || !this.bpmBtn || !this.tempoShown) return;
+    const track = this.currentTrack();
+    const tempo = track ? analyzer.get(track) : null;
+    const bpm = tempo?.bpm ?? null;
+    const detecting = tempo?.status === 'queued' || tempo?.status === 'analyzing';
+    const rough = !!tempo && tempo.source === 'detected' && tempo.confidence < LOW_CONFIDENCE;
+    const playingBpm = bpm !== null ? bpm * this.playbackRate : null;
+
+    // The readout next to the slider: the BPM as heard.
+    if (playingBpm !== null) {
+      this.bpmBtn.textContent = `${rough ? '~' : ''}${formatBpm(playingBpm)} BPM`;
+      const keep = this.keptBpm !== null ? `, keeping ${formatBpm(this.keptBpm)} BPM` : '';
+      setTooltip(this.bpmBtn, `Track ${formatBpm(bpm!)} BPM, playing at ${formatBpm(playingBpm)} BPM${keep}`);
+    } else {
+      this.bpmBtn.textContent = detecting ? '… BPM' : 'BPM';
+      setTooltip(this.bpmBtn, detecting ? 'Detecting BPM' : 'BPM and tempo tools');
+    }
+    this.bpmBtn.classList.toggle('bcp-bpm-kept', this.keptBpm !== null);
+
+    if (!this.tempoPanelVisible) return;
+
+    this.tempoPanelTrackEl.textContent = track ? track.trackTitle || '(untitled)' : 'No track';
+
+    setInputValue(this.trackBpmInput, bpm !== null ? formatBpm(bpm) : '');
+    this.trackBpmInput.disabled = !track;
+    this.halveBpmBtn.disabled = bpm === null;
+    this.doubleBpmBtn.disabled = bpm === null;
+    this.detectBpmBtn.disabled = !track || detecting || track.unplayable;
+    this.detectBpmBtn.textContent = bpm !== null ? 'Detect again' : 'Detect';
+
+    this.tempoNoteEl.textContent = tempoNote(tempo);
+
+    setInputValue(this.playingBpmInput, playingBpm !== null ? formatBpm(playingBpm) : '');
+    this.playingBpmInput.disabled = bpm === null;
+    const pct = (this.playbackRate - 1) * 100;
+    this.playingPercentEl.textContent = `${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%`;
+
+    const tapped = tappedBpm(this.tapTimes);
+    if (tapped !== null) {
+      this.tapReadoutEl.textContent = `${formatBpm(tapped)} BPM (${this.tapTimes.length} taps)`;
+    } else {
+      this.tapReadoutEl.textContent = this.tapTimes.length === 1 ? 'Keep tapping…' : '';
+    }
+    // A few taps are too rough to save.
+    this.tapSaveBtn.hidden = tapped === null || this.tapTimes.length < 4;
+
+    const keeping = this.keptBpm !== null;
+    this.keepBpmBtn.classList.toggle('bcp-toggle-on', keeping);
+    this.keepBpmBtn.setAttribute('aria-pressed', String(keeping));
+    this.keepBpmBtn.disabled = !keeping && bpm === null;
+    this.keepBpmNoteEl.textContent = keeping
+      ? `Each track plays at ${formatBpm(this.keptBpm!)} BPM (or half/double)`
+      : bpm === null ? 'Needs the track’s BPM' : '';
+  }
+
   private updateTempoUI() {
     const range = TEMPO_RANGES[this.tempoRangeIndex]!;
     this.tempoSlider.min = String(range.min);
@@ -1509,6 +1864,7 @@ export class Player {
     this.tempoResetBtn.textContent = `${sign}${pct.toFixed(1)}%`;
     this.tempoRangeBtn.textContent = range.label;
     this.tempoMTBtn.classList.toggle('bcp-toggle-on', this.preservesPitch);
+    this.renderTempo();
   }
 
   private setSeekPercent(percent: number) {
@@ -1544,6 +1900,53 @@ function playOrder(state: Pick<PlaylistState, 'tracks' | 'reversed'>): number[] 
 function firstPlayable(state: Pick<PlaylistState, 'tracks' | 'reversed'>): number {
   const order = playOrder(state);
   return order.find((i) => !state.tracks[i]!.unplayable) ?? order[0] ?? 0;
+}
+
+function bpmInput(label: string): HTMLInputElement {
+  const input = document.createElement('input');
+  input.type = 'number';
+  input.className = 'bcp-bpm-input';
+  input.min = '1';
+  input.max = '999';
+  input.step = '0.1';
+  input.inputMode = 'decimal';
+  input.setAttribute('aria-label', label);
+  return input;
+}
+
+// Leaves a field alone while it is being typed in.
+function setInputValue(input: HTMLInputElement, value: string) {
+  if (document.activeElement === input) return;
+  input.value = value;
+}
+
+function unit(): HTMLElement {
+  const span = el('span', 'bcp-tempo-unit');
+  span.textContent = 'BPM';
+  return span;
+}
+
+function tempoRow(label: string, ...children: HTMLElement[]): HTMLElement {
+  const row = el('div', 'bcp-tempo-row');
+  const labelEl = el('span', 'bcp-tempo-row-label');
+  labelEl.textContent = label;
+  row.append(labelEl, ...children);
+  return row;
+}
+
+function tempoNote(tempo: TrackTempo | null): string {
+  if (!tempo) return '';
+  if (tempo.status === 'analyzing') return 'Detecting the BPM…';
+  if (tempo.status === 'queued') return 'Waiting to detect the BPM…';
+  if (tempo.bpm !== null) {
+    if (tempo.source === 'manual') return 'Set by you.';
+    if (tempo.confidence < LOW_CONFIDENCE) return 'A rough guess: check it with ÷2 / ×2, or tap along.';
+    return 'Detected from the audio.';
+  }
+  if (tempo.status === 'failed') return 'No steady beat found. Type or tap the BPM instead.';
+  if (tempo.status === 'unavailable') return 'This track can’t be streamed, so it can’t be analysed.';
+  if (tempo.status === 'no-permission') return 'Not allowed to read Bandcamp’s audio: turn “Detect track BPMs” off and on in the extension popup.';
+  return '';
 }
 
 function injectStyles() {

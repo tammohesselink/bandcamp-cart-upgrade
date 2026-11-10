@@ -9,6 +9,7 @@ import {
 } from './cart-history';
 import { log, initDebugLogging } from './log';
 import { loadSettings, saveSetting } from './settings';
+import { AUDIO_HOST_PERMISSION } from './audio-fetch';
 
 // Chrome closes the action popup as soon as a file picker opens, so importing happens
 // in a tab that shows this same page.
@@ -21,7 +22,7 @@ async function loadShowDiscographyButton(): Promise<boolean> {
   return typeof v === 'boolean' ? v : true;
 }
 
-function addToggle(container: HTMLElement, label: string, checked: boolean, onChange: (v: boolean) => void): void {
+function addToggle(container: HTMLElement, label: string, checked: boolean, onChange: (v: boolean) => void): HTMLInputElement {
   const row = document.createElement('div');
   row.className = 'setting';
 
@@ -43,6 +44,36 @@ function addToggle(container: HTMLElement, label: string, checked: boolean, onCh
   toggleWrapper.append(input, track);
   row.append(labelEl, toggleWrapper);
   container.appendChild(row);
+  return input;
+}
+
+// Turning tempo analysis on asks for the permission to read Bandcamp's audio
+// streams; turning it off gives the permission back.
+function addTempoAnalysisToggle(container: HTMLElement, enabled: boolean): void {
+  const input = addToggle(container, 'Detect track BPMs (tempo analysis)', enabled, (on) => {
+    if (!on) {
+      void saveSetting('tempoAnalysis', false);
+      chrome.permissions.remove({ origins: [AUDIO_HOST_PERMISSION] }).catch(() => {});
+      return;
+    }
+    // Must be asked straight from the click, before anything is awaited.
+    chrome.permissions
+      .request({ origins: [AUDIO_HOST_PERMISSION] })
+      .then((granted) => {
+        input.checked = granted;
+        if (granted) void saveSetting('tempoAnalysis', true);
+      })
+      .catch((error) => {
+        log.warn(error);
+        input.checked = false;
+      });
+  });
+  const description = document.createElement('p');
+  description.className = 'setting-description';
+  description.textContent =
+    'Downloads the start of each track as it plays to find its BPM, shown next to the tempo slider. ' +
+    'Asks to read Bandcamp’s audio streams (bcbits.com).';
+  container.appendChild(description);
 }
 
 function setStatus(statusElement: HTMLElement, message: string, isError = false): void {
@@ -164,6 +195,11 @@ async function init(): Promise<void> {
   addToggle(container, 'Enable named carts', settings.namedCartsEnabled, (v) => {
     saveSetting('namedCartsEnabled', v);
   });
+
+  // The permission can also be taken away in the browser's extension settings.
+  const audioAllowed = await chrome.permissions.contains({ origins: [AUDIO_HOST_PERMISSION] }).catch(() => false);
+  if (settings.tempoAnalysis && !audioAllowed) void saveSetting('tempoAnalysis', false);
+  addTempoAnalysisToggle(container, settings.tempoAnalysis && audioAllowed);
 
   addToggle(container, 'Show advanced functionality', settings.showAdvanced, (v) => {
     showAdvanced(advanced, v);

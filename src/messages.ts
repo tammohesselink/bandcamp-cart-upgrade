@@ -46,8 +46,18 @@ export interface IncognitoAccessRequest {
   type: 'incognito-access';
 }
 
+// Fetches the start of a track's audio for tempo analysis. Bandcamp's stream
+// host sends no CORS headers, so only the background, with the optional
+// bcbits.com host permission, can read it.
+export interface FetchAudioRequest {
+  type: 'fetch-audio';
+  url: string;
+  bulk?: boolean;
+}
+
 export type BcpRequest =
   | FetchRequest
+  | FetchAudioRequest
   | CartAddRequest
   | CartRemoveRequest
   | OpenIncognitoCheckoutRequest
@@ -68,11 +78,20 @@ export interface IncognitoAccessResponse {
   allowed: boolean;
 }
 
-export type BcpResponse = FetchResponse | CartMutationResponse | IncognitoAccessResponse;
+export interface FetchAudioResponse {
+  // The audio file's first bytes, base64 encoded (messages carry JSON).
+  audioBase64?: string;
+  error?: string;
+  // The bcbits.com permission hasn't been granted (or was taken away).
+  noPermission?: boolean;
+}
+
+export type BcpResponse = FetchResponse | FetchAudioResponse | CartMutationResponse | IncognitoAccessResponse;
 
 // Typed wrapper around chrome.runtime.sendMessage so callers get the right
 // response type inferred from the request they send.
 export function sendBcpMessage(msg: FetchRequest): Promise<FetchResponse>;
+export function sendBcpMessage(msg: FetchAudioRequest): Promise<FetchAudioResponse>;
 export function sendBcpMessage(
   msg: CartAddRequest | CartRemoveRequest | OpenIncognitoCheckoutRequest
 ): Promise<CartMutationResponse>;

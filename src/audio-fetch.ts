@@ -1,0 +1,61 @@
+// Background-side reading of a track's audio for tempo analysis.
+
+// The optional host permission that lets the background read Bandcamp's
+// streams. Asked for when tempo analysis is turned on, so turning it on is the
+// only thing that shows a new permission prompt.
+export const AUDIO_HOST_PERMISSION = 'https://*.bcbits.com/*';
+
+// About 2.5 minutes of Bandcamp's 128 kbps streams: as much as the analysis
+// uses (ANALYSIS_MAX_SECONDS), plus room for a tag with artwork at the start.
+export const MAX_AUDIO_BYTES = 2_600_000;
+
+// Stream links are on *.bcbits.com, or on bandcamp.com and redirect there.
+export function isStreamUrl(rawUrl: string): boolean {
+  try {
+    const u = new URL(rawUrl);
+    if (u.protocol !== 'https:') return false;
+    return u.hostname.endsWith('.bcbits.com') || u.hostname === 'bandcamp.com' || u.hostname.endsWith('.bandcamp.com');
+  } catch {
+    return false;
+  }
+}
+
+// Reads at most `maxBytes` of a response body, and stops the download there.
+export async function readCapped(response: Response, maxBytes: number): Promise<Uint8Array> {
+  const reader = response.body?.getReader();
+  if (!reader) return new Uint8Array(await response.arrayBuffer()).subarray(0, maxBytes);
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  while (length < maxBytes) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    length += value.length;
+  }
+  if (length >= maxBytes) reader.cancel().catch(() => {});
+  const out = new Uint8Array(Math.min(length, maxBytes));
+  let offset = 0;
+  for (const chunk of chunks) {
+    const take = Math.min(chunk.length, out.length - offset);
+    out.set(chunk.subarray(0, take), offset);
+    offset += take;
+    if (offset >= out.length) break;
+  }
+  return out;
+}
+
+export function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+export function base64ToBytes(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
