@@ -2529,7 +2529,8 @@ function setupFanGridPlaylist(player: Player, grid: FanGrid): () => void {
         player.showToast(`Remove from wishlist failed: ${result.error ?? 'unknown error'}`, 'error');
         return false;
       }
-      items.splice(items.indexOf(item), 1);
+      // By key: addItems() can swap in fresh item objects while the request runs.
+      items = items.filter((it) => releaseGridItemKey(it) !== key);
       removedKeys.add(key);
       tracksByReleaseUrl[id].delete(key);
       problems.delete(key);
