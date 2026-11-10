@@ -114,11 +114,8 @@ chrome.runtime.onMessage.addListener((message: BcpRequest, sender, sendResponse)
   if (message.type === 'wishlist-remove') {
     // Endpoint: POST {artist}.bandcamp.com/uncollect_item_cb
     // Body fields captured via DevTools: fan_id, item_id, item_type, band_id, crumb
-    const origin = bandcampOrigin(message.releaseUrl);
-    if (!origin) {
-      sendResponse({ ok: false, error: 'Invalid releaseUrl' });
-      return false;
-    }
+    // Releases on an artist's own domain go through bandcamp.com instead.
+    const origin = bandcampOrigin(message.releaseUrl) ?? 'https://bandcamp.com';
     removeFromWishlist(origin, message).then(sendResponse);
     return true;
   }
@@ -233,7 +230,10 @@ async function removeFromWishlist(origin: string, message: WishlistRemoveRequest
     } catch (err: unknown) {
       return { ok: false, error: String(err) };
     }
-    if (!json?.error) return { ok: true, body: json };
+    // Anything but JSON, such as a login page once the session has expired,
+    // does not confirm the removal.
+    if (json === null) return { ok: false, error: 'Unexpected response from Bandcamp' };
+    if (!json.error) return { ok: true, body: json };
     if (json.error === 'invalid_crumb' && typeof json.crumb === 'string' && attempt === 0) {
       crumb = json.crumb;
       continue;

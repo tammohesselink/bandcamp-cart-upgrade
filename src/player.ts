@@ -123,7 +123,8 @@ export class Player {
   onCartRemove?: (track: PlaylistTrack, cartItemUrl: string) => Promise<void>;
   // Set on the fan's own wishlist page: takes the wishlist item the track
   // belongs to off the wishlist. Offered for tracks played from the Wishlist.
-  onWishlistRemove?: (track: PlaylistTrack) => Promise<void>;
+  // Resolves to whether it was removed.
+  onWishlistRemove?: (track: PlaylistTrack) => Promise<boolean>;
   onCheckoutSelected?: (selectedRawUrls: string[]) => Promise<void>;
   onPlaybackStart?: () => void;
   onPlayStateChange?: (playing: boolean) => void;
@@ -1369,8 +1370,16 @@ export class Player {
         const confirmed = await this.showConfirm('Remove from wishlist', `Remove "${releaseLabel}" from your wishlist?`);
         if (!confirmed) return;
         unwishBtn.disabled = true;
-        await this.onWishlistRemove?.(track);
-        unwishBtn.disabled = false;
+        let removed = false;
+        try {
+          removed = (await this.onWishlistRemove?.(track)) ?? false;
+        } catch (err) {
+          this.showToast(`Remove from wishlist failed: ${String(err)}`, 'error');
+        } finally {
+          // A removed track can play on, but is off the wishlist now.
+          if (removed) unwishBtn.remove();
+          else unwishBtn.disabled = false;
+        }
       });
       this.cartActionsEl.append(unwishBtn);
     }
