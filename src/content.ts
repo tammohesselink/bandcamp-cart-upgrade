@@ -1,6 +1,6 @@
 import type { CartItem, PlaylistId, PlaylistTrack, SavedCartItem, NamedCart } from './types';
 import { hasTralbumData, parseTralbum, isReleaseOwned } from './bandcamp';
-import { Player } from './player';
+import { Player, PLAYLIST_LABELS } from './player';
 import { setupNativePlayerSync } from './native-sync';
 import {
   probeCart,
@@ -90,13 +90,12 @@ type ReleasePlaylistId = Exclude<PlaylistId, 'currentpage'>;
 type ReleaseGridPlaylistId = 'collection' | 'feed' | 'newreleases';
 interface ReleaseGridPlaylist {
   id: ReleaseGridPlaylistId;
-  label: string;
   grid: ReleaseGrid;
 }
 const RELEASE_GRID_PLAYLISTS: ReleaseGridPlaylist[] = [
-  { id: 'collection', label: 'Collection', grid: COLLECTION_GRID },
-  { id: 'feed', label: 'Feed', grid: FEED_STORIES_GRID },
-  { id: 'newreleases', label: 'New releases', grid: FEED_NEW_RELEASES_GRID },
+  { id: 'collection', grid: COLLECTION_GRID },
+  { id: 'feed', grid: FEED_STORIES_GRID },
+  { id: 'newreleases', grid: FEED_NEW_RELEASES_GRID },
 ];
 
 // Per playlist, normalised release URL → its tracks, for the ▶ buttons on the
@@ -2017,7 +2016,7 @@ async function fetchTracksForUrl(url: string, maxAgeMs = TRACK_DETAILS_MAX_AGE_M
 }
 
 function allPlaylistTracks(player: Player): PlaylistTrack[] {
-  return (['currentpage', 'cart', 'discography', 'collection', 'feed', 'newreleases'] as const).flatMap((id) => player.getPlaylistTracks(id));
+  return (Object.keys(PLAYLIST_LABELS) as PlaylistId[]).flatMap((id) => player.getPlaylistTracks(id));
 }
 
 // Copies stream links and playability from freshly fetched tracks onto the
@@ -2313,8 +2312,10 @@ function watchGridItems(gridSelector: string, itemSelector: string, onItemsDrawn
 //
 // tracksByReleaseUrl[id] is keyed by releaseGridItemKey(), not by URL, as
 // several items can link to the same album.
-function setupReleaseGridPlaylist(player: Player, { id, label, grid }: ReleaseGridPlaylist, initialItems: CartItem[]): void {
-  if (id === 'collection') document.querySelector(SEL_COLLECTION_PLAYER)?.classList.add('bcp-replaced');
+function setupReleaseGridPlaylist(player: Player, { id, grid }: ReleaseGridPlaylist, initialItems: CartItem[]): void {
+  // Bandcamp's own player on a fan's pages, where the page has one.
+  document.querySelector(SEL_COLLECTION_PLAYER)?.classList.add('bcp-replaced');
+  const label = PLAYLIST_LABELS[id];
   const tracksByKey = tracksByReleaseUrl[id];
 
   // Every item drawn so far, in page order, loaded or not.

@@ -18,7 +18,7 @@ const TEMPO_RANGES = [
 type StatusKind = 'loading' | 'error' | 'warn' | 'info';
 
 // Tab labels for playlists that are first made by adding tracks to them.
-const PLAYLIST_LABELS: Record<PlaylistId, string> = {
+export const PLAYLIST_LABELS: Record<PlaylistId, string> = {
   currentpage: 'Current page',
   cart: 'Cart',
   discography: 'Label discography',
