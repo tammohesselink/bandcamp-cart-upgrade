@@ -79,6 +79,12 @@ describe('detectTempo', () => {
     expect(estimate!.confidence).toBeGreaterThan(0.5);
   });
 
+  it.each([60, 200])('stays within the detectable range at its edge (%s BPM)', (bpm) => {
+    const estimate = detectTempo(drumLoop(bpm, { offbeatHats: false, backbeat: false }), RATE);
+    expect(estimate!.bpm).toBeGreaterThanOrEqual(60);
+    expect(estimate!.bpm).toBeLessThanOrEqual(200);
+  });
+
   it('finds a slow tempo with kicks only', () => {
     const estimate = detectTempo(drumLoop(92, { offbeatHats: false, backbeat: false }), RATE);
     expect(estimate!.bpm).toBeCloseTo(92, 0);

@@ -68,7 +68,9 @@ export function detectTempo(samples: Float32Array, sampleRate: number): TempoEst
   // to a hundredth of a BPM; the preference weighting would only skew it.
   let refinedBpm = bestBpm;
   let refinedScore = -Infinity;
-  for (let bpm = bestBpm - 1; bpm <= bestBpm + 1; bpm += FINE_STEP_BPM) {
+  const fineFrom = Math.max(MIN_BPM, bestBpm - 1);
+  const fineTo = Math.min(MAX_BPM, bestBpm + 1);
+  for (let bpm = fineFrom; bpm <= fineTo + 1e-9; bpm += FINE_STEP_BPM) {
     const score = combScore(correlation, periodOf(bpm), FINE_HARMONICS);
     if (score > refinedScore) {
       refinedScore = score;

@@ -8,6 +8,7 @@ import type { TempoAnalyzer, TrackTempo } from './tempo-analyzer';
 import {
   LOW_CONFIDENCE,
   addTap,
+  effectiveBpm,
   formatBpm,
   rateForTargetBpm,
   rateToMatchBpm,
@@ -1630,7 +1631,7 @@ export class Player {
       const bpm = this.currentTempo()?.bpm;
       if (bpm && target > 0) {
         this.setPlaybackRate(rateForTargetBpm(bpm, target));
-        if (this.keptBpm !== null) this.keptBpm = this.playbackRate * bpm;
+        if (this.keptBpm !== null) this.keptBpm = effectiveBpm(bpm, this.playbackRate);
       }
       this.renderTempo();
     });
@@ -1719,7 +1720,7 @@ export class Player {
   private onTempoChangedByUser() {
     if (this.keptBpm === null) return;
     const bpm = this.currentTempo()?.bpm;
-    if (bpm) this.keptBpm = bpm * this.playbackRate;
+    if (bpm) this.keptBpm = effectiveBpm(bpm, this.playbackRate);
   }
 
   private toggleKeepBpm() {
@@ -1727,7 +1728,7 @@ export class Player {
     if (this.keptBpm !== null || !bpm) {
       this.keptBpm = null;
     } else {
-      this.keptBpm = bpm * this.playbackRate;
+      this.keptBpm = effectiveBpm(bpm, this.playbackRate);
       this.keptBpmAppliedTo = this.currentTrack();
     }
     this.renderTempo();
@@ -1750,7 +1751,7 @@ export class Player {
     if (!track || !bpm) return;
     this.tempoAnalyzer?.setBpm(track, bpm * factor);
     // Keep playing at the same speed; only the number was off.
-    if (this.keptBpm !== null) this.keptBpm = bpm * factor * this.playbackRate;
+    if (this.keptBpm !== null) this.keptBpm = effectiveBpm(bpm * factor, this.playbackRate);
   }
 
   private tap() {
@@ -1805,7 +1806,7 @@ export class Player {
     const bpm = tempo?.bpm ?? null;
     const detecting = tempo?.status === 'queued' || tempo?.status === 'analyzing';
     const rough = !!tempo && tempo.source === 'detected' && tempo.confidence < LOW_CONFIDENCE;
-    const playingBpm = bpm !== null ? bpm * this.playbackRate : null;
+    const playingBpm = bpm !== null ? effectiveBpm(bpm, this.playbackRate) : null;
 
     // The readout next to the slider: the BPM as heard.
     if (playingBpm !== null) {
@@ -1833,8 +1834,8 @@ export class Player {
 
     setInputValue(this.playingBpmInput, playingBpm !== null ? formatBpm(playingBpm) : '');
     this.playingBpmInput.disabled = bpm === null;
-    const pct = (this.playbackRate - 1) * 100;
-    this.playingPercentEl.textContent = `${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%`;
+    const percent = (this.playbackRate - 1) * 100;
+    this.playingPercentEl.textContent = `${percent >= 0 ? '+' : ''}${percent.toFixed(1)}%`;
 
     const tapped = tappedBpm(this.tapTimes);
     if (tapped !== null) {
@@ -1944,6 +1945,7 @@ function tempoNote(tempo: TrackTempo | null): string {
     return 'Detected from the audio.';
   }
   if (tempo.status === 'failed') return 'No steady beat found. Type or tap the BPM instead.';
+  if (tempo.status === 'error') return 'Couldn’t download the audio. It is tried again when the track next plays.';
   if (tempo.status === 'unavailable') return 'This track can’t be streamed, so it can’t be analysed.';
   if (tempo.status === 'no-permission') return 'Not allowed to read Bandcamp’s audio: turn “Detect track BPMs” off and on in the extension popup.';
   return '';

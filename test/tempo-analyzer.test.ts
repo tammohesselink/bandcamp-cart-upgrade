@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { TempoAnalyzer, type TempoAnalyzerDeps } from '../src/tempo-analyzer';
+import { ERROR_RETRY_AFTER_MS, TempoAnalyzer, type TempoAnalyzerDeps } from '../src/tempo-analyzer';
 import { trackTempoKey, type StoredTempo } from '../src/tempo-store';
 import { bytesToBase64 } from '../src/audio-fetch';
 import type { PlaylistTrack } from '../src/types';
@@ -137,6 +137,110 @@ describe('TempoAnalyzer', () => {
     expect(order.slice(0, 3)).toEqual(['track-1', 'track-2', 'track-9']);
   });
 
+});
+
+describe('TempoAnalyzer keeping BPMs the user set', () => {
+  // A fetch that waits until the test lets it go.
+  function heldFetch() {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const fetchAudio = vi.fn(async () => {
+      await held;
+      return { audioBase64: bytesToBase64(new Uint8Array([1])) };
+    });
+    return { fetchAudio, release: () => release() };
+  }
+
+  it('keeps a BPM set while detection was running', async () => {
+    const { fetchAudio, release } = heldFetch();
+    const { analyzer, written } = setup({ fetchAudio });
+    const t = track(1);
+
+    analyzer.analyse(t);
+    await settle();
+    analyzer.setBpm(t, 100);
+    release();
+    await settle();
+
+    expect(analyzer.get(t)).toMatchObject({ bpm: 100, source: 'manual' });
+    expect(written.get(trackTempoKey(t))).toMatchObject({ bpm: 100, source: 'manual' });
+  });
+
+  it('drops a waiting detection when the BPM is set', async () => {
+    const { fetchAudio, release } = heldFetch();
+    const { analyzer, deps } = setup({ fetchAudio });
+    const [a, b, c] = [track(1), track(2), track(3)];
+    for (const t of [a, b, c]) analyzer.analyse(t, { bulk: true });
+    await settle();
+
+    analyzer.setBpm(c, 90);
+    release();
+    await settle();
+
+    expect(deps.fetchAudio).toHaveBeenCalledTimes(2);
+    expect(analyzer.get(c)).toMatchObject({ bpm: 90, source: 'manual' });
+  });
+
+  it('uses a saved BPM that was still being loaded instead of downloading', async () => {
+    const t = track(1);
+    const saved = new Map([[trackTempoKey(t), { bpm: 95, confidence: 1, source: 'manual' as const, savedAt: 0 }]]);
+    const { analyzer, deps } = setup({}, saved);
+
+    // No load() first, as when a track plays before its playlist's read returns.
+    analyzer.analyse(t);
+    await settle();
+
+    expect(deps.fetchAudio).not.toHaveBeenCalled();
+    expect(analyzer.get(t).bpm).toBe(95);
+  });
+});
+
+describe('TempoAnalyzer failures', () => {
+  it('retries a track whose download failed, after a while', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const fetchAudio = vi.fn(async () => ({ error: 'HTTP 503' }));
+      const { analyzer } = setup({ fetchAudio });
+      const t = track(1);
+
+      analyzer.analyse(t);
+      await settle();
+      expect(analyzer.get(t).status).toBe('error');
+
+      analyzer.analyse(t);
+      await settle();
+      expect(fetchAudio).toHaveBeenCalledTimes(1);
+
+      vi.setSystemTime(Date.now() + ERROR_RETRY_AFTER_MS + 1);
+      analyzer.analyse(t);
+      await settle();
+      expect(fetchAudio).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('drops the result of a detection still running when turned off', async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const { analyzer, deps, written } = setup({
+      fetchAudio: vi.fn(async () => {
+        await held;
+        return { audioBase64: bytesToBase64(new Uint8Array([1])) };
+      }),
+    });
+    const t = track(1);
+
+    analyzer.analyse(t);
+    await settle();
+    analyzer.setEnabled(false);
+    release();
+    await settle();
+
+    expect(deps.decode).not.toHaveBeenCalled();
+    expect(written.size).toBe(0);
+    expect(analyzer.get(t).bpm).toBeNull();
+  });
 });
 
 describe('trackTempoKey', () => {

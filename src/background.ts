@@ -3,21 +3,26 @@ import { AUDIO_HOST_PERMISSION, MAX_AUDIO_BYTES, bytesToBase64, isStreamUrl, rea
 import { createLimiter, dedupeInFlight, type Priority } from './inflight';
 import { pruneTrackCache } from './cache';
 import { isCartAddRejected } from './bandcamp';
-import { saveSetting } from './settings';
+import { loadSettings, saveSetting } from './settings';
 
 chrome.runtime.onStartup.addListener(() => { void pruneTrackCache(); });
 chrome.runtime.onInstalled.addListener(() => { void pruneTrackCache(); });
 
-// The stream permission is what turns tempo analysis on and off. Firefox
-// closes the popup while it asks, before the popup could save the setting, and
-// the permission can also be taken away in the browser's extension settings.
+// The stream permission is what turns tempo analysis on and off, and this is
+// the one place that saves the setting when it changes: Firefox closes the
+// popup while it asks, before the popup could save it, and the permission can
+// also be taken away in the browser's extension settings. Writing only when
+// the value differs keeps it from overwriting a toggle the popup just saved.
 const grantsAudio = (permissions: chrome.permissions.Permissions) =>
   !!permissions.origins?.includes(AUDIO_HOST_PERMISSION);
+async function setTempoAnalysis(enabled: boolean): Promise<void> {
+  if ((await loadSettings()).tempoAnalysis !== enabled) await saveSetting('tempoAnalysis', enabled);
+}
 chrome.permissions.onAdded.addListener((permissions) => {
-  if (grantsAudio(permissions)) void saveSetting('tempoAnalysis', true);
+  if (grantsAudio(permissions)) void setTempoAnalysis(true);
 });
 chrome.permissions.onRemoved.addListener((permissions) => {
-  if (grantsAudio(permissions)) void saveSetting('tempoAnalysis', false);
+  if (grantsAudio(permissions)) void setTempoAnalysis(false);
 });
 
 // Returns the https origin for a Bandcamp URL, or null if the URL isn't a valid

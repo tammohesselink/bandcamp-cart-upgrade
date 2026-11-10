@@ -12,9 +12,9 @@ export const MAX_AUDIO_BYTES = 2_600_000;
 // Stream links are on *.bcbits.com, or on bandcamp.com and redirect there.
 export function isStreamUrl(rawUrl: string): boolean {
   try {
-    const u = new URL(rawUrl);
-    if (u.protocol !== 'https:') return false;
-    return u.hostname.endsWith('.bcbits.com') || u.hostname === 'bandcamp.com' || u.hostname.endsWith('.bandcamp.com');
+    const url = new URL(rawUrl);
+    if (url.protocol !== 'https:') return false;
+    return url.hostname.endsWith('.bcbits.com') || url.hostname === 'bandcamp.com' || url.hostname.endsWith('.bandcamp.com');
   } catch {
     return false;
   }

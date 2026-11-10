@@ -48,12 +48,16 @@ function addToggle(container: HTMLElement, label: string, checked: boolean, onCh
 }
 
 // Turning tempo analysis on asks for the permission to read Bandcamp's audio
-// streams; turning it off gives the permission back.
+// streams; turning it off gives the permission back. The background saves the
+// setting as the permission is granted or removed.
 function addTempoAnalysisToggle(container: HTMLElement, enabled: boolean): void {
   const input = addToggle(container, 'Detect track BPMs (tempo analysis)', enabled, (on) => {
     if (!on) {
-      void saveSetting('tempoAnalysis', false);
-      chrome.permissions.remove({ origins: [AUDIO_HOST_PERMISSION] }).catch(() => {});
+      chrome.permissions
+        .remove({ origins: [AUDIO_HOST_PERMISSION] })
+        // Nothing was removed, so the background won't hear of it.
+        .then((removed) => { if (!removed) void saveSetting('tempoAnalysis', false); })
+        .catch(() => void saveSetting('tempoAnalysis', false));
       return;
     }
     // Must be asked straight from the click, before anything is awaited.
@@ -61,7 +65,6 @@ function addTempoAnalysisToggle(container: HTMLElement, enabled: boolean): void 
       .request({ origins: [AUDIO_HOST_PERMISSION] })
       .then((granted) => {
         input.checked = granted;
-        if (granted) void saveSetting('tempoAnalysis', true);
       })
       .catch((error) => {
         log.warn(error);
