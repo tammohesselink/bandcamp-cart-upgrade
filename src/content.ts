@@ -1,14 +1,14 @@
 import type { CartItem, PlaylistId, PlaylistTrack, SavedCartItem, NamedCart } from './types';
 import { hasTralbumData, parseTralbum, isReleaseOwned } from './bandcamp';
-import { Player } from './player';
+import { Player, PLAYLIST_LABELS } from './player';
 import { setupNativePlayerSync } from './native-sync';
 import {
   probeCart,
   probeDiscography,
-  probeCollection,
-  readCollectionItem,
-  collectionItemKey,
-  collectionItemTracks,
+  probeReleaseGrid,
+  readReleaseGridItem,
+  releaseGridItemKey,
+  releaseGridItemTracks,
   injectDiscographyButton,
   injectRestoreCartButton,
   injectRemoveAlreadyOwnedButton,
@@ -39,11 +39,13 @@ import {
   SEL_MUSIC_GRID,
   SEL_MUSIC_GRID_ITEM,
   SEL_GRID_ITEM_TITLE,
-  SEL_COLLECTION_ITEMS,
-  SEL_WISHLIST_ITEMS,
-  SEL_COLLECTION_ITEM,
-  SEL_COLLECTION_ITEM_PLAY,
+  SEL_RELEASE_GRID_ITEM_PLAY,
   SEL_COLLECTION_PLAYER,
+  COLLECTION_GRID,
+  WISHLIST_GRID,
+  FEED_STORIES_GRID,
+  FEED_NEW_RELEASES_GRID,
+  type ReleaseGrid,
   readOwnFanPageFanId,
   readPageCrumb,
 } from './bandcamp-dom';
@@ -94,19 +96,25 @@ const tracksByReleaseUrl: Record<ReleasePlaylistId, Map<string, PlaylistTrack[]>
   discography: new Map(),
   collection: new Map(),
   wishlist: new Map(),
+  feed: new Map(),
+  newreleases: new Map(),
 };
 
-// The grids of a fan's page that play in the bottom player. Bandcamp draws only
-// the open tab's grid with the page; the other is drawn once the fan opens it.
-type FanGridPlaylistId = 'collection' | 'wishlist';
+// The grids of a fan's pages that play in the bottom player: the collection and
+// wishlist tabs of bandcamp.com/<username>, and the stories and sidebar of
+// bandcamp.com/<username>/feed. Bandcamp draws only the open tab's grid with the
+// page; the other is drawn once the fan opens it. In the order their playlists
+// are made: the first open one starts selected.
+type FanGridPlaylistId = 'collection' | 'wishlist' | 'feed' | 'newreleases';
 interface FanGrid {
   id: FanGridPlaylistId;
-  label: string;
-  itemsSelector: string;
+  selectors: ReleaseGrid;
 }
 const FAN_GRIDS: FanGrid[] = [
-  { id: 'collection', label: 'Collection', itemsSelector: SEL_COLLECTION_ITEMS },
-  { id: 'wishlist', label: 'Wishlist', itemsSelector: SEL_WISHLIST_ITEMS },
+  { id: 'collection', selectors: COLLECTION_GRID },
+  { id: 'wishlist', selectors: WISHLIST_GRID },
+  { id: 'feed', selectors: FEED_STORIES_GRID },
+  { id: 'newreleases', selectors: FEED_NEW_RELEASES_GRID },
 ];
 
 // The live named-cart list and the Player instance for the current page, if any
@@ -1256,13 +1264,13 @@ async function main() {
   log.info('[bcp] Cart items found:');
   log.table(cartItems.map((it) => ({ type: it.type, title: it.title, artist: it.artist, url: it.url })));
 
-  // Probe discography and the fan's collection and wishlist early so we can show
-  // the player on label and fan pages even when the cart is empty. Release pages
+  // Probe discography and the fan's collection, wishlist and feed early so we can
+  // show the player on label and fan pages even when the cart is empty. Release pages
   // always get the player for their own tracks.
   const discoItems = probeDiscography();
   // A fan page gets the player even before its open grid has drawn any items:
   // logged in, Bandcamp can draw them after the page has loaded.
-  const isFanPage = FAN_GRIDS.some((grid) => document.querySelector(grid.itemsSelector) !== null);
+  const isFanPage = FAN_GRIDS.some((grid) => document.querySelector(grid.selectors.container) !== null);
 
   if (cartItems.length === 0 && discoItems.length === 0 && !isFanPage && !isTrackOrAlbumPage()) {
     log.warn(
@@ -2019,7 +2027,7 @@ async function fetchTracksForUrl(url: string, maxAgeMs = TRACK_DETAILS_MAX_AGE_M
 }
 
 function allPlaylistTracks(player: Player): PlaylistTrack[] {
-  return (['currentpage', 'cart', 'discography', 'collection', 'wishlist'] as const).flatMap((id) => player.getPlaylistTracks(id));
+  return (Object.keys(PLAYLIST_LABELS) as PlaylistId[]).flatMap((id) => player.getPlaylistTracks(id));
 }
 
 // Copies stream links and playability from freshly fetched tracks onto the
@@ -2154,14 +2162,16 @@ function highlightDiscoItem(activeUrl: string | null): void {
   }
 }
 
-function highlightFanGridItem(grid: FanGrid, activeUrl: string | null): void {
-  for (const li of Array.from(document.querySelectorAll<HTMLElement>(`${grid.itemsSelector} ${SEL_COLLECTION_ITEM}.bcp-playing`))) {
-    li.classList.remove('bcp-playing');
+// `activeKey` is a releaseGridItemKey().
+function highlightFanGridItem({ selectors }: FanGrid, activeKey: string | null): void {
+  const itemsInGrid = `${selectors.container} ${selectors.item}`;
+  for (const itemEl of Array.from(document.querySelectorAll<HTMLElement>(`${itemsInGrid}.bcp-playing`))) {
+    itemEl.classList.remove('bcp-playing');
   }
-  if (!activeUrl) return;
-  for (const li of Array.from(document.querySelectorAll<HTMLElement>(`${grid.itemsSelector} ${SEL_COLLECTION_ITEM}`))) {
-    const item = readCollectionItem(li);
-    if (item && collectionItemKey(item) === activeUrl) li.classList.add('bcp-playing');
+  if (!activeKey) return;
+  for (const itemEl of Array.from(document.querySelectorAll<HTMLElement>(itemsInGrid))) {
+    const item = readReleaseGridItem(itemEl, selectors);
+    if (item && releaseGridItemKey(item) === activeKey) itemEl.classList.add('bcp-playing');
   }
 }
 
@@ -2309,7 +2319,7 @@ function watchGridItems(gridSelector: string, itemSelector: string, onItemsDrawn
 // that Bandcamp marks `active` while its tab is open; a grid outside one counts
 // as open.
 function isFanGridOpen(grid: FanGrid): boolean {
-  const items = document.querySelector(grid.itemsSelector);
+  const items = document.querySelector(grid.selectors.container);
   if (!items) return false;
   const tab = items.closest('.grid');
   return !tab || tab.classList.contains('active');
@@ -2319,8 +2329,9 @@ function isFanGridOpen(grid: FanGrid): boolean {
 // grid or opens a tab. The whole page is watched, and the grid looked up again
 // each time, as Bandcamp can swap out the grid's elements as it draws them.
 function watchFanGrids(onChange: () => void): void {
+  const itemSelector = FAN_GRIDS.map((grid) => grid.selectors.item).join(', ');
   const isGridItem = (node: Node) =>
-    node instanceof HTMLElement && (node.matches(SEL_COLLECTION_ITEM) || node.querySelector(SEL_COLLECTION_ITEM) !== null);
+    node instanceof HTMLElement && (node.matches(itemSelector) || node.querySelector(itemSelector) !== null);
   const isTabSwitch = (m: MutationRecord) => m.type === 'attributes' && m.target instanceof HTMLElement && m.target.matches('.grid');
   const observer = new MutationObserver((mutations) => {
     if (mutations.some((m) => isTabSwitch(m) || Array.from(m.addedNodes).some(isGridItem))) onChange();
@@ -2329,21 +2340,24 @@ function watchFanGrids(onChange: () => void): void {
   window.addEventListener('pagehide', () => observer.disconnect(), { once: true });
 }
 
-// Plays the items drawn in a fan's collection or wishlist grid in the bottom
-// player, in place of Bandcamp's own player: clicking an item's artwork plays
-// the release, or just the track for a single track. Only what is on the page
-// joins the playlist; the items Bandcamp draws once the fan opens the grid's
-// tab, clicks "view all" or scrolls further join it as they appear.
+// Plays the items drawn in a fan's collection, wishlist or feed grid in the
+// bottom player, in place of Bandcamp's own player: clicking an item's artwork
+// plays the release, or just the track for a single track. Only what is on the
+// page joins the playlist; the items Bandcamp draws once the fan opens the
+// grid's tab, clicks "view all", scrolls further or gets new feed stories join
+// it as they appear.
 //
-// tracksByReleaseUrl[grid.id] is keyed by collectionItemKey(), not by URL, as
+// tracksByReleaseUrl[grid.id] is keyed by releaseGridItemKey(), not by URL, as
 // several items can link to the same album.
 // Returns what to run each time Bandcamp draws grid items or opens a tab.
 function setupFanGridPlaylist(player: Player, grid: FanGrid): () => void {
-  const { id, label } = grid;
+  const { id, selectors } = grid;
+  const label = PLAYLIST_LABELS[id];
+  // Bandcamp's own player on a fan's pages, where the page has one.
   document.querySelector(SEL_COLLECTION_PLAYER)?.classList.add('bcp-replaced');
 
   // Every item drawn so far, in page order, loaded or not.
-  const items: CartItem[] = [];
+  let items: CartItem[] = [];
   const problems = new Map<string, ItemProblem>();
   // Items taken off the wishlist, which Bandcamp's grid still holds, hidden.
   const removedKeys = new Set<string>();
@@ -2362,7 +2376,7 @@ function setupFanGridPlaylist(player: Player, grid: FanGrid): () => void {
     const tracks: PlaylistTrack[] = [];
     itemKeyByTrack.clear();
     for (const item of items) {
-      const key = collectionItemKey(item);
+      const key = releaseGridItemKey(item);
       for (const track of tracksByReleaseUrl[id].get(key) ?? []) {
         const page = normalizeUrl(track.pageUrl);
         if (seenPages.has(page)) continue;
@@ -2386,7 +2400,7 @@ function setupFanGridPlaylist(player: Player, grid: FanGrid): () => void {
       player.setPlaylistUnavailable(id, `${label} (${problem})`, reason, 'error');
       player.setPlaylistStatus(id, `${label}: ${problem}`, 'error');
     } else {
-      const loaded = items.filter((item) => tracksByReleaseUrl[id].has(collectionItemKey(item))).length;
+      const loaded = items.filter((item) => tracksByReleaseUrl[id].has(releaseGridItemKey(item))).length;
       player.setPlaylistStatus(id, `${loaded} items (${tracks.length} tracks)`, 'info');
     }
   };
@@ -2414,10 +2428,10 @@ function setupFanGridPlaylist(player: Player, grid: FanGrid): () => void {
     const onReleaseLoaded = (release: CartItem, releaseTracks: PlaylistTrack[]) => {
       const releaseUrl = normalizeUrl(release.url);
       for (const item of batch) {
-        const key = collectionItemKey(item);
+        const key = releaseGridItemKey(item);
         // An item played before its batch loaded keeps the tracks it plays from.
         if (normalizeUrl(item.url) !== releaseUrl || tracksByReleaseUrl[id].has(key)) continue;
-        tracksByReleaseUrl[id].set(key, collectionItemTracks(item, releaseTracks));
+        tracksByReleaseUrl[id].set(key, releaseGridItemTracks(item, releaseTracks));
       }
       if (showScheduled) return;
       showScheduled = true;
@@ -2429,18 +2443,24 @@ function setupFanGridPlaylist(player: Player, grid: FanGrid): () => void {
     const result = await resolvePlaylist(releases, reportProgress, onReleaseLoaded);
     for (const item of batch) {
       const problem = result.problems.get(item.url);
-      if (problem) problems.set(collectionItemKey(item), problem);
+      if (problem) problems.set(releaseGridItemKey(item), problem);
     }
 
     showStatus(showPlaylist());
     void recheckPlayability(result.recheckUrls, player);
   };
 
+  // `found` is every item now in the grid, in page order. The feed draws new
+  // stories above the ones already shown, so the items are put back in page
+  // order; any no longer on the page (e.g. a hidden new release) keep their
+  // tracks and go last.
   const addItems = (found: CartItem[]) => {
-    const known = new Set([...items.map(collectionItemKey), ...removedKeys]);
-    const fresh = found.filter((item) => !known.has(collectionItemKey(item)));
+    const known = new Set([...items.map(releaseGridItemKey), ...removedKeys]);
+    const fresh = found.filter((item) => !known.has(releaseGridItemKey(item)));
     if (fresh.length === 0) return;
-    items.push(...fresh);
+    const onPage = found.filter((item) => !removedKeys.has(releaseGridItemKey(item)));
+    const onPageKeys = new Set(onPage.map(releaseGridItemKey));
+    items = [...onPage, ...items.filter((item) => !onPageKeys.has(releaseGridItemKey(item)))];
     log.info(`[bcp] ${label} items found:`);
     log.table(fresh.map((it) => ({ type: it.type, title: it.title, artist: it.artist, url: it.url })));
     loadQueue = loadQueue
@@ -2451,7 +2471,7 @@ function setupFanGridPlaylist(player: Player, grid: FanGrid): () => void {
   // Like Bandcamp's own player, the artwork of the playing item pauses and
   // resumes it. Any other plays its item as soon as that one is fetched.
   const playItem = async (item: CartItem): Promise<void> => {
-    const key = collectionItemKey(item);
+    const key = releaseGridItemKey(item);
     const playing = player.currentPlaylistId === id ? player.getActiveTrack(id) : null;
     if (playing && releaseUrlForTrack(id, playing) === key) {
       if (player.isPlayingOrPending) player.pause();
@@ -2460,14 +2480,14 @@ function setupFanGridPlaylist(player: Player, grid: FanGrid): () => void {
     }
     if (playRelease(player, id, key)) return;
     const playStartsAtClick = player.playStartCount;
-    addItems(probeCollection(grid.itemsSelector));
+    addItems(probeReleaseGrid(selectors));
     const releaseTracks = await fetchTracksForUrl(item.url);
     if (releaseTracks.length === 0) {
       player.showToast('Could not load this release', 'error');
       return;
     }
     if (!tracksByReleaseUrl[id].has(key)) {
-      tracksByReleaseUrl[id].set(key, collectionItemTracks(item, releaseTracks));
+      tracksByReleaseUrl[id].set(key, releaseGridItemTracks(item, releaseTracks));
       showPlaylist();
     }
     if (player.playStartCount !== playStartsAtClick) return;
@@ -2478,9 +2498,9 @@ function setupFanGridPlaylist(player: Player, grid: FanGrid): () => void {
   // can draw them again, so they are hidden whenever it draws.
   const hideRemovedItems = () => {
     if (removedKeys.size === 0) return;
-    for (const li of Array.from(document.querySelectorAll<HTMLElement>(`${grid.itemsSelector} ${SEL_COLLECTION_ITEM}`))) {
-      const shown = readCollectionItem(li);
-      if (shown && removedKeys.has(collectionItemKey(shown))) li.style.display = 'none';
+    for (const itemEl of Array.from(document.querySelectorAll<HTMLElement>(`${selectors.container} ${selectors.item}`))) {
+      const shown = readReleaseGridItem(itemEl, selectors);
+      if (shown && removedKeys.has(releaseGridItemKey(shown))) itemEl.style.display = 'none';
     }
   };
 
@@ -2489,7 +2509,7 @@ function setupFanGridPlaylist(player: Player, grid: FanGrid): () => void {
   if (ownFanId !== null) {
     player.onWishlistRemove = async (track) => {
       const key = itemKeyByTrack.get(track) ?? releaseUrlForTrack(id, track);
-      const item = key === null ? undefined : items.find((it) => collectionItemKey(it) === key);
+      const item = key === null ? undefined : items.find((it) => releaseGridItemKey(it) === key);
       const bandId = track.bandId;
       if (key === null || !item || item.tralbumId === undefined || bandId === null) {
         player.showToast('Could not tell which wishlist item this is', 'error');
@@ -2509,7 +2529,8 @@ function setupFanGridPlaylist(player: Player, grid: FanGrid): () => void {
         player.showToast(`Remove from wishlist failed: ${result.error ?? 'unknown error'}`, 'error');
         return false;
       }
-      items.splice(items.indexOf(item), 1);
+      // By key: addItems() can swap in fresh item objects while the request runs.
+      items = items.filter((it) => releaseGridItemKey(it) !== key);
       removedKeys.add(key);
       tracksByReleaseUrl[id].delete(key);
       problems.delete(key);
@@ -2527,10 +2548,10 @@ function setupFanGridPlaylist(player: Player, grid: FanGrid): () => void {
   // start its player.
   const onActivate = (event: MouseEvent | KeyboardEvent) => {
     if (event instanceof KeyboardEvent && event.key !== 'Enter' && event.key !== ' ') return;
-    const artwork = event.target instanceof Element ? event.target.closest(SEL_COLLECTION_ITEM_PLAY) : null;
-    const li = artwork?.closest(SEL_COLLECTION_ITEM);
-    if (!li?.closest(grid.itemsSelector)) return;
-    const item = readCollectionItem(li);
+    const artwork = event.target instanceof Element ? event.target.closest(SEL_RELEASE_GRID_ITEM_PLAY) : null;
+    const itemEl = artwork?.closest(selectors.item);
+    if (!itemEl?.closest(selectors.container)) return;
+    const item = readReleaseGridItem(itemEl, selectors);
     if (!item) return;
     event.preventDefault();
     event.stopImmediatePropagation();
@@ -2545,7 +2566,7 @@ function setupFanGridPlaylist(player: Player, grid: FanGrid): () => void {
   // is what this page is for. Another grid joins once the fan opens its tab.
   const onGridDrawn = () => {
     hideRemovedItems();
-    if (isFanGridOpen(grid)) addItems(probeCollection(grid.itemsSelector));
+    if (isFanGridOpen(grid)) addItems(probeReleaseGrid(selectors));
   };
   if (isFanGridOpen(grid)) player.setPlaylist(id, label, []);
   onGridDrawn();

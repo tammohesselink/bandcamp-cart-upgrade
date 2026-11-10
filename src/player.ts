@@ -18,12 +18,14 @@ const TEMPO_RANGES = [
 type StatusKind = 'loading' | 'error' | 'warn' | 'info';
 
 // Tab labels for playlists that are first made by adding tracks to them.
-const PLAYLIST_LABELS: Record<PlaylistId, string> = {
+export const PLAYLIST_LABELS: Record<PlaylistId, string> = {
   currentpage: 'Current page',
   cart: 'Cart',
   discography: 'Label discography',
   collection: 'Collection',
   wishlist: 'Wishlist',
+  feed: 'Feed',
+  newreleases: 'New releases',
 };
 
 // How many upcoming tracks get a fresh stream link and start buffering while
@@ -578,7 +580,7 @@ export class Player {
   private updatePlaylistTabs() {
     const tabs = el('div', 'bcp-tab-list');
 
-    const ids: PlaylistId[] = ['currentpage', 'collection', 'wishlist', 'discography', 'cart'];
+    const ids: PlaylistId[] = ['currentpage', 'collection', 'wishlist', 'feed', 'newreleases', 'discography', 'cart'];
 
     for (const id of ids) {
       const state = this.playlists.get(id);

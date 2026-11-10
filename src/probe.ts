@@ -5,13 +5,7 @@
 import type { CartItem, PlaylistTrack } from './types';
 import { normalizeUrl } from './url';
 import { log } from './log';
-import {
-  SEL_COLLECTION_ITEMS,
-  SEL_COLLECTION_ITEM,
-  SEL_COLLECTION_ITEM_LINK,
-  SEL_COLLECTION_ITEM_TITLE,
-  SEL_COLLECTION_ITEM_ARTIST,
-} from './bandcamp-dom';
+import type { ReleaseGrid } from './bandcamp-dom';
 
 // --- Cart DOM probe -----------------------------------------------------------
 
@@ -241,45 +235,50 @@ function readGridClientItems(): CartItem[] {
   return items;
 }
 
-// --- Collection DOM probe ----------------------------------------------------
+// --- Release grid DOM probe (fan collection, wishlist and feed) -----------------
 
-// The items drawn in a fan's collection grid, or another grid drawn the same
-// way such as the wishlist, in page order. Only what is on the page: the rest of
-// a big collection is drawn as the fan asks for more.
-export function probeCollection(gridSelector: string = SEL_COLLECTION_ITEMS): CartItem[] {
-  const container = document.querySelector(gridSelector);
+// The items drawn in a release grid, in page order. Only what is on the page:
+// Bandcamp draws the rest of a big collection, or older feed stories, as the
+// fan asks for more.
+export function probeReleaseGrid(grid: ReleaseGrid): CartItem[] {
+  const container = document.querySelector(grid.container);
   if (!container) return [];
 
   const seen = new Set<string>();
   const items: CartItem[] = [];
-  for (const li of Array.from(container.querySelectorAll<HTMLElement>(SEL_COLLECTION_ITEM))) {
-    const item = readCollectionItem(li);
-    if (!item || seen.has(collectionItemKey(item))) continue;
-    seen.add(collectionItemKey(item));
+  for (const itemEl of Array.from(container.querySelectorAll<HTMLElement>(grid.item))) {
+    const item = readReleaseGridItem(itemEl, grid);
+    if (!item || seen.has(releaseGridItemKey(item))) continue;
+    seen.add(releaseGridItemKey(item));
     items.push(item);
   }
   return items;
 }
 
-// One collection grid item, or null when it links to no release. `type` is what
-// the fan bought: a track bought on its own links to its album, so it is told
+// One release grid item, or null when it links to no release. `type` is what
+// the item is: a track bought on its own links to its album, so it is told
 // apart by its tralbumId, the track's id.
-export function readCollectionItem(li: Element): CartItem | null {
-  const link = li.querySelector<HTMLAnchorElement>(SEL_COLLECTION_ITEM_LINK);
+export function readReleaseGridItem(itemEl: Element, grid: ReleaseGrid): CartItem | null {
+  const link = itemEl.querySelector<HTMLAnchorElement>(grid.link);
   if (!link) return null;
-  const url = new URL(link.href, window.location.href).href;
+  // Feed links carry a "?from=…" referral, which would key the release apart
+  // from the same release linked elsewhere.
+  const parsed = new URL(link.href, window.location.href);
+  parsed.search = '';
+  parsed.hash = '';
+  const url = parsed.href;
   if (!/\/(track|album)\//.test(url)) return null;
 
-  const tralbumType = li.getAttribute('data-tralbumtype') === 't' ? 't' : 'a';
-  const tralbumId = parseInt(li.getAttribute('data-tralbumid') ?? '', 10);
-  // The title also holds a hidden "(gift given)" label, so only its own text is read.
-  const titleEl = li.querySelector(SEL_COLLECTION_ITEM_TITLE);
+  const tralbumType = itemEl.getAttribute('data-tralbumtype') === 't' ? 't' : 'a';
+  const tralbumId = parseInt(itemEl.getAttribute('data-tralbumid') ?? '', 10);
+  // A collection title also holds a hidden "(gift given)" label, so only its own text is read.
+  const titleEl = itemEl.querySelector(grid.title);
   const title = Array.from(titleEl?.childNodes ?? [])
     .filter((node) => node.nodeType === Node.TEXT_NODE)
     .map((node) => node.textContent ?? '')
     .join('')
     .trim();
-  const artist = (li.querySelector(SEL_COLLECTION_ITEM_ARTIST)?.textContent ?? '').trim().replace(/^by\s+/, '');
+  const artist = (itemEl.querySelector(grid.artist)?.textContent ?? '').trim().replace(/^by\s+/, '');
   return {
     url,
     type: tralbumType === 't' ? 'track' : 'album',
@@ -291,17 +290,17 @@ export function readCollectionItem(li: Element): CartItem | null {
   };
 }
 
-// Tells collection items apart: several tracks bought on their own from one
+// Tells release grid items apart: several tracks bought on their own from one
 // album all link to that album.
-export function collectionItemKey(item: CartItem): string {
+export function releaseGridItemKey(item: CartItem): string {
   const url = normalizeUrl(item.url);
   return item.type === 'track' && item.tralbumId !== undefined ? `${url}#track=${item.tralbumId}` : url;
 }
 
-// What a collection item plays, out of the tracks of the release it links to:
-// a track bought on its own plays just that track. When the track can't be
+// What a release grid item plays, out of the tracks of the release it links
+// to: a track bought on its own plays just that track. When the track can't be
 // found there, the whole release plays rather than nothing.
-export function collectionItemTracks(item: CartItem, releaseTracks: PlaylistTrack[]): PlaylistTrack[] {
+export function releaseGridItemTracks(item: CartItem, releaseTracks: PlaylistTrack[]): PlaylistTrack[] {
   if (item.type !== 'track') return releaseTracks;
   const bought = releaseTracks.filter((track) => track.trackId === item.tralbumId);
   return bought.length > 0 ? bought : releaseTracks;
