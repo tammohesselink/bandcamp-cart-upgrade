@@ -235,7 +235,7 @@ function readGridClientItems(): CartItem[] {
   return items;
 }
 
-// --- Release grid DOM probe (fan collection and feed) ---------------------------
+// --- Release grid DOM probe (fan collection, wishlist and feed) -----------------
 
 // The items drawn in a release grid, in page order. Only what is on the page:
 // Bandcamp draws the rest of a big collection, or older feed stories, as the
