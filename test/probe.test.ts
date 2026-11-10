@@ -15,7 +15,7 @@ import {
   type DataCartItem,
 } from '../src/probe';
 import { makeTrack } from './track-factory';
-import { findCheckoutControl, clickCheckout } from '../src/bandcamp-dom';
+import { findCheckoutControl, clickCheckout, SEL_WISHLIST_ITEMS } from '../src/bandcamp-dom';
 
 function fixture(name: string): string {
   return readFileSync(join(__dirname, 'fixtures', name), 'utf-8');
@@ -150,6 +150,30 @@ describe('probeCollection — fan collection page', () => {
 
   it('returns nothing on a page without a collection', () => {
     loadFixture('label-with-music-grid.html');
+    expect(probeCollection()).toEqual([]);
+  });
+});
+
+describe('probeCollection — fan wishlist page', () => {
+  beforeEach(() => loadFixture('wishlist.html'));
+
+  it('returns the wishlist items drawn on the page, in page order', () => {
+    expect(probeCollection(SEL_WISHLIST_ITEMS).map((i) => i.url)).toEqual([
+      'https://peopleandplaces.bandcamp.com/album/suspended-memories',
+      'https://mandar.bandcamp.com/track/juicy-street-mandar-remix',
+    ]);
+  });
+
+  it('reads a wished-for track, which links to its own page', () => {
+    expect(probeCollection(SEL_WISHLIST_ITEMS)[1]).toMatchObject({
+      type: 'track',
+      tralbumType: 't',
+      tralbumId: 2578281474,
+      title: 'Juicy Street (Mandar Remix)',
+    });
+  });
+
+  it('finds no collection items while the collection tab has not been opened', () => {
     expect(probeCollection()).toEqual([]);
   });
 });

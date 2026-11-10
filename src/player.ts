@@ -23,6 +23,7 @@ const PLAYLIST_LABELS: Record<PlaylistId, string> = {
   cart: 'Cart',
   discography: 'Label discography',
   collection: 'Collection',
+  wishlist: 'Wishlist',
 };
 
 // How many upcoming tracks get a fresh stream link and start buffering while
@@ -120,6 +121,10 @@ export class Player {
 
   onCartAdd?: (track: PlaylistTrack, addType: CartAddType) => Promise<boolean | void>;
   onCartRemove?: (track: PlaylistTrack, cartItemUrl: string) => Promise<void>;
+  // Set on the fan's own wishlist page: takes the wishlist item the track
+  // belongs to off the wishlist. Offered for tracks played from the Wishlist.
+  // Resolves to whether it was removed.
+  onWishlistRemove?: (track: PlaylistTrack) => Promise<boolean>;
   onCheckoutSelected?: (selectedRawUrls: string[]) => Promise<void>;
   onPlaybackStart?: () => void;
   onPlayStateChange?: (playing: boolean) => void;
@@ -573,7 +578,7 @@ export class Player {
   private updatePlaylistTabs() {
     const tabs = el('div', 'bcp-tab-list');
 
-    const ids: PlaylistId[] = ['currentpage', 'collection', 'discography', 'cart'];
+    const ids: PlaylistId[] = ['currentpage', 'collection', 'wishlist', 'discography', 'cart'];
 
     for (const id of ids) {
       const state = this.playlists.get(id);
@@ -1354,7 +1359,33 @@ export class Player {
 
   private updateCartActions(track: PlaylistTrack) {
     this.cartActionsEl.innerHTML = '';
+    this.appendCartButtons(track);
 
+    // Behind the cart buttons, whichever of them the track gets.
+    if (this.activeId === 'wishlist' && this.onWishlistRemove) {
+      const unwishBtn = btn('- Wishlist', 'bcp-cart-action-btn bcp-remove-btn');
+      setTooltip(unwishBtn, 'Remove from your wishlist');
+      unwishBtn.addEventListener('click', async () => {
+        const releaseLabel = track.albumTitle || track.trackTitle || 'this release';
+        const confirmed = await this.showConfirm('Remove from wishlist', `Remove "${releaseLabel}" from your wishlist?`);
+        if (!confirmed) return;
+        unwishBtn.disabled = true;
+        let removed = false;
+        try {
+          removed = (await this.onWishlistRemove?.(track)) ?? false;
+        } catch (err) {
+          this.showToast(`Remove from wishlist failed: ${String(err)}`, 'error');
+        } finally {
+          // A removed track can play on, but is off the wishlist now.
+          if (removed) unwishBtn.remove();
+          else unwishBtn.disabled = false;
+        }
+      });
+      this.cartActionsEl.append(unwishBtn);
+    }
+  }
+
+  private appendCartButtons(track: PlaylistTrack) {
     if (!track.releaseId) return;
 
     if (this.isInCart(track)) {

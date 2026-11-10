@@ -663,6 +663,53 @@ describe('Player cart buttons', () => {
     expect(onCartAdd).toHaveBeenCalledWith(expect.objectContaining({ trackId: 1 }), 'album');
   });
 
+  it('offers "- Wishlist" for a track played from the Wishlist, when removal is possible', async () => {
+    const player = new Player([]);
+    player.onWishlistRemove = vi.fn(async () => true);
+    player.setPlaylist('wishlist', 'Wishlist', [freshTrack(1)]);
+    player.jumpTo('wishlist', 0);
+    await settle();
+
+    const actions = Array.from(player.wrapper.querySelector('.bcp-cart-actions')!.children).map((a) => a.textContent);
+    expect(actions).toEqual(['+ Track', '+ Release', '- Wishlist']);
+  });
+
+  it('drops "- Wishlist" once the item is removed, and offers it again after a failed removal', async () => {
+    const player = new Player([]);
+    let outcome = false;
+    player.onWishlistRemove = vi.fn(async () => outcome);
+    player.setPlaylist('wishlist', 'Wishlist', [freshTrack(1)]);
+    player.jumpTo('wishlist', 0);
+    await settle();
+    const confirmRemoval = async () => {
+      cartButton(player, '- Wishlist').click();
+      await settle();
+      player.wrapper.ownerDocument.querySelector<HTMLButtonElement>('.bcp-modal-btn-destructive')?.click();
+      await settle();
+    };
+
+    await confirmRemoval();
+    expect(cartButton(player, '- Wishlist').disabled).toBe(false);
+
+    outcome = true;
+    await confirmRemoval();
+    expect(cartButton(player, '- Wishlist')).toBeUndefined();
+  });
+
+  it('offers no wishlist removal on other playlists, or without a handler', async () => {
+    const onCart = await playing(freshTrack(1));
+    onCart.onWishlistRemove = vi.fn(async () => true);
+    onCart.jumpTo('cart', 0);
+    await settle();
+    expect(cartButton(onCart, '- Wishlist')).toBeUndefined();
+
+    const someoneElses = new Player([]);
+    someoneElses.setPlaylist('wishlist', 'Wishlist', [freshTrack(1)]);
+    someoneElses.jumpTo('wishlist', 0);
+    await settle();
+    expect(cartButton(someoneElses, '- Wishlist')).toBeUndefined();
+  });
+
   it('shows an owned album as purchased instead of offering to add it', async () => {
     const player = await playing(freshTrack(1, { owned: true }));
 
