@@ -32,6 +32,21 @@ export interface CartRemoveRequest {
   fanId: string;
 }
 
+// Takes a release or track off the fan's wishlist. Fields as Bandcamp's own
+// "in wishlist" toggle sends them to uncollect_item_cb.
+export interface WishlistRemoveRequest {
+  type: 'wishlist-remove';
+  // The wished-for item's page, whose origin the request goes to.
+  releaseUrl: string;
+  itemId: number;
+  itemType: 'album' | 'track';
+  bandId: number;
+  fanId: string;
+  // The page's crumb for uncollect_item_cb, when it has one. Without one, or
+  // with an expired one, Bandcamp answers with a fresh crumb to retry with.
+  crumb: string | null;
+}
+
 export interface OpenIncognitoCheckoutRequest {
   type: 'open-incognito-checkout';
   // Pre-resolved track data from the normal window's warm cache.
@@ -60,6 +75,7 @@ export type BcpRequest =
   | FetchAudioRequest
   | CartAddRequest
   | CartRemoveRequest
+  | WishlistRemoveRequest
   | OpenIncognitoCheckoutRequest
   | IncognitoAccessRequest;
 
@@ -93,7 +109,7 @@ export type BcpResponse = FetchResponse | FetchAudioResponse | CartMutationRespo
 export function sendBcpMessage(msg: FetchRequest): Promise<FetchResponse>;
 export function sendBcpMessage(msg: FetchAudioRequest): Promise<FetchAudioResponse>;
 export function sendBcpMessage(
-  msg: CartAddRequest | CartRemoveRequest | OpenIncognitoCheckoutRequest
+  msg: CartAddRequest | CartRemoveRequest | WishlistRemoveRequest | OpenIncognitoCheckoutRequest
 ): Promise<CartMutationResponse>;
 export function sendBcpMessage(msg: IncognitoAccessRequest): Promise<IncognitoAccessResponse>;
 export function sendBcpMessage(msg: BcpRequest): Promise<BcpResponse> {

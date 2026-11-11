@@ -28,16 +28,52 @@ export const SEL_MUSIC_GRID_ITEM = '.music-grid-item';
 export const SEL_GRID_ITEM_TITLE = 'p.title';
 export const SEL_FEATURED_GRID = 'ol.featured-grid';
 
-// Fan collection grid (bandcamp.com/<username>). Search results and the
-// wishlist sit in grids of their own, outside #collection-items.
-export const SEL_COLLECTION_ITEMS = '#collection-items';
-export const SEL_COLLECTION_ITEM = 'li.collection-item-container';
-export const SEL_COLLECTION_ITEM_LINK = '.collection-title-details a.item-link[href]';
-export const SEL_COLLECTION_ITEM_TITLE = '.collection-title-details .collection-item-title';
-export const SEL_COLLECTION_ITEM_ARTIST = '.collection-title-details .collection-item-artist';
+// A grid of releases on a fan's pages, each item with artwork that plays its
+// featured track in Bandcamp's own player.
+export interface ReleaseGrid {
+  // Holds the items; other grids on the page sit outside it.
+  container: string;
+  item: string;
+  link: string;
+  title: string;
+  artist: string;
+}
+
 // The artwork, which plays the item's featured track in Bandcamp's player.
-export const SEL_COLLECTION_ITEM_PLAY = '.track_play_auxiliary';
+export const SEL_RELEASE_GRID_ITEM_PLAY = '.track_play_auxiliary';
+
+// Fan collection and wishlist grids (bandcamp.com/<username> and
+// bandcamp.com/<username>/wishlist). Both draw their items the same way. Search
+// results sit in grids of their own, outside these.
+export const COLLECTION_GRID: ReleaseGrid = {
+  container: '#collection-items',
+  item: 'li.collection-item-container',
+  link: '.collection-title-details a.item-link[href]',
+  title: '.collection-title-details .collection-item-title',
+  artist: '.collection-title-details .collection-item-artist',
+};
+export const WISHLIST_GRID: ReleaseGrid = { ...COLLECTION_GRID, container: '#wishlist-items' };
 export const SEL_COLLECTION_PLAYER = '#collection-player';
+
+// Fan feed (bandcamp.com/<username>/feed), "Fan Activity": a story per new
+// release or purchase. Stories of a fan buying several releases have no
+// artwork to play, and no item container.
+export const FEED_STORIES_GRID: ReleaseGrid = {
+  container: '#story-list',
+  item: '.story-innards.collection-item-container',
+  link: '.tralbum-details a.item-link[href]',
+  title: '.tralbum-details .collection-item-title',
+  artist: '.tralbum-details .collection-item-artist',
+};
+
+// Fan feed sidebar, "New Releases from artists you follow".
+export const FEED_NEW_RELEASES_GRID: ReleaseGrid = {
+  container: '#new-releases-vm',
+  item: 'li.collection-item-container',
+  link: '.collection-item-gallery-container a.item-link[href]',
+  title: '.collection-item-gallery-container .collection-item-title',
+  artist: '.collection-item-gallery-container .collection-item-artist',
+};
 
 // Page context data attributes
 export const SEL_DATA_SYNC_NUM = '[data-sync-num]';
@@ -229,4 +265,35 @@ export function isLoggedIn(): boolean {
     } catch { /* continue */ }
   }
   return false;
+}
+
+// The logged-in fan's id on their own fan page (bandcamp.com/<username>), or
+// null on someone else's page or when logged out. Read from the page's
+// data-blob, whose fan_data describes the page's fan.
+export function readOwnFanPageFanId(): string | null {
+  for (const el of Array.from(document.querySelectorAll(SEL_DATA_BLOB))) {
+    try {
+      const blob = JSON.parse(el.getAttribute('data-blob')!) as Record<string, unknown>;
+      const fanData = blob.fan_data as Record<string, unknown> | undefined;
+      if (!fanData) continue;
+      const fanId = fanData.fan_id;
+      const viewer = (blob.identities as Record<string, unknown> | undefined)?.fan as Record<string, unknown> | undefined;
+      const isOwnPage = fanData.is_own_page === true || (typeof viewer?.id === 'number' && viewer.id === fanId);
+      return isOwnPage && typeof fanId === 'number' ? String(fanId) : null;
+    } catch { /* continue */ }
+  }
+  return null;
+}
+
+// The crumb Bandcamp gives the page for one of its endpoints, such as
+// uncollect_item_cb, or null when the page has none.
+export function readPageCrumb(endpoint: string): string | null {
+  const el = document.querySelector('#js-crumbs-data');
+  try {
+    const crumbs = JSON.parse(el?.getAttribute('data-crumbs') ?? '{}') as Record<string, unknown>;
+    const crumb = crumbs[endpoint];
+    return typeof crumb === 'string' ? crumb : null;
+  } catch {
+    return null;
+  }
 }

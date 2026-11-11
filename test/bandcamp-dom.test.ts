@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isTrackOrAlbumPage, isCheckoutPage, isLoggedIn, readPageContext, sidecartItemFor } from '../src/bandcamp-dom';
+import { isTrackOrAlbumPage, isCheckoutPage, isLoggedIn, readPageContext, sidecartItemFor, readOwnFanPageFanId, readPageCrumb } from '../src/bandcamp-dom';
 
 function setPathname(pathname: string): void {
   Object.defineProperty(window, 'location', {
@@ -172,5 +172,42 @@ describe('sidecartItemFor', () => {
       `<a class="itemName" href="https://a.bandcamp.com/album/elsewhere">Elsewhere</a>`;
 
     expect(sidecartItemFor(linkTo('https://a.bandcamp.com/album/elsewhere'))).toBeNull();
+  });
+});
+
+describe('readOwnFanPageFanId', () => {
+  function fanPage(fanData: Record<string, unknown>, viewerId: number | null): void {
+    const blob = { identities: { fan: viewerId === null ? null : { id: viewerId } }, fan_data: fanData };
+    document.body.innerHTML = '';
+    const el = document.createElement('div');
+    el.setAttribute('data-blob', JSON.stringify(blob));
+    document.body.appendChild(el);
+  }
+
+  it("returns the fan's id on their own page", () => {
+    fanPage({ fan_id: 2105866, is_own_page: true }, 2105866);
+    expect(readOwnFanPageFanId()).toBe('2105866');
+  });
+
+  it('tells the own page from the logged-in fan when is_own_page is missing', () => {
+    fanPage({ fan_id: 2105866, is_own_page: null }, 2105866);
+    expect(readOwnFanPageFanId()).toBe('2105866');
+  });
+
+  it("returns null on someone else's page, or logged out", () => {
+    fanPage({ fan_id: 2105866, is_own_page: null }, 42);
+    expect(readOwnFanPageFanId()).toBeNull();
+    fanPage({ fan_id: 2105866, is_own_page: null }, null);
+    expect(readOwnFanPageFanId()).toBeNull();
+  });
+});
+
+describe('readPageCrumb', () => {
+  it("reads the endpoint's crumb, or null when the page has none", () => {
+    document.body.innerHTML = '<div id="js-crumbs-data" data-crumbs=\'{"uncollect_item_cb":"|uncollect_item_cb|1|abc"}\'></div>';
+    expect(readPageCrumb('uncollect_item_cb')).toBe('|uncollect_item_cb|1|abc');
+    expect(readPageCrumb('collect_item_cb')).toBeNull();
+    document.body.innerHTML = '<div id="js-crumbs-data" data-crumbs="{}"></div>';
+    expect(readPageCrumb('uncollect_item_cb')).toBeNull();
   });
 });
