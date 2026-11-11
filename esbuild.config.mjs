@@ -6,6 +6,9 @@ const watch = process.argv.includes('--watch');
 mkdirSync('dist', { recursive: true });
 copyFileSync('manifest.json', 'dist/manifest.json');
 copyFileSync('popup.html', 'dist/popup.html');
+// The zip that gets published carries the licences with it.
+copyFileSync('LICENSE', 'dist/LICENSE');
+copyFileSync('THIRD_PARTY_NOTICES.md', 'dist/THIRD_PARTY_NOTICES.md');
 
 const sharedOptions = {
   bundle: true,
