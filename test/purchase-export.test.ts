@@ -72,7 +72,7 @@ describe('injectPurchaseExport', () => {
       storage: {
         local: {
           get: async () => ({
-            [RATES_STORAGE_KEY]: { startDate: '2023-01-01', endDate: '2999-01-01', rates: { '2024-03-15': { USD: 1.1 } } },
+            [RATES_STORAGE_KEY]: { startDate: '2020-01-01', endDate: '2999-01-01', rates: { '2024-03-15': { USD: 1.1 } } },
           }),
           set: async () => {},
         },
@@ -96,8 +96,38 @@ describe('injectPurchaseExport', () => {
     yearSelect.value = 'all';
     yearSelect.dispatchEvent(new Event('change'));
     // EUR and USD are tied, so the first seen (EUR) wins: €10 + $11 → €20.
-    expect(panel.querySelector('.bcp-pe-total')!.textContent).toMatch(/All time: .*20\.00/);
+    expect(panel.querySelector('.bcp-purchase-export-total')!.textContent).toMatch(/All time: .*20\.00/);
     expect(panel.textContent).toContain('2 purchases');
+  });
+
+  it('retries a failed page and carries on from it after giving up', async () => {
+    let failuresLeft = 5;
+    const answer = (msg: Record<string, unknown>) => {
+      sent.push(msg);
+      if (msg.lastToken === 't1' && failuresLeft-- > 0) return { ok: false, error: 'HTTP 429' };
+      if (msg.lastToken === null) {
+        return { ok: true, crumb: 'c', body: { items: [{ payment_date: '15 Mar 2024 12:00:00 GMT', currency: 'EUR', unit_price: 1 }], last_token: 't1' } };
+      }
+      return { ok: true, crumb: 'c', body: { items: [], last_token: 't2' } };
+    };
+    (globalThis as unknown as { chrome: { runtime: unknown } }).chrome.runtime = { sendMessage: async (m: Record<string, unknown>) => answer(m) };
+
+    injectPurchaseExport();
+    const panel = document.getElementById('bcp-purchase-export')!;
+    vi.useFakeTimers();
+    panel.querySelector('button')!.click();
+    await vi.runAllTimersAsync();
+    // The first page, then the second tried four times (once and three retries).
+    expect(sent.map((m) => m.lastToken)).toEqual([null, 't1', 't1', 't1', 't1']);
+    expect(panel.textContent).toContain('1 purchases loaded so far are kept');
+
+    sent = [];
+    panel.querySelector('button')!.click();
+    await vi.runAllTimersAsync();
+    vi.useRealTimers();
+    // Carries on from the failed page instead of starting over.
+    expect(sent[0]!.lastToken).toBe('t1');
+    expect(panel.querySelector('.bcp-purchase-export-total')).not.toBeNull();
   });
 
   it('only injects once', () => {

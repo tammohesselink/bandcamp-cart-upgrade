@@ -272,6 +272,9 @@ export interface RatesCache {
   // `YYYY-MM-DD`: the last day the table has rates for. The ECB publishes on
   // business days around 16:00 CET, so this can be before the day asked for.
   endDate: string;
+  // `YYYY-MM-DD`: the day frankfurter was last asked for newer rates, so a
+  // weekend or holiday asks once rather than on every load.
+  checkedDate?: string;
   rates: RatesTable;
 }
 
@@ -317,18 +320,21 @@ function lastRateDay(rates: RatesTable): string | undefined {
   return last;
 }
 
-// The purchases' first year, as the start of the rates to load: rounding to
-// January 1st keeps the cache from refetching for every older purchase.
+// Where the rates to load start: mid-December before the purchases' first
+// year. Rounding to a year keeps the cache from refetching for every older
+// purchase, and starting before January 1st (always an ECB holiday) gives a
+// purchase on New Year's Day the last business day before it.
 export function ratesStartFor(purchases: Purchase[]): string | null {
   let earliest: string | null = null;
   for (const p of purchases) if (earliest === null || p.paymentDate < earliest) earliest = p.paymentDate;
-  return earliest === null ? null : `${earliest.slice(0, 4)}-01-01`;
+  return earliest === null ? null : `${Number(earliest.slice(0, 4)) - 1}-12-15`;
 }
 
 // EUR-based rates from `start` through today, fetching only what the cache
 // lacks. A refresh asks again from the cache's last rate day, so no day the
-// ECB published since can be skipped. Storage failures don't stop rates that
-// were fetched from being used.
+// ECB published since can be skipped, and at most once a day. When the refresh
+// fails the cache is used as it is: it covers every purchase but the newest.
+// Storage failures don't stop rates that were fetched from being used.
 export async function loadRates(start: string, deps: RatesDeps = defaultRatesDeps()): Promise<RatesTable> {
   let stored: unknown;
   try {
@@ -347,22 +353,24 @@ export async function loadRates(start: string, deps: RatesDeps = defaultRatesDep
 
   if (!cache || start < cache.startDate) {
     const rates = await deps.fetchRates(start, deps.today);
-    await save({ startDate: start, endDate: lastRateDay(rates) ?? deps.today, rates });
+    await save({ startDate: start, endDate: lastRateDay(rates) ?? deps.today, checkedDate: deps.today, rates });
     return rates;
   }
 
-  if (deps.today > cache.endDate) {
+  if (deps.today > cache.endDate && cache.checkedDate !== deps.today) {
     let fresh: RatesTable;
     try {
       fresh = await deps.fetchRates(cache.endDate, deps.today);
     } catch (err) {
-      // frankfurter answers 404 when the range starts after its latest rates
-      // (a clock running ahead); the cache already has everything there is.
-      if (err instanceof FrankfurterHttpError && err.status === 404) return cache.rates;
-      throw err;
+      // A 404 means the range starts after frankfurter's latest rates (a clock
+      // running ahead): the cache already has everything there is.
+      if (err instanceof FrankfurterHttpError && err.status === 404) {
+        await save({ ...cache, checkedDate: deps.today });
+      }
+      return cache.rates;
     }
     const rates = { ...cache.rates, ...fresh };
-    await save({ ...cache, endDate: lastRateDay(rates) ?? cache.endDate, rates });
+    await save({ ...cache, endDate: lastRateDay(rates) ?? cache.endDate, checkedDate: deps.today, rates });
     return rates;
   }
 

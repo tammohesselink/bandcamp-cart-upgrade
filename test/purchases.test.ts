@@ -153,8 +153,8 @@ describe('years and currencies', () => {
     expect(mostUsedCurrency([])).toBeNull();
   });
 
-  it('starts the rates at January 1st of the first purchase year', () => {
-    expect(ratesStartFor(purchases)).toBe('2023-01-01');
+  it('starts the rates in mid-December before the first purchase year', () => {
+    expect(ratesStartFor(purchases)).toBe('2022-12-15');
     expect(ratesStartFor([])).toBeNull();
   });
 });
@@ -239,6 +239,28 @@ describe('loadRates', () => {
     const { d } = deps(cache);
     d.fetchRates = async () => { throw new FrankfurterHttpError(404); };
     expect(await loadRates('2020-01-01', d)).toBe(cache.rates);
+  });
+
+  it('uses the cache when the refresh fails', async () => {
+    const cache: RatesCache = { startDate: '2020-01-01', endDate: '2026-11-06', rates: { '2026-11-06': { USD: 1 } } };
+    const { d } = deps(cache);
+    d.fetchRates = async () => { throw new FrankfurterHttpError(503); };
+    expect(await loadRates('2020-01-01', d)).toBe(cache.rates);
+  });
+
+  it('asks for newer rates at most once a day', async () => {
+    // A Saturday: Friday's rates are the latest, and they were checked today.
+    const cache: RatesCache = { startDate: '2020-01-01', endDate: '2026-11-06', checkedDate: '2026-11-11', rates: {} };
+    const { d, fetchRates } = deps(cache);
+    await loadRates('2020-01-01', d);
+    expect(fetchRates).not.toHaveBeenCalled();
+  });
+
+  it('remembers the day it checked', async () => {
+    const cache: RatesCache = { startDate: '2020-01-01', endDate: '2026-11-06', rates: {} };
+    const { d, written } = deps(cache);
+    await loadRates('2020-01-01', d);
+    expect(written[0]!.checkedDate).toBe('2026-11-11');
   });
 
   it('still returns fetched rates when storage fails', async () => {
