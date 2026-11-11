@@ -20,6 +20,7 @@ A Chrome extension that embeds a persistent playlist player into your Bandcamp c
 - **Cart management** — add/remove releases from your cart directly in the player
 - **Named carts** — for a release in your cart, "Add to named cart" in the player files it into one or more named carts (or a new one); to file several at once, tick them in Bandcamp's cart and click "Add selected to named cart". "Checkout a cart" below Bandcamp's cart then checks out just one named cart in a private window. Turn off "Enable named carts" in the extension popup to hide all of this; your named carts are kept for when you turn it back on
 - **Cart history export/import** — move your cart history to another browser or laptop: turn on "Show advanced functionality" in the extension popup, click Export, then Import the JSON file there (imported snapshots are merged with the existing history)
+- **Purchase export** — on your purchases page (`bandcamp.com/<username>/purchases`), click "Load purchases" to see how much you've spent on Bandcamp per year (this year by default), converted into one currency, and export the purchases as a CSV. Each purchase is converted at the European Central Bank rate of its payment date, from [frankfurter.dev](https://frankfurter.dev); only a date range is sent there, and the rates are cached. This feature is taken from the purchase export in [Bandcamp Tempo Adjust](https://github.com/azarbayejani/bandcamp-tempo-adjust) and included here so you don't need to install several Bandcamp extensions that do the same things
 - **Caching** — track details are cached for six months; stream links are refreshed when a track is about to play if they are more than an hour old
 
 ## Development
@@ -53,3 +54,7 @@ One-time setup for the workflow:
 - TypeScript + esbuild
 - Manifest V3 Chrome extension
 - Vitest for tests
+
+## License
+
+MIT, see [LICENSE](LICENSE). The purchase export comes from Bandcamp Tempo Adjust, also MIT licensed; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

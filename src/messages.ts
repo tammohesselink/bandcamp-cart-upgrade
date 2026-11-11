@@ -70,8 +70,22 @@ export interface FetchAudioRequest {
   bulk?: boolean;
 }
 
+// Reads one page of the logged-in fan's order history (the list on
+// bandcamp.com/<username>/purchases), for the purchase export.
+export interface OrderHistoryPageRequest {
+  type: 'orderhistory-page';
+  username: string;
+  // The last_token of the page before, or null for the first page.
+  lastToken: string | null;
+  // The page's crumb for api/orderhistory/1/get_items, or the fresh one an
+  // earlier page answered with. Without one, or with an expired one,
+  // Bandcamp answers with a fresh crumb to retry with.
+  crumb: string | null;
+}
+
 export type BcpRequest =
   | FetchRequest
+  | OrderHistoryPageRequest
   | FetchAudioRequest
   | CartAddRequest
   | CartRemoveRequest
@@ -102,7 +116,15 @@ export interface FetchAudioResponse {
   noPermission?: boolean;
 }
 
-export type BcpResponse = FetchResponse | FetchAudioResponse | CartMutationResponse | IncognitoAccessResponse;
+export interface OrderHistoryPageResponse {
+  ok: boolean;
+  error?: string;
+  body?: unknown;
+  // The crumb the page was read with, to send with the next page.
+  crumb?: string | null;
+}
+
+export type BcpResponse = FetchResponse | OrderHistoryPageResponse | FetchAudioResponse | CartMutationResponse | IncognitoAccessResponse;
 
 // Typed wrapper around chrome.runtime.sendMessage so callers get the right
 // response type inferred from the request they send.
@@ -111,6 +133,7 @@ export function sendBcpMessage(msg: FetchAudioRequest): Promise<FetchAudioRespon
 export function sendBcpMessage(
   msg: CartAddRequest | CartRemoveRequest | WishlistRemoveRequest | OpenIncognitoCheckoutRequest
 ): Promise<CartMutationResponse>;
+export function sendBcpMessage(msg: OrderHistoryPageRequest): Promise<OrderHistoryPageResponse>;
 export function sendBcpMessage(msg: IncognitoAccessRequest): Promise<IncognitoAccessResponse>;
 export function sendBcpMessage(msg: BcpRequest): Promise<BcpResponse> {
   return chrome.runtime.sendMessage(msg);

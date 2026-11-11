@@ -1,4 +1,12 @@
-import type { BcpRequest, CartMutationResponse, FetchAudioResponse, FetchResponse, WishlistRemoveRequest } from './messages';
+import type {
+  BcpRequest,
+  CartMutationResponse,
+  FetchAudioResponse,
+  FetchResponse,
+  OrderHistoryPageRequest,
+  OrderHistoryPageResponse,
+  WishlistRemoveRequest,
+} from './messages';
 import { AUDIO_HOST_PERMISSION, MAX_AUDIO_BYTES, bytesToBase64, isStreamUrl, readCapped } from './audio-fetch';
 import { createLimiter, dedupeInFlight, type Priority } from './inflight';
 import { pruneTrackCache } from './cache';
@@ -170,6 +178,11 @@ chrome.runtime.onMessage.addListener((message: BcpRequest, sender, sendResponse)
     return true;
   }
 
+  if (message.type === 'orderhistory-page') {
+    fetchOrderHistoryPage(message).then(sendResponse);
+    return true;
+  }
+
   if (message.type === 'incognito-access') {
     chrome.extension.isAllowedIncognitoAccess()
       .then((allowed) => sendResponse({ allowed }))
@@ -251,24 +264,23 @@ chrome.runtime.onMessage.addListener((message: BcpRequest, sender, sendResponse)
 });
 
 // Bandcamp answers a missing or expired crumb with error "invalid_crumb" and a
-// fresh crumb, so a failed first try is retried once with that one.
-async function removeFromWishlist(origin: string, message: WishlistRemoveRequest): Promise<CartMutationResponse> {
-  let crumb = message.crumb ?? '';
+// fresh crumb, so a failed first try is retried once with that one. Answers
+// with the crumb the request succeeded with, for the caller to reuse.
+async function postWithCrumbRetry(
+  url: string,
+  initialCrumb: string | null,
+  buildRequest: (crumb: string) => { contentType: string; body: string },
+): Promise<CartMutationResponse & { crumb?: string }> {
+  let crumb = initialCrumb ?? '';
   for (let attempt = 0; attempt < 2; attempt++) {
-    const body = new URLSearchParams({
-      fan_id: message.fanId,
-      item_id: String(message.itemId),
-      item_type: message.itemType,
-      band_id: String(message.bandId),
-      crumb,
-    });
+    const { contentType, body } = buildRequest(crumb);
     let json: Record<string, unknown> | null = null;
     try {
-      const res = await fetch(`${origin}/uncollect_item_cb`, {
+      const res = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        headers: { 'Content-Type': contentType },
         credentials: 'include',
-        body: body.toString(),
+        body,
       });
       if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
       try {
@@ -281,9 +293,9 @@ async function removeFromWishlist(origin: string, message: WishlistRemoveRequest
       return { ok: false, error: String(err) };
     }
     // Anything but JSON, such as a login page once the session has expired,
-    // does not confirm the removal.
+    // is not a successful answer.
     if (json === null) return { ok: false, error: 'Unexpected response from Bandcamp' };
-    if (!json.error) return { ok: true, body: json };
+    if (!json.error) return { ok: true, body: json, crumb };
     if (json.error === 'invalid_crumb' && typeof json.crumb === 'string' && attempt === 0) {
       crumb = json.crumb;
       continue;
@@ -291,4 +303,28 @@ async function removeFromWishlist(origin: string, message: WishlistRemoveRequest
     return { ok: false, error: String(json.error), body: json };
   }
   return { ok: false, error: 'invalid_crumb' };
+}
+
+function removeFromWishlist(origin: string, message: WishlistRemoveRequest): Promise<CartMutationResponse> {
+  return postWithCrumbRetry(`${origin}/uncollect_item_cb`, message.crumb, (crumb) => ({
+    contentType: 'application/x-www-form-urlencoded',
+    body: new URLSearchParams({
+      fan_id: message.fanId,
+      item_id: String(message.itemId),
+      item_type: message.itemType,
+      band_id: String(message.bandId),
+      crumb,
+    }).toString(),
+  }));
+}
+
+// One page of the fan's order history, as the purchases page itself loads it
+// when scrolled. Sent from here rather than the content script, like the other
+// credentialed Bandcamp calls: Firefox content-script fetches don't reliably
+// carry the page's cookies.
+function fetchOrderHistoryPage(message: OrderHistoryPageRequest): Promise<OrderHistoryPageResponse> {
+  return postWithCrumbRetry('https://bandcamp.com/api/orderhistory/1/get_items', message.crumb, (crumb) => ({
+    contentType: 'application/json',
+    body: JSON.stringify({ username: message.username, last_token: message.lastToken, platform: 'Mac', crumb }),
+  }));
 }

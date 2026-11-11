@@ -297,3 +297,25 @@ export function readPageCrumb(endpoint: string): string | null {
     return null;
   }
 }
+
+// The purchases page, bandcamp.com/<username>/purchases, with its order list.
+export function isPurchasesPage(): boolean {
+  return location.hostname === 'bandcamp.com'
+    && /^\/[^/]+\/purchases\/?$/.test(location.pathname)
+    && document.querySelector('.purchases') !== null;
+}
+
+// The logged-in fan's username and the number of orders Bandcamp says they
+// have, from the purchases page's data-blob. Null when logged out.
+export function readOrderHistoryContext(): { username: string; totalItems: number | null } | null {
+  for (const el of Array.from(document.querySelectorAll(SEL_DATA_BLOB))) {
+    try {
+      const blob = JSON.parse(el.getAttribute('data-blob')!) as Record<string, unknown>;
+      const fan = (blob.identities as Record<string, unknown> | undefined)?.fan as Record<string, unknown> | undefined;
+      if (!fan || typeof fan.username !== 'string' || !fan.username) continue;
+      const total = (blob.orderhistory as Record<string, unknown> | undefined)?.total_items;
+      return { username: fan.username, totalItems: typeof total === 'number' ? total : null };
+    } catch { /* continue */ }
+  }
+  return null;
+}

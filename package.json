@@ -2,6 +2,7 @@
   "name": "bandcamp-cart-player",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "node esbuild.config.mjs --watch",

@@ -49,7 +49,9 @@ import {
   type ReleaseGrid,
   readOwnFanPageFanId,
   readPageCrumb,
+  isPurchasesPage,
 } from './bandcamp-dom';
+import { injectPurchaseExport } from './purchase-export';
 import { sendBcpMessage } from './messages';
 import { mapWithConcurrency } from './inflight';
 import { log, initDebugLogging } from './log';
@@ -1164,6 +1166,10 @@ async function main() {
     }
   }
   // ---------------------------------------------------------------------------
+
+  // The purchases page gets the purchase export panel; the cart player below
+  // still runs there as on any other page.
+  if (isPurchasesPage()) injectPurchaseExport();
 
   const cartItems = probeCart();
   const settings = await loadSettings();
