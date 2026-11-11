@@ -43,6 +43,7 @@ export const PLAYER_CSS = `
 }
 
 #bcp-wrapper.bcp-collapsed #bcp-queue,
+#bcp-wrapper.bcp-collapsed #bcp-tempo-panel,
 #bcp-wrapper.bcp-collapsed #bcp-bar {
   display: none;
 }
@@ -423,6 +424,138 @@ input[type=range].bcp-tempo {
 .bcp-tempo-reset-btn {
   min-width: 52px;
   margin-left: 4px;
+}
+
+/* Wide enough for "~188.8 BPM", so the controls beside it don't move. */
+.bcp-bpm-btn {
+  min-width: 72px;
+  margin-left: 4px;
+  border: 1px solid #ddd;
+}
+
+.bcp-bpm-btn.bcp-bpm-kept {
+  border-color: #1da0c3;
+}
+
+/* Sits right above the bar, beside the queue when both are open. */
+#bcp-tempo-panel {
+  display: none;
+  width: 380px;
+  max-width: 100%;
+  margin-left: auto;
+  padding: 10px 16px 12px;
+  background: #fff;
+  border-top: 1px solid #ccc;
+  border-left: 1px solid #ccc;
+  font-size: 12px;
+}
+
+#bcp-tempo-panel.bcp-visible {
+  display: block;
+}
+
+.bcp-tempo-panel-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.bcp-tempo-panel-heading {
+  font-weight: bold;
+  font-size: 13px;
+}
+
+.bcp-tempo-panel-track {
+  flex: 1;
+  min-width: 0;
+  color: #888;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bcp-tempo-panel-close {
+  font-size: 12px;
+  padding: 2px 4px;
+}
+
+.bcp-tempo-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+}
+
+.bcp-tempo-row-label {
+  width: 72px;
+  flex-shrink: 0;
+  color: #777;
+}
+
+.bcp-bpm-input {
+  width: 68px;
+  padding: 3px 5px;
+  border: 1px solid #ccc;
+  border-radius: 3px;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  background: #fff;
+  color: inherit;
+}
+
+.bcp-bpm-input:disabled {
+  background: #f5f5f5;
+}
+
+.bcp-tempo-unit,
+.bcp-tempo-percent {
+  color: #888;
+  font-variant-numeric: tabular-nums;
+}
+
+.bcp-tempo-panel-btn {
+  font-size: 12px;
+  padding: 4px 7px;
+  border: 1px solid #ddd;
+  white-space: nowrap;
+}
+
+.bcp-tap-btn {
+  min-width: 56px;
+  touch-action: manipulation;
+}
+
+.bcp-tap-btn:active {
+  background: #eaf6fa;
+}
+
+.bcp-tap-readout {
+  font-variant-numeric: tabular-nums;
+}
+
+.bcp-tempo-note {
+  margin: 0 0 4px 78px;
+  color: #999;
+  font-size: 11px;
+}
+
+.bcp-tempo-note:empty {
+  display: none;
+}
+
+.bcp-tempo-note-inline {
+  color: #999;
+  font-size: 11px;
+}
+
+.bcp-queue-bpm {
+  flex-shrink: 0;
+  min-width: 40px;
+  text-align: right;
+  color: #888;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Cut short, rather than widening the playlist column, when it is longer than
@@ -890,6 +1023,7 @@ a.itemName.bcp-playing {
 
 #bcp-wrapper.bcp-dark #bcp-collapse-btn,
 #bcp-wrapper.bcp-dark #bcp-queue,
+#bcp-wrapper.bcp-dark #bcp-tempo-panel,
 #bcp-wrapper.bcp-dark #bcp-bar {
   background: #1f1f1f;
   border-color: #3a3a3a;
@@ -948,6 +1082,29 @@ a.itemName.bcp-playing {
 
 #bcp-wrapper.bcp-dark .bcp-queue-tag-btn:hover {
   color: #a0a0a0;
+}
+
+#bcp-wrapper.bcp-dark .bcp-bpm-btn,
+#bcp-wrapper.bcp-dark .bcp-tempo-panel-btn,
+#bcp-wrapper.bcp-dark .bcp-bpm-input {
+  border-color: #444;
+}
+
+#bcp-wrapper.bcp-dark .bcp-bpm-btn.bcp-bpm-kept {
+  border-color: #1da0c3;
+}
+
+#bcp-wrapper.bcp-dark .bcp-bpm-input {
+  background: #2a2a2a;
+}
+
+#bcp-wrapper.bcp-dark .bcp-bpm-input:disabled {
+  background: #2a2a2a;
+  color: #a0a0a0;
+}
+
+#bcp-wrapper.bcp-dark .bcp-tap-btn:active {
+  background: #17323b;
 }
 
 #bcp-wrapper.bcp-dark #bcp-artwork {
