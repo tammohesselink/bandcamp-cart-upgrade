@@ -1716,7 +1716,7 @@ async function main() {
 
 // Turns the "buy track" link a track row shows on hover into "+ track", which
 // adds the track to the cart like "+ Track" in the player does. While the track
-// (or its release) is in the cart it reads "already in cart", once owned
+// (or its release) is in the cart it reads "in cart", once owned
 // "purchased", and when only the full release is for sale "album only", each
 // greyed out. The link keeps its element, so it keeps Bandcamp's font and hover
 // behaviour.
@@ -1731,7 +1731,7 @@ function replaceBuyTrackLinks(player: Player, pageTracks: PlaylistTrack[]): void
   const albumOnly = new Set<PlaylistTrack>();
 
   const greyedOutLabel = (track: PlaylistTrack): string | null => {
-    if (player.isInCart(track)) return 'already in cart';
+    if (player.isInCart(track)) return 'in cart';
     if (track.owned || track.trackOwned) return 'purchased';
     if (albumOnly.has(track)) return 'album only';
     return null;
