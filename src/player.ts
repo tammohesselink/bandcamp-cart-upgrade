@@ -153,6 +153,8 @@ export class Player {
 
   private announcer!: HTMLElement;
   private cartUrls = new Set<string>();
+  // Called after what's in the cart changed, for views outside the player.
+  private cartChangeListeners: (() => void)[] = [];
   private cartActionsEl!: HTMLElement;
   private playlistTabsEl!: HTMLElement;
   private reverseSlot!: HTMLElement;
@@ -165,8 +167,6 @@ export class Player {
 
   onCartAdd?: (track: PlaylistTrack, addType: CartAddType) => Promise<boolean | void>;
   onCartRemove?: (track: PlaylistTrack, cartItemUrl: string) => Promise<void>;
-  // Called after what's in the cart changed, for views outside the player.
-  onCartUrlsChange?: () => void;
   // Set on the fan's own wishlist page: takes the wishlist item the track
   // belongs to off the wishlist. Offered for tracks played from the Wishlist.
   // Resolves to whether it was removed.
@@ -403,7 +403,11 @@ export class Player {
   setCartUrls(urls: Set<string>) {
     this.cartUrls = urls;
     this.updateCartViews();
-    this.onCartUrlsChange?.();
+    for (const listener of this.cartChangeListeners) listener();
+  }
+
+  addCartChangeListener(listener: () => void) {
+    this.cartChangeListeners.push(listener);
   }
 
   removeCartUrl(url: string) {
@@ -620,12 +624,8 @@ export class Player {
     return track.releaseUrl;
   }
 
-  isTrackInCart(track: PlaylistTrack): boolean {
-    return this.isInCart(track);
-  }
-
   // A track is "in cart" if its cart-item key appears in cartUrls.
-  private isInCart(track: PlaylistTrack): boolean {
+  isInCart(track: PlaylistTrack): boolean {
     return this.cartUrls.has(normalizeUrl(this.cartItemKeyFor(track)));
   }
 

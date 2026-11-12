@@ -1715,55 +1715,65 @@ async function main() {
 }
 
 // Turns the "buy track" link a track row shows on hover into "+ track", which
-// adds the track to the cart like "+ Track" in the player does, and into a
-// greyed-out "already in cart" while the track (or its album) is in the cart.
-// The link keeps its element, so it keeps Bandcamp's font and hover behaviour.
+// adds the track to the cart like "+ Track" in the player does. While the track
+// (or its release) is in the cart it reads "already in cart", once owned
+// "purchased", and when only the full release is for sale "album only", each
+// greyed out. The link keeps its element, so it keeps Bandcamp's font and hover
+// behaviour.
 function replaceBuyTrackLinks(player: Player, pageTracks: PlaylistTrack[]): void {
   const pageUrlOf = (href: string): string => {
     const url = new URL(href, location.href);
     return normalizeUrl(url.origin + url.pathname);
   };
+  const tracksByPageUrl = new Map(pageTracks.map((t) => [normalizeUrl(t.pageUrl), t]));
   const links: { link: HTMLAnchorElement; track: PlaylistTrack }[] = [];
+  // Tracks Bandcamp said can only be bought with their release.
+  const albumOnly = new Set<PlaylistTrack>();
+
+  const greyedOutLabel = (track: PlaylistTrack): string | null => {
+    if (player.isInCart(track)) return 'already in cart';
+    if (track.owned || track.trackOwned) return 'purchased';
+    if (albumOnly.has(track)) return 'album only';
+    return null;
+  };
+
+  const showCartState = () => {
+    for (const { link, track } of links) {
+      const label = greyedOutLabel(track);
+      link.textContent = label ?? '+ track';
+      link.title = label === null ? 'Add this track to your cart' : '';
+      // Greyed out, and no longer looks clickable.
+      link.style.color = label !== null ? '#999' : '';
+      link.style.cursor = label !== null ? 'default' : '';
+      link.style.textDecoration = label !== null ? 'none' : '';
+    }
+  };
+
   for (const link of document.querySelectorAll<HTMLAnchorElement>(`${SEL_NATIVE_TRACK_ROW} ${SEL_NATIVE_ROW_BUY_TRACK}`)) {
-    const track = pageTracks.find((t) => normalizeUrl(t.pageUrl) === pageUrlOf(link.href));
-    // Without a track to add, Bandcamp's own link stays.
-    if (!track || track.trackId === null) continue;
+    const track = tracksByPageUrl.get(pageUrlOf(link.href));
+    // Without a track the player could add, Bandcamp's own link stays.
+    if (!track || track.trackId === null || !track.releaseId) continue;
     links.push({ link, track });
     let adding = false;
     link.addEventListener('click', async (event) => {
       event.preventDefault();
       event.stopPropagation();
-      if (adding || player.isTrackInCart(track)) return;
-      if (!track.purchasable) {
-        player.showToast('Cannot purchase single track, only full release available', 'error');
-        return;
-      }
+      if (adding || greyedOutLabel(track) !== null) return;
       adding = true;
       try {
-        await player.onCartAdd?.(track, 'track');
+        // onCartAdd shows why an add failed; false means only the release is for sale.
+        if (await player.onCartAdd?.(track, 'track') === false) {
+          albumOnly.add(track);
+          showCartState();
+        }
       } finally {
         adding = false;
       }
     });
   }
 
-  const showCartState = () => {
-    for (const { link, track } of links) {
-      const inCart = player.isTrackInCart(track);
-      link.textContent = inCart ? 'already in cart' : '+ track';
-      link.title = inCart ? 'This track is in your cart' : 'Add this track to your cart';
-      // Greyed out, and no longer looks clickable.
-      link.style.color = inCart ? '#999' : '';
-      link.style.cursor = inCart ? 'default' : '';
-      link.style.textDecoration = inCart ? 'none' : '';
-    }
-  };
   showCartState();
-  const previous = player.onCartUrlsChange;
-  player.onCartUrlsChange = () => {
-    previous?.();
-    showCartState();
-  };
+  player.addCartChangeListener(showCartState);
 }
 
 function buildCartUrlSet(items: CartItem[]): Set<string> {
