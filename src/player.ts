@@ -165,6 +165,8 @@ export class Player {
 
   onCartAdd?: (track: PlaylistTrack, addType: CartAddType) => Promise<boolean | void>;
   onCartRemove?: (track: PlaylistTrack, cartItemUrl: string) => Promise<void>;
+  // Called after what's in the cart changed, for views outside the player.
+  onCartUrlsChange?: () => void;
   // Set on the fan's own wishlist page: takes the wishlist item the track
   // belongs to off the wishlist. Offered for tracks played from the Wishlist.
   // Resolves to whether it was removed.
@@ -401,6 +403,7 @@ export class Player {
   setCartUrls(urls: Set<string>) {
     this.cartUrls = urls;
     this.updateCartViews();
+    this.onCartUrlsChange?.();
   }
 
   removeCartUrl(url: string) {
@@ -615,6 +618,10 @@ export class Player {
     if (this.cartUrls.has(normalizeUrl(track.pageUrl))) return track.pageUrl;
     if (track.albumUrl && this.cartUrls.has(normalizeUrl(track.albumUrl))) return track.albumUrl;
     return track.releaseUrl;
+  }
+
+  isTrackInCart(track: PlaylistTrack): boolean {
+    return this.isInCart(track);
   }
 
   // A track is "in cart" if its cart-item key appears in cartUrls.

@@ -10,6 +10,8 @@ export const SEL_NATIVE_PLAY_BUTTON = '.inline_player .playbutton';
 export const SEL_NATIVE_TRACK_TABLE = '#track_table';
 export const SEL_NATIVE_TRACK_ROW   = 'tr.track_row_view';
 export const SEL_NATIVE_ROW_PLAY    = '.play_col, .play_status';
+// The "buy track" link a row shows on hover, to the track page's buy dialog.
+export const SEL_NATIVE_ROW_BUY_TRACK = '.dl_link a[href]';
 
 export function isTrackOrAlbumPage(): boolean {
   return /^\/(track|album)\//.test(location.pathname);

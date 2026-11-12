@@ -50,6 +50,8 @@ import {
   readOwnFanPageFanId,
   readPageCrumb,
   isPurchasesPage,
+  SEL_NATIVE_TRACK_ROW,
+  SEL_NATIVE_ROW_BUY_TRACK,
 } from './bandcamp-dom';
 import { injectPurchaseExport } from './purchase-export';
 import { sendBcpMessage } from './messages';
@@ -1560,6 +1562,7 @@ async function main() {
     player.setPlaylistStatus('currentpage', `${n} track${n !== 1 ? 's' : ''}`, 'info');
     const teardown = setupNativePlayerSync(player);
     window.addEventListener('pagehide', teardown, { once: true });
+    replaceBuyTrackLinks(player, pageTracks);
   } else if (discoItems.length === 0 && !isFanPage) {
     player.setPlaylistUnavailable(
       'currentpage',
@@ -1709,6 +1712,58 @@ async function main() {
     // Tracks can still be added from the discography below.
     player.setStatus('Cart is empty', 'info');
   }
+}
+
+// Turns the "buy track" link a track row shows on hover into "+ track", which
+// adds the track to the cart like "+ Track" in the player does, and into a
+// greyed-out "already in cart" while the track (or its album) is in the cart.
+// The link keeps its element, so it keeps Bandcamp's font and hover behaviour.
+function replaceBuyTrackLinks(player: Player, pageTracks: PlaylistTrack[]): void {
+  const pageUrlOf = (href: string): string => {
+    const url = new URL(href, location.href);
+    return normalizeUrl(url.origin + url.pathname);
+  };
+  const links: { link: HTMLAnchorElement; track: PlaylistTrack }[] = [];
+  for (const link of document.querySelectorAll<HTMLAnchorElement>(`${SEL_NATIVE_TRACK_ROW} ${SEL_NATIVE_ROW_BUY_TRACK}`)) {
+    const track = pageTracks.find((t) => normalizeUrl(t.pageUrl) === pageUrlOf(link.href));
+    // Without a track to add, Bandcamp's own link stays.
+    if (!track || track.trackId === null) continue;
+    links.push({ link, track });
+    let adding = false;
+    link.addEventListener('click', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (adding || player.isTrackInCart(track)) return;
+      if (!track.purchasable) {
+        player.showToast('Cannot purchase single track, only full release available', 'error');
+        return;
+      }
+      adding = true;
+      try {
+        await player.onCartAdd?.(track, 'track');
+      } finally {
+        adding = false;
+      }
+    });
+  }
+
+  const showCartState = () => {
+    for (const { link, track } of links) {
+      const inCart = player.isTrackInCart(track);
+      link.textContent = inCart ? 'already in cart' : '+ track';
+      link.title = inCart ? 'This track is in your cart' : 'Add this track to your cart';
+      // Greyed out, and no longer looks clickable.
+      link.style.color = inCart ? '#999' : '';
+      link.style.cursor = inCart ? 'default' : '';
+      link.style.textDecoration = inCart ? 'none' : '';
+    }
+  };
+  showCartState();
+  const previous = player.onCartUrlsChange;
+  player.onCartUrlsChange = () => {
+    previous?.();
+    showCartState();
+  };
 }
 
 function buildCartUrlSet(items: CartItem[]): Set<string> {
