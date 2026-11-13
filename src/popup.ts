@@ -8,7 +8,7 @@ import {
   saveSnapshots,
 } from './cart-history';
 import { log, initDebugLogging } from './log';
-import { AUDIO_FEATURES, AUDIO_PERMISSION_REQUESTED_FOR_KEY, loadSettings, saveSetting, type AudioFeature } from './settings';
+import { AUDIO_FEATURES, loadSettings, saveSetting, type AudioFeature } from './settings';
 import { AUDIO_HOST_PERMISSION } from './audio-fetch';
 
 // Chrome closes the action popup as soon as a file picker opens, so importing happens
@@ -52,8 +52,7 @@ function addToggle(container: HTMLElement, label: string, checked: boolean, onCh
 const audioFeaturesOn: Record<AudioFeature, boolean> = { tempoAnalysis: false, showWaveform: false };
 
 // Turning an audio feature on asks for the permission to read Bandcamp's audio
-// streams; turning the last one off gives the permission back. The background
-// saves the settings as the permission is granted or removed.
+// streams; turning the last one off gives the permission back.
 function addAudioFeatureToggle(
   container: HTMLElement,
   feature: AudioFeature,
@@ -62,37 +61,32 @@ function addAudioFeatureToggle(
   enabled: boolean,
 ): void {
   audioFeaturesOn[feature] = enabled;
+  const turnOff = () => {
+    input.checked = false;
+    audioFeaturesOn[feature] = false;
+    void saveSetting(feature, false);
+  };
   const input = addToggle(container, label, enabled, (on) => {
     audioFeaturesOn[feature] = on;
     if (!on) {
-      const stillNeeded = AUDIO_FEATURES.some((other) => audioFeaturesOn[other]);
-      if (stillNeeded) {
-        void saveSetting(feature, false);
-        return;
+      void saveSetting(feature, false);
+      // The last audio feature off gives the permission back.
+      if (!AUDIO_FEATURES.some((other) => audioFeaturesOn[other])) {
+        chrome.permissions.remove({ origins: [AUDIO_HOST_PERMISSION] }).catch(log.warn);
       }
-      chrome.permissions
-        .remove({ origins: [AUDIO_HOST_PERMISSION] })
-        // Nothing was removed, so the background won't hear of it.
-        .then((removed) => { if (!removed) void saveSetting(feature, false); })
-        .catch(() => void saveSetting(feature, false));
       return;
     }
-    // Tells the background which toggle the permission is for. Not awaited:
-    // the permission must be asked straight from the click.
-    void chrome.storage.local.set({ [AUDIO_PERMISSION_REQUESTED_FOR_KEY]: feature });
+    // Saved before asking, since Firefox closes the popup while it asks. If
+    // the permission is refused there, the next popup and the content script
+    // find it missing and treat the feature as off. Not awaited: the
+    // permission must be asked straight from the click.
+    void saveSetting(feature, true);
     chrome.permissions
       .request({ origins: [AUDIO_HOST_PERMISSION] })
-      .then((granted) => {
-        input.checked = granted;
-        audioFeaturesOn[feature] = granted;
-        // Already granted for the other feature, the background hears of
-        // nothing new, so the popup saves it.
-        if (granted) void saveSetting(feature, true);
-      })
+      .then((granted) => { if (!granted) turnOff(); })
       .catch((error) => {
         log.warn(error);
-        input.checked = false;
-        audioFeaturesOn[feature] = false;
+        turnOff();
       });
   });
   const description = document.createElement('p');

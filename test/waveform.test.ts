@@ -4,24 +4,30 @@ import { computeWaveform, decodeWaveform, encodeWaveform, waveformBars } from '.
 describe('computeWaveform', () => {
   it('keeps the loudest sample of each stretch, scaled so the loudest is 1', () => {
     const samples = new Float32Array([0.1, -0.2, 0.4, -0.8, 0, 0, 0.2, 0.1]);
-    const { peaks, seconds } = computeWaveform(samples, 4, 4);
+    const { peaks, seconds } = computeWaveform([samples], 4, 4);
     expect(Array.from(peaks)).toEqual([0.25, 1, 0, 0.25]);
     expect(seconds).toBe(2);
   });
 
+  it('takes the loudest of all channels', () => {
+    const left = new Float32Array([0.5, 0, 0, 0]);
+    const right = new Float32Array([0, 0, 0, -1]);
+    expect(Array.from(computeWaveform([left, right], 2, 2).peaks)).toEqual([0.5, 1]);
+  });
+
   it('gives silence all zeros', () => {
-    const { peaks } = computeWaveform(new Float32Array(100), 10, 5);
+    const { peaks } = computeWaveform([new Float32Array(100)], 10, 5);
     expect(Array.from(peaks)).toEqual([0, 0, 0, 0, 0]);
   });
 
   it('copes with fewer samples than peaks', () => {
-    const { peaks } = computeWaveform(new Float32Array([0.5, -1]), 2, 4);
+    const { peaks } = computeWaveform([new Float32Array([0.5, -1])], 2, 4);
     expect(peaks.length).toBe(4);
     expect(Math.max(...peaks)).toBe(1);
   });
 
   it('covers no time for no audio', () => {
-    expect(computeWaveform(new Float32Array(0), 8000).seconds).toBe(0);
+    expect(computeWaveform([new Float32Array(0)], 8000).seconds).toBe(0);
   });
 });
 

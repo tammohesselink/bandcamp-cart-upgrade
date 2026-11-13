@@ -3,7 +3,7 @@ import type { FetchAudioResponse } from './messages';
 import { sendBcpMessage } from './messages';
 import { base64ToBytes } from './audio-fetch';
 import { isStreamFresh } from './cache';
-import { mixToMono } from './tempo-analysis';
+import { decodeAudioChannels } from './audio-decode';
 import { trackStorageId } from './tempo-store';
 import {
   WAVEFORM_SAMPLE_RATE,
@@ -37,10 +37,11 @@ export interface TrackWaveform {
 export interface WaveformLoaderDeps {
   // Gives the track a fresh stream link (see Player.onRefreshStream).
   refreshStream: (track: PlaylistTrack) => Promise<void>;
-  // Downloads the whole track (or as much of a long one as is allowed).
-  fetchAudio: (url: string) => Promise<FetchAudioResponse>;
-  // Decodes audio file bytes to mono samples at WAVEFORM_SAMPLE_RATE.
-  decode: (bytes: Uint8Array) => Promise<Float32Array>;
+  // Downloads the whole track (or as much of a long one as is allowed), and
+  // stops the download when `signal` aborts.
+  fetchAudio: (url: string, signal: AbortSignal) => Promise<FetchAudioResponse>;
+  // Decodes audio file bytes to samples per channel at WAVEFORM_SAMPLE_RATE.
+  decode: (bytes: Uint8Array) => Promise<Float32Array[]>;
   read: (key: string) => Promise<Waveform | null>;
   write: (key: string, waveform: Waveform) => void;
 }
@@ -53,18 +54,17 @@ class Superseded extends Error {}
 
 // Gets the waveform of the track that is playing: from storage when it was
 // drawn before, otherwise by downloading and decoding the track. Only one
-// track loads at a time, and only the most recently asked-for one waits, so
-// skipping through a playlist doesn't queue up a download per track.
+// track loads at a time: asking for another stops the download of the one
+// before, so skipping through a playlist doesn't download every track.
 export class WaveformLoader {
   private waveforms = new Map<string, Waveform>();
   private status = new Map<string, WaveformStatus>();
   private retryAt = new Map<string, number>();
   private waiting: { track: PlaylistTrack; key: string } | null = null;
-  private running = false;
+  // The load that is running, which a newer request stops.
+  private running: { key: string; controller: AbortController } | null = null;
   private listeners = new Set<() => void>();
   private enabled = false;
-  // Bumped when waveforms are turned off, so a load still running drops its result.
-  private generation = 0;
 
   constructor(private deps: WaveformLoaderDeps) {}
 
@@ -78,8 +78,8 @@ export class WaveformLoader {
     if (this.enabled === enabled) return;
     this.enabled = enabled;
     if (!enabled) {
-      this.generation++;
       this.waiting = null;
+      this.running?.controller.abort();
     }
     // Statuses left by a run that was turned off, or a refused permission.
     for (const [key, status] of this.status) if (status === 'loading' || status === 'unavailable') this.status.delete(key);
@@ -119,8 +119,9 @@ export class WaveformLoader {
     const status = this.status.get(key);
     if (status === 'loading' || status === 'unavailable') return;
     if (status === 'error' && Date.now() < (this.retryAt.get(key) ?? 0)) return;
-    // The track asked for before, if it hasn't started, isn't wanted any more.
+    // The track asked for before isn't wanted any more.
     if (this.waiting && this.waiting.key !== key) this.status.delete(this.waiting.key);
+    if (this.running && this.running.key !== key) this.running.controller.abort();
     this.waiting = { track, key };
     this.status.set(key, 'loading');
     this.notify();
@@ -131,17 +132,17 @@ export class WaveformLoader {
     if (this.running || !this.waiting) return;
     const job = this.waiting;
     this.waiting = null;
-    this.running = true;
-    void this.run(job.track, job.key).finally(() => {
-      this.running = false;
+    const controller = new AbortController();
+    this.running = { key: job.key, controller };
+    void this.run(job.track, job.key, controller.signal).finally(() => {
+      this.running = null;
       this.startNext();
     });
   }
 
-  private async run(track: PlaylistTrack, key: string): Promise<void> {
-    const generation = this.generation;
+  private async run(track: PlaylistTrack, key: string, signal: AbortSignal): Promise<void> {
     const check = () => {
-      if (generation !== this.generation) throw new Superseded();
+      if (signal.aborted) throw new Superseded();
     };
     try {
       const stored = await this.deps.read(key);
@@ -157,23 +158,27 @@ export class WaveformLoader {
         this.status.set(key, 'unavailable');
         return;
       }
-      const response = await this.deps.fetchAudio(track.streamUrl);
+      const response = await this.deps.fetchAudio(track.streamUrl, signal);
       check();
       if (response.noPermission) {
         this.status.set(key, 'unavailable');
         return;
       }
       if (!response.audioBase64) throw new Error(response.error ?? 'No audio');
-      const samples = await this.deps.decode(base64ToBytes(response.audioBase64));
+      const channels = await this.deps.decode(base64ToBytes(response.audioBase64));
       check();
-      const waveform = computeWaveform(samples, WAVEFORM_SAMPLE_RATE);
+      const waveform = computeWaveform(channels, WAVEFORM_SAMPLE_RATE);
       if (!(waveform.seconds > 0)) throw new Error('The audio decoded to nothing');
       this.waveforms.set(key, waveform);
       this.status.delete(key);
       this.retryAt.delete(key);
       this.deps.write(key, waveform);
     } catch (err) {
-      if (err instanceof Superseded) return;
+      if (err instanceof Superseded) {
+        // Stopped by a newer request or turning waveforms off: nothing to show.
+        if (this.status.get(key) === 'loading' && this.waiting?.key !== key) this.status.delete(key);
+        return;
+      }
       log.warn('[bcp] Could not get the audio for the waveform of', track.trackTitle, err);
       this.status.set(key, 'error');
       this.retryAt.set(key, Date.now() + WAVEFORM_RETRY_AFTER_MS);
@@ -185,15 +190,6 @@ export class WaveformLoader {
   private notify(): void {
     for (const listener of this.listeners) listener();
   }
-}
-
-async function decodeToMono(bytes: Uint8Array): Promise<Float32Array> {
-  // An offline context decodes straight to the waveform's rate and, unlike an
-  // AudioContext, holds no audio device that would need closing.
-  const context = new OfflineAudioContext(1, 1, WAVEFORM_SAMPLE_RATE);
-  const buffer = await context.decodeAudioData(bytes.buffer as ArrayBuffer);
-  const channels = Array.from({ length: buffer.numberOfChannels }, (_, i) => buffer.getChannelData(i));
-  return mixToMono(channels);
 }
 
 async function readWaveform(key: string): Promise<Waveform | null> {
@@ -213,8 +209,12 @@ function writeWaveform(key: string, waveform: Waveform): void {
 export function createWaveformLoader(refreshStream: WaveformLoaderDeps['refreshStream']): WaveformLoader {
   return new WaveformLoader({
     refreshStream,
-    fetchAudio: (url) => sendBcpMessage({ type: 'fetch-audio', url, whole: true }),
-    decode: decodeToMono,
+    fetchAudio: (url, signal) => {
+      const requestId = `waveform-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      signal.addEventListener('abort', () => void sendBcpMessage({ type: 'cancel-audio', requestId }).catch(() => {}), { once: true });
+      return sendBcpMessage({ type: 'fetch-audio', url, whole: true, requestId });
+    },
+    decode: (bytes) => decodeAudioChannels(bytes, WAVEFORM_SAMPLE_RATE),
     read: readWaveform,
     write: writeWaveform,
   });

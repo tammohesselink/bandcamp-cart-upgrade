@@ -91,6 +91,7 @@ export class Player {
   // Where the pointer is over the waveform, from 0 to 1, or null.
   private waveformHover: number | null = null;
   private waveformRenderScheduled = false;
+  private cachedWaveformColors: { playedColor: string; hoverColor: string; futureColor: string } | null = null;
   private currentTimeEl!: HTMLElement;
   private totalTimeEl!: HTMLElement;
   private tempoSlider!: HTMLInputElement;
@@ -269,6 +270,8 @@ export class Player {
 
   setDarkMode(enabled: boolean) {
     this.wrapper.classList.toggle('bcp-dark', enabled);
+    this.cachedWaveformColors = null;
+    if (this.waveformCanvas && !this.waveformCanvas.hidden) this.drawWaveform();
     for (const toast of document.querySelectorAll('.bcp-toast')) toast.classList.toggle('bcp-dark', enabled);
   }
 
@@ -760,12 +763,16 @@ export class Player {
     this.seekBar.min = '0';
     this.seekBar.max = '100';
     this.setSeekPercent(0);
-    this.seekBar.addEventListener('mousedown', () => (this.seeking = true));
-    this.seekBar.addEventListener('input', () => updateRangeFill(this.seekBar));
-    this.seekBar.addEventListener('mouseup', () => {
-      this.seeking = false;
-      this.commitSeek(parseFloat(this.seekBar.value) / 100);
+    this.seekBar.addEventListener('mousedown', () => {
+      this.seeking = true;
+      // Listened for on the whole window, so letting go off the bar still seeks.
+      window.addEventListener('mouseup', () => {
+        if (!this.seeking) return;
+        this.seeking = false;
+        this.commitSeek(parseFloat(this.seekBar.value) / 100);
+      }, { once: true });
     });
+    this.seekBar.addEventListener('input', () => updateRangeFill(this.seekBar));
 
     this.waveformCanvas = this.buildWaveformCanvas();
     this.waveformLoadingEl = el('span', 'bcp-spinner bcp-waveform-loading');
@@ -1950,12 +1957,25 @@ export class Player {
 
   // Moves playback to `fraction` of the track, from the seek bar or waveform.
   private commitSeek(fraction: number) {
-    if (!isFinite(this.audio.duration)) return;
+    // Nothing is loaded to seek in (e.g. a cued track waiting for a fresh
+    // link), so the bar goes back to where playback is.
+    if (!isFinite(this.audio.duration)) {
+      this.syncSeekToAudio();
+      return;
+    }
     this.audio.currentTime = fraction * this.audio.duration;
     this.setSeekPercent(fraction * 100);
     if (this.activeId === 'currentpage') {
       this.onSeek?.(fraction);
     }
+  }
+
+  // Shows where playback is, e.g. after a drag that didn't end in a seek.
+  private syncSeekToAudio() {
+    const duration = this.audio.duration;
+    const fraction = isFinite(duration) && duration > 0 ? this.audio.currentTime / duration : 0;
+    this.currentTimeEl.textContent = fmtTime(this.audio.currentTime || 0);
+    this.setSeekPercent(fraction * 100);
   }
 
   // --- Waveform ---------------------------------------------------------------
@@ -1994,11 +2014,14 @@ export class Player {
       this.seeking = false;
       this.commitSeek(fractionAt(event));
     });
-    canvas.addEventListener('pointercancel', () => {
+    // A drag that ends any other way (cancelled, or the waveform hidden for
+    // the next track mid-drag) seeks nowhere, and must not leave the bar
+    // waiting for a release that never comes. After a release this finds
+    // seeking already over.
+    canvas.addEventListener('lostpointercapture', () => {
+      if (!this.seeking) return;
       this.seeking = false;
-      if (isFinite(this.audio.duration) && this.audio.duration > 0) {
-        this.setSeekPercent((this.audio.currentTime / this.audio.duration) * 100);
-      }
+      this.syncSeekToAudio();
     });
     canvas.addEventListener('pointerleave', () => {
       this.waveformHover = null;
@@ -2015,6 +2038,20 @@ export class Player {
     // Redrawn at the new width when the bar is resized.
     new ResizeObserver(() => this.drawWaveform()).observe(canvas);
     return canvas;
+  }
+
+  // Read from the stylesheet once, and again after dark mode changes them,
+  // rather than on every redraw.
+  private waveformColors(): { playedColor: string; hoverColor: string; futureColor: string } {
+    if (!this.cachedWaveformColors) {
+      const style = getComputedStyle(this.waveformCanvas);
+      this.cachedWaveformColors = {
+        playedColor: style.getPropertyValue('--bcp-waveform-played').trim() || '#1da0c3',
+        hoverColor: style.getPropertyValue('--bcp-waveform-hover').trim() || '#8fd0e1',
+        futureColor: style.getPropertyValue('--bcp-waveform-future').trim() || '#c4c4c4',
+      };
+    }
+    return this.cachedWaveformColors;
   }
 
   private previewWaveformSeek(fraction: number) {
@@ -2069,10 +2106,7 @@ export class Player {
     context.setTransform(ratio, 0, 0, ratio, 0, 0);
     context.clearRect(0, 0, width, height);
 
-    const style = getComputedStyle(canvas);
-    const playedColor = style.getPropertyValue('--bcp-waveform-played').trim() || '#1da0c3';
-    const hoverColor = style.getPropertyValue('--bcp-waveform-hover').trim() || '#8fd0e1';
-    const futureColor = style.getPropertyValue('--bcp-waveform-future').trim() || '#c4c4c4';
+    const { playedColor, hoverColor, futureColor } = this.waveformColors();
 
     const duration = isFinite(this.audio.duration) && this.audio.duration > 0 ? this.audio.duration : (track?.durationSec ?? 0);
     const barWidth = 2;

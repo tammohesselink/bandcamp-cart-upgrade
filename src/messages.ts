@@ -70,6 +70,15 @@ export interface FetchAudioRequest {
   bulk?: boolean;
   // The whole track (up to MAX_WHOLE_AUDIO_BYTES) instead of just its start.
   whole?: boolean;
+  // Lets a CancelAudioRequest with the same ID stop the download.
+  requestId?: string;
+}
+
+// Stops a fetch-audio download that is no longer wanted, e.g. the whole
+// track for a waveform after skipping to the next track.
+export interface CancelAudioRequest {
+  type: 'cancel-audio';
+  requestId: string;
 }
 
 // Reads one page of the logged-in fan's order history (the list on
@@ -89,6 +98,7 @@ export type BcpRequest =
   | FetchRequest
   | OrderHistoryPageRequest
   | FetchAudioRequest
+  | CancelAudioRequest
   | CartAddRequest
   | CartRemoveRequest
   | WishlistRemoveRequest
@@ -133,11 +143,12 @@ export type BcpResponse = FetchResponse | OrderHistoryPageResponse | FetchAudioR
 // response type inferred from the request they send.
 export function sendBcpMessage(msg: FetchRequest): Promise<FetchResponse>;
 export function sendBcpMessage(msg: FetchAudioRequest): Promise<FetchAudioResponse>;
+export function sendBcpMessage(msg: CancelAudioRequest): Promise<void>;
 export function sendBcpMessage(
   msg: CartAddRequest | CartRemoveRequest | WishlistRemoveRequest | OpenIncognitoCheckoutRequest
 ): Promise<CartMutationResponse>;
 export function sendBcpMessage(msg: OrderHistoryPageRequest): Promise<OrderHistoryPageResponse>;
 export function sendBcpMessage(msg: IncognitoAccessRequest): Promise<IncognitoAccessResponse>;
-export function sendBcpMessage(msg: BcpRequest): Promise<BcpResponse> {
+export function sendBcpMessage(msg: BcpRequest): Promise<BcpResponse | void> {
   return chrome.runtime.sendMessage(msg);
 }

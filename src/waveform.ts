@@ -2,6 +2,8 @@
 // is, worked out once from its audio and kept small enough to store per track.
 // Everything here is pure, so it runs the same in tests as in the page.
 
+import { base64ToBytes, bytesToBase64 } from './audio-fetch';
+
 // Audio is decoded at this rate for the waveform. It only has to show how loud
 // each stretch is, and 8 kHz is the lowest rate every browser decodes to.
 export const WAVEFORM_SAMPLE_RATE = 8000;
@@ -19,25 +21,29 @@ export interface Waveform {
   seconds: number;
 }
 
-// The loudest sample of each of `count` equal stretches of mono audio, scaled
-// so the loudest stretch is 1.
-export function computeWaveform(samples: Float32Array, sampleRate: number, count = WAVEFORM_PEAK_COUNT): Waveform {
+// The loudest sample of each of `count` equal stretches of the audio, over
+// all its channels, scaled so the loudest stretch is 1. Reads the channels as
+// decoded, so a long mix isn't copied once more to mix it down.
+export function computeWaveform(channels: Float32Array[], sampleRate: number, count = WAVEFORM_PEAK_COUNT): Waveform {
   const peaks = new Float32Array(count);
-  if (samples.length === 0) return { peaks, seconds: 0 };
+  const length = channels.length > 0 ? Math.min(...channels.map((channel) => channel.length)) : 0;
+  if (length === 0) return { peaks, seconds: 0 };
   let loudest = 0;
   for (let i = 0; i < count; i++) {
-    const from = Math.floor((i * samples.length) / count);
-    const to = Math.max(from + 1, Math.floor(((i + 1) * samples.length) / count));
+    const from = Math.floor((i * length) / count);
+    const to = Math.min(length, Math.max(from + 1, Math.floor(((i + 1) * length) / count)));
     let peak = 0;
-    for (let j = from; j < to && j < samples.length; j++) {
-      const value = Math.abs(samples[j]!);
-      if (value > peak) peak = value;
+    for (const channel of channels) {
+      for (let j = from; j < to; j++) {
+        const value = Math.abs(channel[j]!);
+        if (value > peak) peak = value;
+      }
     }
     peaks[i] = peak;
     if (peak > loudest) loudest = peak;
   }
   if (loudest > 0) for (let i = 0; i < count; i++) peaks[i] = peaks[i]! / loudest;
-  return { peaks, seconds: samples.length / sampleRate };
+  return { peaks, seconds: length / sampleRate };
 }
 
 // The height of each of `barCount` bars drawn across a track `duration`
@@ -72,9 +78,7 @@ export interface StoredWaveform {
 export function encodeWaveform(waveform: Waveform): StoredWaveform {
   const bytes = new Uint8Array(waveform.peaks.length);
   for (let i = 0; i < bytes.length; i++) bytes[i] = Math.round(Math.max(0, Math.min(1, waveform.peaks[i]!)) * 255);
-  let binary = '';
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return { peaks: btoa(binary), seconds: waveform.seconds };
+  return { peaks: bytesToBase64(bytes), seconds: waveform.seconds };
 }
 
 export function decodeWaveform(stored: unknown): Waveform | null {
@@ -82,11 +86,9 @@ export function decodeWaveform(stored: unknown): Waveform | null {
   const { peaks, seconds } = stored as Record<string, unknown>;
   if (typeof peaks !== 'string' || typeof seconds !== 'number' || !(seconds > 0)) return null;
   try {
-    const binary = atob(peaks);
-    if (binary.length === 0) return null;
-    const values = new Float32Array(binary.length);
-    for (let i = 0; i < binary.length; i++) values[i] = binary.charCodeAt(i) / 255;
-    return { peaks: values, seconds };
+    const bytes = base64ToBytes(peaks);
+    if (bytes.length === 0) return null;
+    return { peaks: Float32Array.from(bytes, (byte) => byte / 255), seconds };
   } catch {
     return null;
   }

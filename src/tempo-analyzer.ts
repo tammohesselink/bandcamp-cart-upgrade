@@ -4,6 +4,7 @@ import { sendBcpMessage } from './messages';
 import { ANALYSIS_SAMPLE_RATE, detectTempo, mixToMono, type TempoEstimate } from './tempo-analysis';
 import { readTempos, trackTempoKey, writeTempo, type StoredTempo } from './tempo-store';
 import { base64ToBytes } from './audio-fetch';
+import { decodeAudioChannels } from './audio-decode';
 import { isStreamFresh } from './cache';
 import { log } from './log';
 
@@ -235,13 +236,7 @@ export class TempoAnalyzer {
 }
 
 async function decodeToMono(bytes: Uint8Array): Promise<Float32Array> {
-  // An offline context decodes straight to the analysis rate and, unlike an
-  // AudioContext, holds no audio device that would need closing.
-  const context = new OfflineAudioContext(1, 1, ANALYSIS_SAMPLE_RATE);
-  // base64ToBytes gives an array that owns its whole buffer, so no copy is needed.
-  const buffer = await context.decodeAudioData(bytes.buffer as ArrayBuffer);
-  const channels = Array.from({ length: buffer.numberOfChannels }, (_, i) => buffer.getChannelData(i));
-  return mixToMono(channels);
+  return mixToMono(await decodeAudioChannels(bytes, ANALYSIS_SAMPLE_RATE));
 }
 
 export function createTempoAnalyzer(refreshStream: TempoAnalyzerDeps['refreshStream']): TempoAnalyzer {

@@ -30,10 +30,6 @@ export const DEFAULT_SETTINGS: BcpSettings = {
 export type AudioFeature = 'tempoAnalysis' | 'showWaveform';
 export const AUDIO_FEATURES: readonly AudioFeature[] = ['tempoAnalysis', 'showWaveform'];
 
-// Which audio feature the popup is asking the stream permission for, so the
-// background turns on that one when the permission is granted.
-export const AUDIO_PERMISSION_REQUESTED_FOR_KEY = 'bcp_audio_permission_requested_for';
-
 export function withDefaults(stored: Partial<BcpSettings> | undefined): BcpSettings {
   return { ...DEFAULT_SETTINGS, ...stored };
 }
