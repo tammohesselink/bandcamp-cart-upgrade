@@ -1388,6 +1388,28 @@ export class Player {
     });
   }
 
+  // Makes the space bar play and pause the bottom player, for pages where
+  // Bandcamp has no player of its own to do it (a fan's collection, wishlist
+  // or feed, a label page, the cart). On a release page Bandcamp's player
+  // handles the space bar, and native-sync passes that on. Returns a callback
+  // that stops it.
+  enableSpacebarPlayPause(): () => void {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== ' ' || event.defaultPrevented) return;
+      if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+      if (usesSpaceBar(event.target)) return;
+      // Nothing to play: the space bar scrolls the page, as usual.
+      const track = this.currentTrack();
+      if (!track || this.playPauseBtn.disabled) return;
+      event.preventDefault();
+      // Held down, it would toggle on every repeat.
+      if (event.repeat) return;
+      this.togglePlay();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }
+
   private togglePlay() {
     if (this.playPending) {
       this.pause();
@@ -2139,6 +2161,18 @@ export class Player {
 
 
 
+}
+
+// Elements the space bar already does something in: typing, pressing a
+// button, ticking a box. Those keep it.
+const SPACE_BAR_ROLES = new Set(['button', 'checkbox', 'switch', 'radio', 'menuitem', 'menuitemcheckbox', 'menuitemradio', 'option', 'tab', 'textbox', 'combobox', 'listbox', 'searchbox', 'spinbutton']);
+
+function usesSpaceBar(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  if (target.closest('input, textarea, select, button, summary, [contenteditable]:not([contenteditable="false"])')) return true;
+  if (target.closest('audio[controls], video[controls]')) return true;
+  const role = target.closest('[role]')?.getAttribute('role');
+  return role !== undefined && role !== null && SPACE_BAR_ROLES.has(role);
 }
 
 // Runs of consecutive tracks from the same release, as lists of track indices.

@@ -1466,3 +1466,69 @@ describe('Player tempo detection timing', () => {
     expect(analyse).toHaveBeenCalledWith(player.currentTrack());
   });
 });
+
+describe('space bar play/pause', () => {
+  function pressSpace(target: EventTarget = document.body, init: KeyboardEventInit = {}): KeyboardEvent {
+    const event = new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true, ...init });
+    target.dispatchEvent(event);
+    return event;
+  }
+
+  it('plays and pauses the bottom player instead of scrolling', async () => {
+    const player = new Player([freshTrack(1)]);
+    document.body.appendChild(player.wrapper);
+    const stop = player.enableSpacebarPlayPause();
+    const play = vi.spyOn(audioOf(player), 'play').mockImplementation(async () => {
+      Object.defineProperty(audioOf(player), 'paused', { value: false, configurable: true });
+    });
+
+    const first = pressSpace();
+    await settle();
+    expect(first.defaultPrevented).toBe(true);
+    expect(play).toHaveBeenCalledTimes(1);
+
+    const pause = vi.spyOn(audioOf(player), 'pause');
+    pressSpace();
+    expect(pause).toHaveBeenCalled();
+
+    stop();
+    player.wrapper.remove();
+  });
+
+  it('leaves the space bar to fields and buttons, modified presses and empty players', () => {
+    const player = new Player([freshTrack(1)]);
+    const stop = player.enableSpacebarPlayPause();
+    const play = vi.spyOn(audioOf(player), 'play').mockResolvedValue();
+
+    for (const tag of ['input', 'textarea', 'button', 'select']) {
+      const element = document.createElement(tag);
+      document.body.appendChild(element);
+      expect(pressSpace(element).defaultPrevented).toBe(false);
+      document.body.removeChild(element);
+    }
+    const roleButton = document.createElement('div');
+    roleButton.setAttribute('role', 'button');
+    document.body.appendChild(roleButton);
+    expect(pressSpace(roleButton).defaultPrevented).toBe(false);
+    roleButton.remove();
+    expect(pressSpace(document.body, { shiftKey: true }).defaultPrevented).toBe(false);
+    expect(play).not.toHaveBeenCalled();
+    stop();
+
+    const empty = new Player([]);
+    const stopEmpty = empty.enableSpacebarPlayPause();
+    expect(pressSpace().defaultPrevented).toBe(false);
+    stopEmpty();
+  });
+
+  it('does not toggle again while the space bar is held down', async () => {
+    const player = new Player([freshTrack(1)]);
+    const stop = player.enableSpacebarPlayPause();
+    const play = vi.spyOn(audioOf(player), 'play').mockResolvedValue();
+
+    expect(pressSpace(document.body, { repeat: true }).defaultPrevented).toBe(true);
+    await settle();
+    expect(play).not.toHaveBeenCalled();
+    stop();
+  });
+});
