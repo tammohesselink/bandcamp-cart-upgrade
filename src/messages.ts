@@ -61,13 +61,15 @@ export interface IncognitoAccessRequest {
   type: 'incognito-access';
 }
 
-// Fetches the start of a track's audio for tempo analysis. Bandcamp's stream
-// host sends no CORS headers, so only the background, with the optional
-// bcbits.com host permission, can read it.
+// Fetches a track's audio: its start for tempo analysis, or all of it for the
+// waveform. Bandcamp's stream host sends no CORS headers, so only the
+// background, with the optional bcbits.com host permission, can read it.
 export interface FetchAudioRequest {
   type: 'fetch-audio';
   url: string;
   bulk?: boolean;
+  // The whole track (up to MAX_WHOLE_AUDIO_BYTES) instead of just its start.
+  whole?: boolean;
 }
 
 // Reads one page of the logged-in fan's order history (the list on
@@ -109,7 +111,8 @@ export interface IncognitoAccessResponse {
 }
 
 export interface FetchAudioResponse {
-  // The audio file's first bytes, base64 encoded (messages carry JSON).
+  // The audio file's bytes (its first ones, unless the whole track was asked
+  // for), base64 encoded (messages carry JSON).
   audioBase64?: string;
   error?: string;
   // The bcbits.com permission hasn't been granted (or was taken away).

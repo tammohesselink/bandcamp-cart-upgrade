@@ -10,6 +10,9 @@ export interface BcpSettings {
   // Detects the BPM of tracks as they play. Needs the optional bcbits.com host
   // permission, which the popup asks for when this is turned on.
   tempoAnalysis: boolean;
+  // Shows a waveform of the track in place of the seek bar. Needs the same
+  // bcbits.com permission as tempo analysis.
+  showWaveform: boolean;
 }
 
 export const DEFAULT_SETTINGS: BcpSettings = {
@@ -19,7 +22,17 @@ export const DEFAULT_SETTINGS: BcpSettings = {
   showAdvanced: false,
   debugLogging: false,
   tempoAnalysis: false,
+  showWaveform: false,
 };
+
+// The settings that read Bandcamp's audio streams, and so need the optional
+// bcbits.com permission. The permission is held while any of them is on.
+export type AudioFeature = 'tempoAnalysis' | 'showWaveform';
+export const AUDIO_FEATURES: readonly AudioFeature[] = ['tempoAnalysis', 'showWaveform'];
+
+// Which audio feature the popup is asking the stream permission for, so the
+// background turns on that one when the permission is granted.
+export const AUDIO_PERMISSION_REQUESTED_FOR_KEY = 'bcp_audio_permission_requested_for';
 
 export function withDefaults(stored: Partial<BcpSettings> | undefined): BcpSettings {
   return { ...DEFAULT_SETTINGS, ...stored };

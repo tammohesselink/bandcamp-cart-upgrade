@@ -1,13 +1,18 @@
-// Background-side reading of a track's audio for tempo analysis.
+// Background-side reading of a track's audio for tempo analysis and waveforms.
 
 // The optional host permission that lets the background read Bandcamp's
-// streams. Asked for when tempo analysis is turned on, so turning it on is the
-// only thing that shows a new permission prompt.
+// streams. Asked for when tempo analysis or the waveform is turned on, so
+// turning one of those on is the only thing that shows a new permission prompt.
 export const AUDIO_HOST_PERMISSION = 'https://*.bcbits.com/*';
 
 // About 2.5 minutes of Bandcamp's 128 kbps streams: as much as the analysis
 // uses (ANALYSIS_MAX_SECONDS), plus room for a tag with artwork at the start.
 export const MAX_AUDIO_BYTES = 2_600_000;
+
+// About half an hour of Bandcamp's 128 kbps streams, for a waveform: every
+// track whole, and the first half hour of a long mix. Base64 encoded it stays
+// well inside the 64 MB a message between extension pages can carry.
+export const MAX_WHOLE_AUDIO_BYTES = 30_000_000;
 
 // Stream links are on *.bcbits.com, or on bandcamp.com and redirect there.
 export function isStreamUrl(rawUrl: string): boolean {

@@ -1,6 +1,7 @@
 import type { CartItem, PlaylistId, PlaylistTrack, SavedCartItem, NamedCart } from './types';
 import { hasTralbumData, parseTralbum, isReleaseOwned } from './bandcamp';
 import { createTempoAnalyzer } from './tempo-analyzer';
+import { createWaveformLoader } from './waveform-loader';
 import { Player, PLAYLIST_LABELS } from './player';
 import { setupNativePlayerSync } from './native-sync';
 import {
@@ -1545,6 +1546,13 @@ async function main() {
   tempoAnalyzer.setEnabled(settings.tempoAnalysis);
   onSettingsChanged((changed) => tempoAnalyzer.setEnabled(changed.tempoAnalysis));
   player.setTempoAnalyzer(tempoAnalyzer);
+
+  // Draws the playing track's waveform in place of the seek bar while "Show a
+  // waveform" is on in the popup.
+  const waveformLoader = createWaveformLoader((track) => player.onRefreshStream!(track, false, false));
+  waveformLoader.setEnabled(settings.showWaveform);
+  onSettingsChanged((changed) => waveformLoader.setEnabled(changed.showWaveform));
+  player.setWaveformLoader(waveformLoader);
 
   // The current page's tracks are already in the DOM, so they load before the
   // cart and discography, which each need a fetch per release. Being the first

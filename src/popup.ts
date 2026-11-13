@@ -8,7 +8,7 @@ import {
   saveSnapshots,
 } from './cart-history';
 import { log, initDebugLogging } from './log';
-import { loadSettings, saveSetting } from './settings';
+import { AUDIO_FEATURES, AUDIO_PERMISSION_REQUESTED_FOR_KEY, loadSettings, saveSetting, type AudioFeature } from './settings';
 import { AUDIO_HOST_PERMISSION } from './audio-fetch';
 
 // Chrome closes the action popup as soon as a file picker opens, so importing happens
@@ -47,35 +47,57 @@ function addToggle(container: HTMLElement, label: string, checked: boolean, onCh
   return input;
 }
 
-// Turning tempo analysis on asks for the permission to read Bandcamp's audio
-// streams; turning it off gives the permission back. The background saves the
-// setting as the permission is granted or removed.
-function addTempoAnalysisToggle(container: HTMLElement, enabled: boolean): void {
-  const input = addToggle(container, 'Detect track BPMs (tempo analysis)', enabled, (on) => {
+// Which of the features that read Bandcamp's audio streams are on, as the
+// popup's toggles show them.
+const audioFeaturesOn: Record<AudioFeature, boolean> = { tempoAnalysis: false, showWaveform: false };
+
+// Turning an audio feature on asks for the permission to read Bandcamp's audio
+// streams; turning the last one off gives the permission back. The background
+// saves the settings as the permission is granted or removed.
+function addAudioFeatureToggle(
+  container: HTMLElement,
+  feature: AudioFeature,
+  label: string,
+  descriptionText: string,
+  enabled: boolean,
+): void {
+  audioFeaturesOn[feature] = enabled;
+  const input = addToggle(container, label, enabled, (on) => {
+    audioFeaturesOn[feature] = on;
     if (!on) {
+      const stillNeeded = AUDIO_FEATURES.some((other) => audioFeaturesOn[other]);
+      if (stillNeeded) {
+        void saveSetting(feature, false);
+        return;
+      }
       chrome.permissions
         .remove({ origins: [AUDIO_HOST_PERMISSION] })
         // Nothing was removed, so the background won't hear of it.
-        .then((removed) => { if (!removed) void saveSetting('tempoAnalysis', false); })
-        .catch(() => void saveSetting('tempoAnalysis', false));
+        .then((removed) => { if (!removed) void saveSetting(feature, false); })
+        .catch(() => void saveSetting(feature, false));
       return;
     }
-    // Must be asked straight from the click, before anything is awaited.
+    // Tells the background which toggle the permission is for. Not awaited:
+    // the permission must be asked straight from the click.
+    void chrome.storage.local.set({ [AUDIO_PERMISSION_REQUESTED_FOR_KEY]: feature });
     chrome.permissions
       .request({ origins: [AUDIO_HOST_PERMISSION] })
       .then((granted) => {
         input.checked = granted;
+        audioFeaturesOn[feature] = granted;
+        // Already granted for the other feature, the background hears of
+        // nothing new, so the popup saves it.
+        if (granted) void saveSetting(feature, true);
       })
       .catch((error) => {
         log.warn(error);
         input.checked = false;
+        audioFeaturesOn[feature] = false;
       });
   });
   const description = document.createElement('p');
   description.className = 'setting-description';
-  description.textContent =
-    'Downloads the start of each track as it plays to find its BPM, shown next to the tempo slider. ' +
-    'Asks to read Bandcamp’s audio streams (bcbits.com).';
+  description.textContent = descriptionText;
   container.appendChild(description);
 }
 
@@ -201,8 +223,23 @@ async function init(): Promise<void> {
 
   // The permission can also be taken away in the browser's extension settings.
   const audioAllowed = await chrome.permissions.contains({ origins: [AUDIO_HOST_PERMISSION] }).catch(() => false);
-  if (settings.tempoAnalysis && !audioAllowed) void saveSetting('tempoAnalysis', false);
-  addTempoAnalysisToggle(container, settings.tempoAnalysis && audioAllowed);
+  for (const feature of AUDIO_FEATURES) if (settings[feature] && !audioAllowed) void saveSetting(feature, false);
+  addAudioFeatureToggle(
+    container,
+    'tempoAnalysis',
+    'Detect track BPMs (tempo analysis)',
+    'Downloads the start of each track as it plays to find its BPM, shown next to the tempo slider. ' +
+      'Asks to read Bandcamp’s audio streams (bcbits.com).',
+    settings.tempoAnalysis && audioAllowed,
+  );
+  addAudioFeatureToggle(
+    container,
+    'showWaveform',
+    'Show a waveform instead of the progress bar',
+    'Downloads each track as it plays to draw its waveform; click the waveform to skip through the track. ' +
+      'Asks to read Bandcamp’s audio streams (bcbits.com).',
+    settings.showWaveform && audioAllowed,
+  );
 
   addToggle(container, 'Show advanced functionality', settings.showAdvanced, (v) => {
     showAdvanced(advanced, v);
