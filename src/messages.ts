@@ -61,13 +61,24 @@ export interface IncognitoAccessRequest {
   type: 'incognito-access';
 }
 
-// Fetches the start of a track's audio for tempo analysis. Bandcamp's stream
-// host sends no CORS headers, so only the background, with the optional
-// bcbits.com host permission, can read it.
+// Fetches a track's audio: its start for tempo analysis, or all of it for the
+// waveform. Bandcamp's stream host sends no CORS headers, so only the
+// background, with the optional bcbits.com host permission, can read it.
 export interface FetchAudioRequest {
   type: 'fetch-audio';
   url: string;
   bulk?: boolean;
+  // The whole track (up to MAX_WHOLE_AUDIO_BYTES) instead of just its start.
+  whole?: boolean;
+  // Lets a CancelAudioRequest with the same ID stop the download.
+  requestId?: string;
+}
+
+// Stops a fetch-audio download that is no longer wanted, e.g. the whole
+// track for a waveform after skipping to the next track.
+export interface CancelAudioRequest {
+  type: 'cancel-audio';
+  requestId: string;
 }
 
 // Reads one page of the logged-in fan's order history (the list on
@@ -87,6 +98,7 @@ export type BcpRequest =
   | FetchRequest
   | OrderHistoryPageRequest
   | FetchAudioRequest
+  | CancelAudioRequest
   | CartAddRequest
   | CartRemoveRequest
   | WishlistRemoveRequest
@@ -109,7 +121,8 @@ export interface IncognitoAccessResponse {
 }
 
 export interface FetchAudioResponse {
-  // The audio file's first bytes, base64 encoded (messages carry JSON).
+  // The audio file's bytes (its first ones, unless the whole track was asked
+  // for), base64 encoded (messages carry JSON).
   audioBase64?: string;
   error?: string;
   // The bcbits.com permission hasn't been granted (or was taken away).
@@ -130,11 +143,12 @@ export type BcpResponse = FetchResponse | OrderHistoryPageResponse | FetchAudioR
 // response type inferred from the request they send.
 export function sendBcpMessage(msg: FetchRequest): Promise<FetchResponse>;
 export function sendBcpMessage(msg: FetchAudioRequest): Promise<FetchAudioResponse>;
+export function sendBcpMessage(msg: CancelAudioRequest): Promise<void>;
 export function sendBcpMessage(
   msg: CartAddRequest | CartRemoveRequest | WishlistRemoveRequest | OpenIncognitoCheckoutRequest
 ): Promise<CartMutationResponse>;
 export function sendBcpMessage(msg: OrderHistoryPageRequest): Promise<OrderHistoryPageResponse>;
 export function sendBcpMessage(msg: IncognitoAccessRequest): Promise<IncognitoAccessResponse>;
-export function sendBcpMessage(msg: BcpRequest): Promise<BcpResponse> {
+export function sendBcpMessage(msg: BcpRequest): Promise<BcpResponse | void> {
   return chrome.runtime.sendMessage(msg);
 }

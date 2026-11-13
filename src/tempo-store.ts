@@ -18,8 +18,13 @@ export interface StoredTempo {
 // page that didn't say) falls back to its page and title, since tracks without
 // their own page all share the release's.
 export function trackTempoKey(track: Pick<PlaylistTrack, 'trackId' | 'pageUrl' | 'trackTitle'>): string {
-  if (track.trackId != null) return `${TEMPO_KEY_PREFIX}id${track.trackId}`;
-  return `${TEMPO_KEY_PREFIX}${normalizeUrl(track.pageUrl)}|${track.trackTitle}`;
+  return `${TEMPO_KEY_PREFIX}${trackStorageId(track)}`;
+}
+
+// Identifies a track in storage keys that hold something per track.
+export function trackStorageId(track: Pick<PlaylistTrack, 'trackId' | 'pageUrl' | 'trackTitle'>): string {
+  if (track.trackId != null) return `id${track.trackId}`;
+  return `${normalizeUrl(track.pageUrl)}|${track.trackTitle}`;
 }
 
 export function isStoredTempo(value: unknown): value is StoredTempo {

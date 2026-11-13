@@ -374,6 +374,56 @@ input[type=range].bcp-seek {
   background: linear-gradient(to right, #aaa var(--bcp-fill, 0%), #e6e6e6 var(--bcp-fill, 0%));
 }
 
+/* The seek bar, or the waveform drawn in its place, with a spinner beside the
+   seek bar while the waveform loads. */
+.bcp-seek-row {
+  grid-column: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  height: 100%;
+}
+
+.bcp-seek-row > input[type=range].bcp-seek {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.bcp-seek-row > [hidden] {
+  display: none !important;
+}
+
+.bcp-waveform-loading {
+  flex-shrink: 0;
+  font-size: 11px;
+}
+
+/* A taller row for the waveform, while it is on, so the bar keeps its height
+   between loading (seek bar) and loaded (waveform). */
+.bcp-progress.bcp-waveform-on {
+  grid-template-rows: 17px 26px;
+  row-gap: 3px;
+}
+
+.bcp-waveform {
+  --bcp-waveform-played: #1da0c3;
+  --bcp-waveform-hover: #8fd0e1;
+  --bcp-waveform-future: #c4c4c4;
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+  outline: none;
+}
+
+.bcp-waveform:focus-visible {
+  outline: 1px dotted #1da0c3;
+  outline-offset: 2px;
+}
+
 input[type=range].bcp-seek::-webkit-slider-thumb {
   width: 5px;
   height: 12px;
@@ -1151,6 +1201,11 @@ a.itemName.bcp-playing {
 
 #bcp-wrapper.bcp-dark input[type=range].bcp-seek {
   background: linear-gradient(to right, #999 var(--bcp-fill, 0%), #3a3a3a var(--bcp-fill, 0%));
+}
+
+#bcp-wrapper.bcp-dark .bcp-waveform {
+  --bcp-waveform-hover: #2f6e80;
+  --bcp-waveform-future: #4a4a4a;
 }
 
 #bcp-wrapper.bcp-dark input[type=range].bcp-seek::-webkit-slider-thumb {

@@ -7,30 +7,38 @@ import type {
   OrderHistoryPageResponse,
   WishlistRemoveRequest,
 } from './messages';
-import { AUDIO_HOST_PERMISSION, MAX_AUDIO_BYTES, bytesToBase64, isStreamUrl, readCapped } from './audio-fetch';
+import { AUDIO_HOST_PERMISSION, MAX_AUDIO_BYTES, MAX_WHOLE_AUDIO_BYTES, bytesToBase64, isStreamUrl, readCapped } from './audio-fetch';
 import { createLimiter, dedupeInFlight, type Priority } from './inflight';
 import { pruneTrackCache } from './cache';
 import { isCartAddRejected } from './bandcamp';
-import { loadSettings, saveSetting } from './settings';
+import { AUDIO_FEATURES, loadSettings, saveSetting } from './settings';
 
 chrome.runtime.onStartup.addListener(() => { void pruneTrackCache(); });
 chrome.runtime.onInstalled.addListener(() => { void pruneTrackCache(); });
 
-// The stream permission is what turns tempo analysis on and off, and this is
-// the one place that saves the setting when it changes: Firefox closes the
-// popup while it asks, before the popup could save it, and the permission can
-// also be taken away in the browser's extension settings. Writing only when
-// the value differs keeps it from overwriting a toggle the popup just saved.
+// The popup saves an audio feature's setting before asking for the stream
+// permission (Firefox closes the popup while it asks), and the popup and the
+// content script both check the permission is really there. The background
+// turns the features off when the permission is taken away, e.g. in the
+// browser's extension settings, and turns tempo analysis on (as it did before
+// there was a waveform) when the permission is granted there with no audio
+// feature on. Writing only when the value differs keeps it from overwriting a
+// toggle the popup just saved.
 const grantsAudio = (permissions: chrome.permissions.Permissions) =>
   !!permissions.origins?.includes(AUDIO_HOST_PERMISSION);
-async function setTempoAnalysis(enabled: boolean): Promise<void> {
-  if ((await loadSettings()).tempoAnalysis !== enabled) await saveSetting('tempoAnalysis', enabled);
-}
 chrome.permissions.onAdded.addListener((permissions) => {
-  if (grantsAudio(permissions)) void setTempoAnalysis(true);
+  if (!grantsAudio(permissions)) return;
+  void (async () => {
+    const settings = await loadSettings();
+    if (!AUDIO_FEATURES.some((feature) => settings[feature])) await saveSetting('tempoAnalysis', true);
+  })();
 });
 chrome.permissions.onRemoved.addListener((permissions) => {
-  if (grantsAudio(permissions)) void setTempoAnalysis(false);
+  if (!grantsAudio(permissions)) return;
+  void (async () => {
+    const settings = await loadSettings();
+    for (const feature of AUDIO_FEATURES) if (settings[feature]) await saveSetting(feature, false);
+  })();
 });
 
 // Returns the https origin for a Bandcamp URL, or null if the URL isn't a valid
@@ -84,17 +92,25 @@ function fetchBandcampHtml(url: string, priority: Priority): Promise<FetchRespon
 // detection from crowding out the stream that is playing.
 const limitAudioFetches = createLimiter(2);
 
-async function fetchAudio(url: string): Promise<FetchAudioResponse> {
+// A whole track is ten times the start tempo analysis reads, so it gets longer.
+const WHOLE_AUDIO_TIMEOUT_MS = 180_000;
+
+// Downloads that a cancel-audio message can stop, by request ID.
+const cancellableAudioFetches = new Map<string, AbortController>();
+
+async function fetchAudio(url: string, whole: boolean, controller: AbortController): Promise<FetchAudioResponse> {
+  if (controller.signal.aborted) return { error: 'Cancelled' };
   const allowed = await chrome.permissions.contains({ origins: [AUDIO_HOST_PERMISSION] }).catch(() => false);
-  if (!allowed) return { noPermission: true, error: 'Tempo analysis is not allowed to read Bandcamp streams' };
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(new Error('Audio took over 60 s to download')), BODY_TIMEOUT_MS);
+  if (!allowed) return { noPermission: true, error: 'Not allowed to read Bandcamp streams' };
+  const maxBytes = whole ? MAX_WHOLE_AUDIO_BYTES : MAX_AUDIO_BYTES;
+  const timeout = whole ? WHOLE_AUDIO_TIMEOUT_MS : BODY_TIMEOUT_MS;
+  const timer = setTimeout(() => controller.abort(new Error(`Audio took over ${timeout / 1000} s to download`)), timeout);
   try {
     // The server may ignore the range and send the whole file; readCapped then
     // stops the download once it has enough.
-    const res = await fetch(url, { headers: { Range: `bytes=0-${MAX_AUDIO_BYTES - 1}` }, signal: controller.signal });
+    const res = await fetch(url, { headers: { Range: `bytes=0-${maxBytes - 1}` }, signal: controller.signal });
     if (!res.ok) return { error: `HTTP ${res.status}` };
-    return { audioBase64: bytesToBase64(await readCapped(res, MAX_AUDIO_BYTES)) };
+    return { audioBase64: bytesToBase64(await readCapped(res, maxBytes)) };
   } catch (err) {
     return { error: String(err) };
   } finally {
@@ -120,8 +136,19 @@ chrome.runtime.onMessage.addListener((message: BcpRequest, sender, sendResponse)
       sendResponse({ error: 'Refused: not a Bandcamp stream URL' });
       return false;
     }
-    limitAudioFetches(message.bulk ? 'bulk' : 'interactive', () => fetchAudio(message.url)).then(sendResponse);
+    // Made up front, so a download cancelled while it waits for a slot never starts.
+    const controller = new AbortController();
+    const { requestId } = message;
+    if (requestId) cancellableAudioFetches.set(requestId, controller);
+    limitAudioFetches(message.bulk ? 'bulk' : 'interactive', () => fetchAudio(message.url, !!message.whole, controller))
+      .then(sendResponse)
+      .finally(() => { if (requestId) cancellableAudioFetches.delete(requestId); });
     return true;
+  }
+
+  if (message.type === 'cancel-audio') {
+    cancellableAudioFetches.get(message.requestId)?.abort(new Error('Cancelled'));
+    return false;
   }
 
   if (message.type === 'cart-remove') {

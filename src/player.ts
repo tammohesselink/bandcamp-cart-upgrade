@@ -5,6 +5,8 @@ import { normalizeUrl } from './url';
 import { isStreamFresh } from './cache';
 import { log } from './log';
 import type { TempoAnalyzer, TrackTempo } from './tempo-analyzer';
+import type { WaveformLoader } from './waveform-loader';
+import { waveformBars } from './waveform';
 import {
   LOW_CONFIDENCE,
   addTap,
@@ -77,6 +79,19 @@ export class Player {
   private prevBtn!: HTMLButtonElement;
   private nextBtn!: HTMLButtonElement;
   private seekBar!: HTMLInputElement;
+  private progressEl!: HTMLElement;
+  // Drawn in place of the seek bar while "Show a waveform" is on and the
+  // track's waveform has loaded. Null hides it.
+  private waveformLoader: WaveformLoader | null = null;
+  private waveformCanvas!: HTMLCanvasElement;
+  private waveformLoadingEl!: HTMLElement;
+  // Where the waveform shows the track to be: how far it has played, or where
+  // it is being dragged to. From 0 to 1.
+  private waveformProgress = 0;
+  // Where the pointer is over the waveform, from 0 to 1, or null.
+  private waveformHover: number | null = null;
+  private waveformRenderScheduled = false;
+  private cachedWaveformColors: { playedColor: string; hoverColor: string; futureColor: string } | null = null;
   private currentTimeEl!: HTMLElement;
   private totalTimeEl!: HTMLElement;
   private tempoSlider!: HTMLInputElement;
@@ -257,6 +272,8 @@ export class Player {
 
   setDarkMode(enabled: boolean) {
     this.wrapper.classList.toggle('bcp-dark', enabled);
+    this.cachedWaveformColors = null;
+    if (this.waveformCanvas && !this.waveformCanvas.hidden) this.drawWaveform();
     for (const toast of document.querySelectorAll('.bcp-toast')) toast.classList.toggle('bcp-dark', enabled);
   }
 
@@ -282,6 +299,21 @@ export class Player {
     analyzer.onChange(() => this.scheduleTempoRender());
     for (const state of this.playlists.values()) void analyzer.load(state.tracks);
     this.syncTempoVisibility();
+  }
+
+  // Draws a waveform of the track in place of the seek bar while the loader
+  // is enabled, loading it once the track plays.
+  setWaveformLoader(loader: WaveformLoader) {
+    this.waveformLoader = loader;
+    loader.onChange(() => this.scheduleWaveformRender());
+    // Turned on while a track plays: load it now rather than at the next track.
+    loader.onChange(() => {
+      const track = this.currentTrack();
+      if (track && loader.isEnabled && !this.audio.paused) loader.request(track);
+    });
+    const track = this.currentTrack();
+    if (track) void loader.loadStored(track);
+    this.renderWaveform();
   }
 
   setPlaylist(id: PlaylistId, label: string, tracks: PlaylistTrack[]) {
@@ -738,16 +770,23 @@ export class Player {
     this.seekBar.min = '0';
     this.seekBar.max = '100';
     this.setSeekPercent(0);
-    this.seekBar.addEventListener('mousedown', () => (this.seeking = true));
-    this.seekBar.addEventListener('input', () => updateRangeFill(this.seekBar));
-    this.seekBar.addEventListener('mouseup', () => {
-      this.seeking = false;
-      const fraction = parseFloat(this.seekBar.value) / 100;
-      this.audio.currentTime = fraction * this.audio.duration;
-      if (this.activeId === 'currentpage') {
-        this.onSeek?.(fraction);
-      }
+    this.seekBar.addEventListener('mousedown', () => {
+      this.seeking = true;
+      // Listened for on the whole window, so letting go off the bar still seeks.
+      window.addEventListener('mouseup', () => {
+        if (!this.seeking) return;
+        this.seeking = false;
+        this.commitSeek(parseFloat(this.seekBar.value) / 100);
+      }, { once: true });
     });
+    this.seekBar.addEventListener('input', () => updateRangeFill(this.seekBar));
+
+    this.waveformCanvas = this.buildWaveformCanvas();
+    this.waveformLoadingEl = el('span', 'bcp-spinner bcp-waveform-loading');
+    this.waveformLoadingEl.hidden = true;
+    setTooltip(this.waveformLoadingEl, 'Loading the waveform');
+    const seekRow = el('div', 'bcp-seek-row');
+    seekRow.append(this.seekBar, this.waveformCanvas, this.waveformLoadingEl);
 
     this.prevBtn = btn('', 'bcp-btn bcp-nav-btn');
     this.prevBtn.setAttribute('aria-label', 'Previous');
@@ -763,7 +802,8 @@ export class Player {
     transport.append(this.prevBtn, this.playPauseBtn, this.nextBtn);
 
     const progress = el('div', 'bcp-progress');
-    progress.append(trackRow, this.seekBar);
+    progress.append(trackRow, seekRow);
+    this.progressEl = progress;
 
     const center = el('div', 'bcp-center');
     center.append(transport, progress);
@@ -957,6 +997,8 @@ export class Player {
     if (this.tempoPanelVisible) this.tempoAnalyzer?.analyse(track);
     this.applyKeepBpm();
     this.renderTempo();
+    void this.waveformLoader?.loadStored(track);
+    this.renderWaveform();
 
     if (!silent && this.activeId === 'currentpage') {
       this.onCurrentPageTrackChange?.(track.pageUrl);
@@ -1221,6 +1263,8 @@ export class Player {
 
     on('loadedmetadata', () => {
       this.totalTimeEl.textContent = fmtTime(this.audio.duration);
+      // The waveform spreads over the track's real length once it is known.
+      this.renderWaveform();
     });
 
     on('ended', () => {
@@ -1232,6 +1276,7 @@ export class Player {
       // Detected once it plays rather than when cued, so opening a page
       // downloads nothing extra.
       if (this.sourceTrack) this.tempoAnalyzer?.analyse(this.sourceTrack);
+      if (this.sourceTrack) this.waveformLoader?.request(this.sourceTrack);
       void this.preloadUpcoming();
     });
 
@@ -1911,6 +1956,185 @@ export class Player {
   private setSeekPercent(percent: number) {
     this.seekBar.value = String(percent);
     updateRangeFill(this.seekBar);
+    if (!this.seeking && this.waveformCanvas) {
+      this.waveformProgress = Math.max(0, Math.min(1, percent / 100));
+      if (!this.waveformCanvas.hidden) this.drawWaveform();
+    }
+  }
+
+  // Moves playback to `fraction` of the track, from the seek bar or waveform.
+  private commitSeek(fraction: number) {
+    // Nothing is loaded to seek in (e.g. a cued track waiting for a fresh
+    // link), so the bar goes back to where playback is.
+    if (!isFinite(this.audio.duration)) {
+      this.syncSeekToAudio();
+      return;
+    }
+    this.audio.currentTime = fraction * this.audio.duration;
+    this.setSeekPercent(fraction * 100);
+    if (this.activeId === 'currentpage') {
+      this.onSeek?.(fraction);
+    }
+  }
+
+  // Shows where playback is, e.g. after a drag that didn't end in a seek.
+  private syncSeekToAudio() {
+    const duration = this.audio.duration;
+    const fraction = isFinite(duration) && duration > 0 ? this.audio.currentTime / duration : 0;
+    this.currentTimeEl.textContent = fmtTime(this.audio.currentTime || 0);
+    this.setSeekPercent(fraction * 100);
+  }
+
+  // --- Waveform ---------------------------------------------------------------
+
+  private buildWaveformCanvas(): HTMLCanvasElement {
+    const canvas = document.createElement('canvas');
+    canvas.className = 'bcp-waveform';
+    canvas.hidden = true;
+    canvas.tabIndex = 0;
+    canvas.setAttribute('role', 'slider');
+    canvas.setAttribute('aria-label', 'Seek');
+    canvas.setAttribute('aria-valuemin', '0');
+    canvas.setAttribute('aria-valuemax', '100');
+
+    const fractionAt = (event: PointerEvent) => {
+      const rect = canvas.getBoundingClientRect();
+      return rect.width > 0 ? Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)) : 0;
+    };
+    // Dragging shows where the track will be, and seeks once let go.
+    canvas.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      canvas.focus();
+      canvas.setPointerCapture(event.pointerId);
+      this.seeking = true;
+      this.previewWaveformSeek(fractionAt(event));
+    });
+    canvas.addEventListener('pointermove', (event) => {
+      this.waveformHover = fractionAt(event);
+      if (this.seeking && canvas.hasPointerCapture(event.pointerId)) this.previewWaveformSeek(fractionAt(event));
+      else this.drawWaveform();
+    });
+    canvas.addEventListener('pointerup', (event) => {
+      if (!this.seeking || !canvas.hasPointerCapture(event.pointerId)) return;
+      canvas.releasePointerCapture(event.pointerId);
+      this.seeking = false;
+      this.commitSeek(fractionAt(event));
+    });
+    // A drag that ends any other way (cancelled, or the waveform hidden for
+    // the next track mid-drag) seeks nowhere, and must not leave the bar
+    // waiting for a release that never comes. After a release this finds
+    // seeking already over.
+    canvas.addEventListener('lostpointercapture', () => {
+      if (!this.seeking) return;
+      this.seeking = false;
+      this.syncSeekToAudio();
+    });
+    canvas.addEventListener('pointerleave', () => {
+      this.waveformHover = null;
+      this.drawWaveform();
+    });
+    canvas.addEventListener('keydown', (event) => {
+      const duration = this.audio.duration;
+      if (!isFinite(duration) || duration <= 0) return;
+      const step = event.key === 'ArrowRight' ? 5 : event.key === 'ArrowLeft' ? -5 : 0;
+      if (step === 0) return;
+      event.preventDefault();
+      this.commitSeek(Math.max(0, Math.min(1, (this.audio.currentTime + step) / duration)));
+    });
+    // Redrawn at the new width when the bar is resized.
+    new ResizeObserver(() => this.drawWaveform()).observe(canvas);
+    return canvas;
+  }
+
+  // Read from the stylesheet once, and again after dark mode changes them,
+  // rather than on every redraw.
+  private waveformColors(): { playedColor: string; hoverColor: string; futureColor: string } {
+    if (!this.cachedWaveformColors) {
+      const style = getComputedStyle(this.waveformCanvas);
+      this.cachedWaveformColors = {
+        playedColor: style.getPropertyValue('--bcp-waveform-played').trim() || '#1da0c3',
+        hoverColor: style.getPropertyValue('--bcp-waveform-hover').trim() || '#8fd0e1',
+        futureColor: style.getPropertyValue('--bcp-waveform-future').trim() || '#c4c4c4',
+      };
+    }
+    return this.cachedWaveformColors;
+  }
+
+  private previewWaveformSeek(fraction: number) {
+    this.waveformProgress = fraction;
+    this.seekBar.value = String(fraction * 100);
+    updateRangeFill(this.seekBar);
+    if (isFinite(this.audio.duration)) this.currentTimeEl.textContent = fmtTime(fraction * this.audio.duration);
+    this.drawWaveform();
+  }
+
+  private scheduleWaveformRender() {
+    if (this.waveformRenderScheduled) return;
+    this.waveformRenderScheduled = true;
+    requestAnimationFrame(() => {
+      this.waveformRenderScheduled = false;
+      this.renderWaveform();
+    });
+  }
+
+  // Shows the waveform once it has loaded, and the seek bar with a loading
+  // spinner until then.
+  private renderWaveform() {
+    if (!this.waveformCanvas) return;
+    const loader = this.waveformLoader;
+    const track = this.currentTrack();
+    const enabled = !!loader?.isEnabled;
+    const state = enabled && track ? loader!.get(track) : null;
+    const ready = state?.status === 'ready';
+    this.progressEl.classList.toggle('bcp-waveform-on', enabled);
+    this.waveformCanvas.hidden = !ready;
+    this.seekBar.hidden = ready;
+    this.waveformLoadingEl.hidden = state?.status !== 'loading';
+    if (ready) this.drawWaveform();
+  }
+
+  private drawWaveform() {
+    const canvas = this.waveformCanvas;
+    if (canvas.hidden) return;
+    const track = this.currentTrack();
+    const waveform = track ? this.waveformLoader?.get(track).waveform : null;
+    if (!waveform) return;
+    const width = canvas.clientWidth;
+    const height = canvas.clientHeight;
+    if (width === 0 || height === 0) return;
+    const ratio = window.devicePixelRatio || 1;
+    const pixelWidth = Math.round(width * ratio);
+    const pixelHeight = Math.round(height * ratio);
+    if (canvas.width !== pixelWidth) canvas.width = pixelWidth;
+    if (canvas.height !== pixelHeight) canvas.height = pixelHeight;
+    const context = canvas.getContext('2d');
+    if (!context) return;
+    context.setTransform(ratio, 0, 0, ratio, 0, 0);
+    context.clearRect(0, 0, width, height);
+
+    const { playedColor, hoverColor, futureColor } = this.waveformColors();
+
+    const duration = isFinite(this.audio.duration) && this.audio.duration > 0 ? this.audio.duration : (track?.durationSec ?? 0);
+    const barWidth = 2;
+    const step = 3;
+    const barCount = Math.floor(width / step);
+    const bars = waveformBars(waveform, duration, barCount);
+    const middle = height / 2;
+    const progressX = this.waveformProgress * width;
+    const hoverX = this.waveformHover === null ? null : this.waveformHover * width;
+    for (let i = 0; i < barCount; i++) {
+      const x = i * step;
+      // At least a sliver, so silence (and audio past a long mix's download) still shows.
+      const barHeight = Math.max(1, bars[i]! * height);
+      const centre = x + barWidth / 2;
+      if (centre <= progressX) context.fillStyle = playedColor;
+      else if (hoverX !== null && centre <= hoverX) context.fillStyle = hoverColor;
+      else context.fillStyle = futureColor;
+      context.fillRect(x, middle - barHeight / 2, barWidth, barHeight);
+    }
+    canvas.setAttribute('aria-valuenow', String(Math.round(this.waveformProgress * 100)));
+    canvas.setAttribute('aria-valuetext', this.currentTimeEl.textContent ?? '');
   }
 
 
