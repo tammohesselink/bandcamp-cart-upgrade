@@ -1571,7 +1571,15 @@ async function main() {
     const teardown = setupNativePlayerSync(player);
     window.addEventListener('pagehide', teardown, { once: true });
     replaceBuyTrackLinks(player, pageTracks);
-  } else if (discoItems.length === 0 && !isFanPage) {
+  }
+  // On a release page Bandcamp's own player takes the space bar, and the sync
+  // above passes it on; anywhere else (a fan's collection, a label page) the
+  // space bar would only scroll, so the bottom player takes it.
+  if (pageTracks.length === 0) {
+    const stopSpacebar = player.enableSpacebarPlayPause();
+    window.addEventListener('pagehide', stopSpacebar, { once: true });
+  }
+  if (pageTracks.length === 0 && discoItems.length === 0 && !isFanPage) {
     player.setPlaylistUnavailable(
       'currentpage',
       'Current page (nothing to play)',
