@@ -4,6 +4,7 @@ import type { PlaylistTrack } from '../src/types';
 import { normalizeUrl } from '../src/url';
 import { makeTrack } from './track-factory';
 import { TempoAnalyzer } from '../src/tempo-analyzer';
+import { WaveformLoader } from '../src/waveform-loader';
 
 const HOUR = 60 * 60 * 1000;
 
@@ -236,6 +237,29 @@ describe('Player preloading upcoming tracks', () => {
       'https://t4.bcbits.com/stream/track-6-old',
     ]);
     expect(preloadedOf(player).get('https://t4.bcbits.com/stream/track-2-new')!.preload).toBe('auto');
+  });
+
+  it('loads the waveforms of the next two tracks with a working link, and stops when the order changes', async () => {
+    const player = new Player([freshTrack(1), freshTrack(2, { unplayable: true, streamUrl: null }), freshTrack(3), freshTrack(4), freshTrack(5)]);
+    const loader = new WaveformLoader({
+      refreshStream: async () => {},
+      fetchAudio: () => new Promise(() => {}),
+      decode: async () => [],
+      read: async () => null,
+      write: () => {},
+    });
+    loader.setEnabled(true);
+    const prefetch = vi.spyOn(loader, 'prefetch');
+    player.setWaveformLoader(loader);
+    player.jumpTo('cart', 0);
+    await settle();
+
+    audioOf(player).dispatchEvent(new Event('playing'));
+    await settle();
+    expect(prefetch.mock.calls.at(-1)![0].map((t) => t.trackTitle)).toEqual(['Track 3', 'Track 4']);
+
+    (player as unknown as { clearPreloaded(): void }).clearPreloaded();
+    expect(prefetch.mock.calls.at(-1)![0]).toEqual([]);
   });
 
   it('plays the next track from its buffered element without refetching its link', async () => {

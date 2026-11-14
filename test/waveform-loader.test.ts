@@ -244,4 +244,76 @@ describe('WaveformLoader', () => {
     expect(loader.get(b).status).toBe('ready');
     expect(fetchAudio).toHaveBeenCalledTimes(2);
   });
+  it('loads one track at a time when a listener asks for the playing track as a load ahead starts', async () => {
+    const pending: AbortSignal[] = [];
+    const fetchAudio = vi.fn((_url: string, signal: AbortSignal) => {
+      pending.push(signal);
+      return new Promise<{ error: string }>(() => {});
+    });
+    const { loader } = setup({ fetchAudio });
+    const [playing, ahead] = [track(1), track(2)];
+    // Like the player: asks for the playing track whenever anything changes.
+    loader.onChange(() => loader.request(playing));
+
+    loader.prefetch([ahead]);
+    await settle();
+
+    expect(fetchAudio.mock.calls.map(([url]) => url)).toEqual([playing.streamUrl]);
+    expect(loader.get(ahead).status).toBe('none');
+    loader.setEnabled(false);
+    expect(pending.every((signal) => signal.aborted)).toBe(true);
+  });
+
+  it('starts the playing track without waiting for a stopped download to answer', async () => {
+    // The background only answers a cancelled bulk download once it gets a slot.
+    const fetchAudio = vi.fn((_url: string, _signal: AbortSignal) => new Promise<{ error: string }>(() => {}));
+    const { loader } = setup({ fetchAudio });
+    const [playing, ahead] = [track(1), track(2)];
+
+    loader.prefetch([ahead]);
+    await settle();
+    loader.request(playing);
+    await settle();
+
+    expect(fetchAudio.mock.calls.map(([url]) => url)).toEqual([ahead.streamUrl, playing.streamUrl]);
+  });
+
+  it('loads ahead again a track whose load ahead was stopped', async () => {
+    const fetchAudio = vi.fn((_url: string, signal: AbortSignal) =>
+      new Promise<{ error: string }>((resolve) => signal.addEventListener('abort', () => setTimeout(() => resolve({ error: 'Cancelled' }), 5))));
+    const { loader } = setup({ fetchAudio });
+    const [a, b] = [track(1), track(2)];
+
+    loader.prefetch([a]);
+    await settle();
+    loader.prefetch([b]);
+    loader.prefetch([a]);
+    await settle();
+
+    // `b` is stopped before its download starts, and `a` loads again though its
+    // stopped download hasn't answered yet.
+    expect(fetchAudio.mock.calls.map(([url]) => url)).toEqual([a.streamUrl, a.streamUrl]);
+    expect(loader.get(a).status).toBe('loading');
+  });
+
+  it('tries a track again when it plays after its load ahead failed', async () => {
+    const fetchAudio = vi.fn(async (_url: string, _signal: AbortSignal, _bulk: boolean) => ({ error: 'HTTP 500' }));
+    const { loader } = setup({ fetchAudio });
+    const t = track(1);
+
+    loader.prefetch([t]);
+    await settle();
+    expect(loader.get(t).status).toBe('error');
+    loader.prefetch([t]);
+    await settle();
+    expect(fetchAudio).toHaveBeenCalledTimes(1);
+
+    loader.request(t);
+    await settle();
+    expect(fetchAudio.mock.calls.map(([, , bulk]) => bulk)).toEqual([true, false]);
+    // Failed while playing: waits before trying again.
+    loader.request(t);
+    await settle();
+    expect(fetchAudio).toHaveBeenCalledTimes(2);
+  });
 });

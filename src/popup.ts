@@ -230,7 +230,7 @@ async function init(): Promise<void> {
     container,
     'showWaveform',
     'Show a waveform instead of the progress bar',
-    'Downloads each track as it plays to draw its waveform; click the waveform to skip through the track. ' +
+    'Downloads each track as it plays, and the next two ahead of time, to draw its waveform; click the waveform to skip through the track. ' +
       'Asks to read Bandcamp’s audio streams (bcbits.com).',
     settings.showWaveform && audioAllowed,
   );

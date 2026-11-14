@@ -1211,12 +1211,14 @@ export class Player {
     }
     // Their BPMs are ready by the time they play, which "Keep BPM" needs.
     for (const track of upcoming) this.tempoAnalyzer?.analyse(track, { bulk: true });
-    // Their waveforms show as soon as they start.
-    this.waveformLoader?.prefetch(upcoming.slice(0, WAVEFORM_PREFETCH_AHEAD));
 
-    const wanted = upcoming
-      .filter((t) => !t.unplayable && t.streamUrl && (!this.onRefreshStream || isStreamFresh(t)))
-      .map((t) => t.streamUrl!);
+    // Only tracks with a working link: one whose refresh just failed is left
+    // alone, like its buffering.
+    const streamable = upcoming.filter((t) => !t.unplayable && t.streamUrl && (!this.onRefreshStream || isStreamFresh(t)));
+    // Their waveforms show as soon as they start.
+    this.waveformLoader?.prefetch(streamable.slice(0, WAVEFORM_PREFETCH_AHEAD));
+
+    const wanted = streamable.map((t) => t.streamUrl!);
     for (const [url, standby] of this.preloaded) {
       if (wanted.includes(url)) continue;
       unloadAudio(standby);
@@ -1233,6 +1235,7 @@ export class Player {
 
   private clearPreloaded() {
     this.preloadRunId++;
+    this.waveformLoader?.prefetch([]);
     for (const standby of this.preloaded.values()) unloadAudio(standby);
     this.preloaded.clear();
   }
