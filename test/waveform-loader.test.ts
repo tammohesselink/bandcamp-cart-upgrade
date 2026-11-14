@@ -48,7 +48,7 @@ describe('WaveformLoader', () => {
     expect(loader.get(t).status).toBe('loading');
     await settle();
 
-    expect(deps.fetchAudio).toHaveBeenCalledWith(t.streamUrl, expect.any(AbortSignal), false);
+    expect(deps.fetchAudio).toHaveBeenCalledWith(t.streamUrl, expect.any(AbortSignal), false, expect.any(String));
     expect(loader.get(t).status).toBe('ready');
     expect(loader.get(t).waveform!.seconds).toBe(2);
     expect(written.has(trackWaveformKey(t))).toBe(true);
@@ -432,10 +432,10 @@ describe('WaveformLoader', () => {
   });
 
   function controlledFetch() {
-    const calls: { url: string; bulk: boolean; signal: AbortSignal; finish: () => void; fail: () => void }[] = [];
-    const fetchAudio = vi.fn((url: string, signal: AbortSignal, bulk: boolean) =>
+    const calls: { url: string; bulk: boolean; signal: AbortSignal; requestId: string; finish: () => void; fail: () => void }[] = [];
+    const fetchAudio = vi.fn((url: string, signal: AbortSignal, bulk: boolean, requestId: string) =>
       new Promise<{ audioBase64?: string; error?: string }>((resolve) => {
-        calls.push({ url, bulk, signal, finish: () => resolve({ audioBase64: bytesToBase64(new Uint8Array([1])) }), fail: () => resolve({ error: 'HTTP 500' }) });
+        calls.push({ url, bulk, signal, requestId, finish: () => resolve({ audioBase64: bytesToBase64(new Uint8Array([1])) }), fail: () => resolve({ error: 'HTTP 500' }) });
         signal.addEventListener('abort', () => resolve({ error: 'Cancelled' }));
       })
     );
@@ -475,7 +475,7 @@ describe('WaveformLoader', () => {
     await settle();
     expect(calls[0]!.bulk).toBe(true);
     loader.setPlaying(b);
-    expect(deps.promoteAudio).toHaveBeenCalledWith(calls[0]!.signal);
+    expect(deps.promoteAudio).toHaveBeenCalledWith(calls[0]!.requestId);
     expect(calls[0]!.signal.aborted).toBe(false);
     loader.setPlaying(b);
     expect(deps.promoteAudio).toHaveBeenCalledTimes(1);
@@ -536,6 +536,60 @@ describe('WaveformLoader', () => {
     loader.setPlaying(a);
     await settle();
     expect(deps.fetchAudio).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the waveform of a decode that finishes after timing out, without decoding it again meanwhile', async () => {
+    vi.useFakeTimers();
+    try {
+      let finishLate!: () => void;
+      const decode = vi.fn()
+        .mockReturnValueOnce(new Promise<Float32Array[]>((resolve) => { finishLate = () => resolve([new Float32Array(8000).fill(0.5)]); }))
+        .mockResolvedValue([new Float32Array(8000).fill(0.5)]);
+      const { loader, written } = setup({ decode });
+      const a = track(1);
+
+      loader.setPlaying(a);
+      await vi.advanceTimersByTimeAsync(WAVEFORM_DECODE_TIMEOUT_MS);
+      expect(loader.get(a).status).toBe('error');
+      // Its wait is over, but the first decode still runs.
+      await vi.advanceTimersByTimeAsync(WAVEFORM_RETRY_AFTER_MS);
+      loader.setPlaying(a);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(decode).toHaveBeenCalledTimes(1);
+
+      finishLate();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(loader.get(a).status).toBe('ready');
+      expect(written.has(trackWaveformKey(a))).toBe(true);
+      expect(decode).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('shows no spinner for the playing track while paused', async () => {
+    const { decode, finish } = controlledDecode();
+    const { loader } = setup({ decode });
+    const [b, c] = [track(2), track(3)];
+
+    loader.prefetch([b]);
+    await settle();
+    loader.setPlaying(c);
+    expect(loader.get(c).status).toBe('loading');
+    loader.pause();
+    expect(loader.get(c).status).toBe('none');
+    finish(0);
+    await settle();
+    expect(loader.get(c).status).toBe('none');
+    loader.setPlaying(c);
+    expect(loader.get(c).status).toBe('loading');
+
+    const off = setup().loader;
+    off.setEnabled(false);
+    off.setPlaying(c);
+    off.pause();
+    off.setEnabled(true);
+    expect(off.get(c).status).toBe('none');
   });
 
   it('is safe with a listener that says which track plays on every change', async () => {

@@ -307,6 +307,9 @@ describe('Player preloading upcoming tracks', () => {
     pause.mockClear();
     audioOf(player).dispatchEvent(new Event('pause'));
     expect(pause).toHaveBeenCalledTimes(1);
+    // Pausing while a link refreshes stops playback without a 'pause' event.
+    player.pause();
+    expect(pause).toHaveBeenCalledTimes(2);
   });
 
   it('plays the next track from its buffered element without refetching its link', async () => {

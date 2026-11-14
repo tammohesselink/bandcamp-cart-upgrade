@@ -1163,6 +1163,8 @@ export class Player {
 
   private reflectPlaybackState(playing: boolean) {
     this.setPlayButton(playing ? 'pause' : 'play');
+    // Every way playback stops ends up here, not all of them in a 'pause' event.
+    if (!playing) this.waveformLoader?.pause();
     if ('mediaSession' in navigator) {
       navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
     }
@@ -1257,7 +1259,6 @@ export class Player {
 
     on('pause', () => {
       this.reflectPlaybackState(false);
-      this.waveformLoader?.pause();
     });
 
     on('timeupdate', () => {
