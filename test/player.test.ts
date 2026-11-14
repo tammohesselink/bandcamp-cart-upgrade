@@ -262,6 +262,32 @@ describe('Player preloading upcoming tracks', () => {
     expect(prefetch.mock.calls.at(-1)![0]).toEqual([]);
   });
 
+  it('loads the playing track\'s waveform and the ones ahead when "Show a waveform" is turned on while a track plays', async () => {
+    const player = new Player([freshTrack(1), freshTrack(2), freshTrack(3), freshTrack(4)]);
+    const fetchAudio = vi.fn(async (_url: string, _signal: AbortSignal, _bulk: boolean) => ({ error: 'HTTP 500' }));
+    const loader = new WaveformLoader({
+      refreshStream: async () => {},
+      fetchAudio,
+      decode: async () => [],
+      read: async () => null,
+      write: () => {},
+    });
+    player.setWaveformLoader(loader);
+    player.jumpTo('cart', 0);
+    await settle();
+    audioOf(player).dispatchEvent(new Event('playing'));
+    await settle();
+    expect(fetchAudio).not.toHaveBeenCalled();
+
+    loader.setEnabled(true);
+    await settle();
+    expect(fetchAudio.mock.calls.map(([url, , bulk]) => [url, bulk])).toEqual([
+      ['https://t4.bcbits.com/stream/track-1-old', false],
+      ['https://t4.bcbits.com/stream/track-2-old', true],
+      ['https://t4.bcbits.com/stream/track-3-old', true],
+    ]);
+  });
+
   it('plays the next track from its buffered element without refetching its link', async () => {
     const player = new Player([freshTrack(1), expiredTrack(2)]);
     const refresh = refreshWith(player);

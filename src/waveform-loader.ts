@@ -48,9 +48,13 @@ export interface WaveformLoaderDeps {
   write: (key: string, waveform: Waveform) => void;
 }
 
-// A track whose audio couldn't be downloaded is tried again when it next plays
-// after this long.
+// A track whose audio couldn't be downloaded is tried again after this long.
 export const WAVEFORM_RETRY_AFTER_MS = 60 * 1000;
+
+// A decode that hasn't finished by then counts as failed, so a decode that
+// never settles can't hold up every later load. The decode itself can't be
+// stopped, so this is long enough that only a stuck one reaches it.
+export const WAVEFORM_DECODE_TIMEOUT_MS = 5 * 60 * 1000;
 
 class Superseded extends Error {}
 
@@ -60,25 +64,43 @@ class Superseded extends Error {}
 function untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const onAbort = () => reject(new Superseded());
+    // Handled even when already stopped, so a later failure isn't unhandled.
+    promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
     if (signal.aborted) return onAbort();
     signal.addEventListener('abort', onAbort, { once: true });
-    promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
   });
 }
 
-interface WaveformJob {
+function withTimeout<T>(promise: Promise<T>, milliseconds: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error('Timed out')), milliseconds);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+interface RunningLoad {
   track: PlaylistTrack;
   key: string;
-  // Loaded ahead for an upcoming track rather than for the one playing.
+  // Loaded ahead for an upcoming track rather than for the one playing. Read
+  // when each step starts, so the steps after its track starts playing aren't
+  // bulk.
   prefetch: boolean;
+  controller: AbortController;
+  // Decoding a whole track takes a lot of memory and can't be stopped, so a
+  // decoding load is never stopped: it finishes and its waveform is kept.
+  decoding: boolean;
 }
 
 // Gets the waveform of the track that is playing: from storage when it was
-// drawn before, otherwise by downloading and decoding the track. Only one
-// track loads at a time: asking for another stops the download of the one
-// before, so skipping through a playlist doesn't download every track. Once
-// the playing track's waveform is in, the waveforms of the next few tracks
-// load one by one (see prefetch), so they show as soon as those tracks start.
+// drawn before, otherwise by downloading and decoding the track. Once that is
+// in, the waveforms of the next few tracks load (see prefetch), so they show
+// as soon as those tracks start.
+//
+// The player says which track plays (setPlaying) and which come next
+// (prefetch); schedule() works out what to load from that. Only one track
+// loads at a time, and a download nobody wants any more stops, so skipping
+// through a playlist doesn't download every track.
 export class WaveformLoader {
   private waveforms = new Map<string, Waveform>();
   private status = new Map<string, WaveformStatus>();
@@ -86,12 +108,9 @@ export class WaveformLoader {
   // Tracks whose last failure was while loading ahead. Playing one tries it
   // again straight away, as a download the user is waiting on.
   private failedAhead = new Set<string>();
-  // The playing track, which loads before any upcoming one.
-  private waiting: WaveformJob | null = null;
-  // Upcoming tracks, loaded in order once nothing else is.
-  private prefetchQueue: WaveformJob[] = [];
-  // The load that is running, which a newer request stops.
-  private running: { job: WaveformJob; controller: AbortController } | null = null;
+  private playing: PlaylistTrack | null = null;
+  private upcoming: PlaylistTrack[] = [];
+  private running: RunningLoad | null = null;
   private listeners = new Set<() => void>();
   private enabled = false;
 
@@ -103,16 +122,14 @@ export class WaveformLoader {
     return this.enabled;
   }
 
+  // Turned on while a track plays, its waveform and the next ones load now
+  // rather than at the next track.
   setEnabled(enabled: boolean): void {
     if (this.enabled === enabled) return;
     this.enabled = enabled;
-    if (!enabled) {
-      this.waiting = null;
-      this.prefetchQueue = [];
-      this.stopRunning();
-    }
-    // Statuses left by a run that was turned off, or a refused permission.
-    for (const [key, status] of this.status) if (status === 'loading' || status === 'unavailable') this.status.delete(key);
+    // Retry what a refused permission made unavailable.
+    for (const [key, status] of this.status) if (status === 'unavailable') this.status.delete(key);
+    this.schedule();
     this.notify();
   }
 
@@ -141,84 +158,110 @@ export class WaveformLoader {
     this.notify();
   }
 
-  // Whether the track's waveform still needs loading: it isn't known, on its
-  // way, impossible to get, or failed a moment ago. A failure while loading
-  // ahead doesn't hold back the playing track.
-  private needsLoad(track: PlaylistTrack, key: string, prefetch: boolean): boolean {
+  // The track that started playing, called each time it does. Its waveform
+  // loads before any upcoming one, and a failed one is tried again once its
+  // wait is over. Another track playing empties the tracks to load ahead
+  // until the player sends the ones that follow it.
+  setPlaying(track: PlaylistTrack): void {
+    if (!this.playing || trackWaveformKey(this.playing) !== trackWaveformKey(track)) this.upcoming = [];
+    this.playing = track;
+    this.schedule();
+  }
+
+  // The tracks that play next, in order, to load after the playing track.
+  // Replaces the tracks sent before; the download of one no longer among
+  // them stops.
+  prefetch(tracks: PlaylistTrack[]): void {
+    this.upcoming = tracks;
+    this.schedule();
+  }
+
+  // Whether the track's waveform still needs loading: it isn't known,
+  // impossible to get, or failed a moment ago. A failure while loading ahead
+  // doesn't hold back the playing track.
+  private needsLoad(track: PlaylistTrack, prefetch: boolean): boolean {
+    const key = trackWaveformKey(track);
     if (track.unplayable || this.waveforms.has(key)) return false;
     const status = this.status.get(key);
-    if (status === 'loading' || status === 'unavailable') return false;
+    if (status === 'unavailable') return false;
     if (status !== 'error') return true;
     if (!prefetch && this.failedAhead.has(key)) return true;
     return Date.now() >= (this.retryAt.get(key) ?? 0);
   }
 
-  // Gets the playing track's waveform unless it is already known or on its way.
-  request(track: PlaylistTrack): void {
-    if (!this.enabled) return;
-    const key = trackWaveformKey(track);
-    // Already loading ahead: it's the playing track's load now, which a later
-    // prefetch doesn't stop.
-    if (this.running?.job.key === key) this.running.job.prefetch = false;
-    if (!this.needsLoad(track, key, false)) return;
-    // The track asked for before isn't wanted any more, and neither is an
-    // upcoming track's load: the playing track goes first.
-    if (this.waiting && this.waiting.key !== key) this.status.delete(this.waiting.key);
-    if (this.running && this.running.job.key !== key) this.stopRunning();
-    this.prefetchQueue = this.prefetchQueue.filter((job) => job.key !== key);
-    this.waiting = { track, key, prefetch: false };
-    this.status.set(key, 'loading');
-    this.notify();
-    this.startNext();
+  // What to load, in order: the playing track, then the upcoming ones.
+  private wanted(): { track: PlaylistTrack; prefetch: boolean }[] {
+    if (!this.enabled) return [];
+    const wanted: { track: PlaylistTrack; prefetch: boolean }[] = [];
+    const keys = new Set<string>();
+    const add = (track: PlaylistTrack, prefetch: boolean) => {
+      const key = trackWaveformKey(track);
+      if (keys.has(key) || !this.needsLoad(track, prefetch)) return;
+      keys.add(key);
+      wanted.push({ track, prefetch });
+    };
+    if (this.playing) add(this.playing, false);
+    for (const track of this.upcoming) add(track, true);
+    return wanted;
   }
 
-  // Loads the waveforms of the tracks that play next, in order, after the
-  // playing track's. Replaces the tracks asked for before, and stops the load
-  // of one that is no longer among them.
-  prefetch(tracks: PlaylistTrack[]): void {
-    if (!this.enabled) return;
-    const keys = tracks.map((track) => trackWaveformKey(track));
-    if (this.running?.job.prefetch && !keys.includes(this.running.job.key)) this.stopRunning();
-    this.prefetchQueue = [];
-    tracks.forEach((track, i) => {
-      const key = keys[i]!;
-      if (this.prefetchQueue.some((job) => job.key === key)) return;
-      if (this.needsLoad(track, key, true)) this.prefetchQueue.push({ track, key, prefetch: true });
-    });
-    this.startNext();
-  }
-
-  // Stops the running load. Its status goes at once rather than when the run
-  // notices, so the track can be asked for again straight away.
-  private stopRunning(): void {
-    if (!this.running) return;
-    const { job, controller } = this.running;
-    controller.abort();
-    if (this.waiting?.key !== job.key) this.status.delete(job.key);
-  }
-
-  private startNext(): void {
-    if (this.running && !this.running.controller.signal.aborted) return;
-    const job = this.waiting ?? this.prefetchQueue.shift();
-    if (!job) return;
-    if (job === this.waiting) this.waiting = null;
-    const controller = new AbortController();
-    // Set before notifying, so a listener asking for a track sees this load.
-    const running = { job, controller };
-    this.running = running;
-    if (job.prefetch) {
-      this.status.set(job.key, 'loading');
-      this.notify();
+  // Brings what is loading in line with what is wanted: stops a download
+  // that isn't wanted first any more, and starts the first wanted load once
+  // nothing is running. Notifies only when that changed something, so a
+  // listener may call setPlaying or prefetch.
+  private schedule(): void {
+    let changed = false;
+    const wanted = this.wanted();
+    const first = wanted[0];
+    const firstKey = first && trackWaveformKey(first.track);
+    const playingKey = this.playing && trackWaveformKey(this.playing);
+    const running = this.running;
+    if (running) {
+      if (running.key === playingKey) running.prefetch = false;
+      if (!running.decoding && running.key !== firstKey) {
+        running.controller.abort();
+        this.running = null;
+        changed = true;
+      }
     }
-    void this.run(job, controller.signal).finally(() => {
-      if (this.running !== running) return;
+    // Only what is running, and the playing track waiting for its turn (which
+    // shows its spinner meanwhile), is loading.
+    const waitingKey = first && !first.prefetch ? firstKey : undefined;
+    if (waitingKey && this.status.get(waitingKey) !== 'loading') {
+      this.status.set(waitingKey, 'loading');
+      changed = true;
+    }
+    for (const [key, status] of this.status) {
+      if (status === 'loading' && key !== waitingKey && key !== this.running?.key) {
+        this.status.delete(key);
+        changed = true;
+      }
+    }
+    if (this.running || !first) {
+      if (changed) this.notify();
+      return;
+    }
+    const load: RunningLoad = {
+      track: first.track,
+      key: trackWaveformKey(first.track),
+      prefetch: first.prefetch,
+      controller: new AbortController(),
+      decoding: false,
+    };
+    this.running = load;
+    this.status.set(load.key, 'loading');
+    void this.run(load).finally(() => {
+      if (this.running !== load) return;
       this.running = null;
-      this.startNext();
+      this.schedule();
+      // What the load ended with.
+      this.notify();
     });
+    this.notify();
   }
 
-  private async run(job: WaveformJob, signal: AbortSignal): Promise<void> {
-    const { track, key } = job;
+  private async run(load: RunningLoad): Promise<void> {
+    const { track, key, controller: { signal } } = load;
     const check = () => {
       if (signal.aborted) throw new Superseded();
     };
@@ -230,23 +273,22 @@ export class WaveformLoader {
         this.status.delete(key);
         return;
       }
-      // Read when each step starts: the job stops being a load-ahead once its
-      // track plays.
-      if (!isStreamFresh(track)) await untilAborted(this.deps.refreshStream(track, job.prefetch), signal);
+      if (!isStreamFresh(track)) await untilAborted(this.deps.refreshStream(track, load.prefetch), signal);
       check();
       if (track.unplayable || !track.streamUrl) {
         this.status.set(key, 'unavailable');
         return;
       }
-      const response = await untilAborted(this.deps.fetchAudio(track.streamUrl, signal, job.prefetch), signal);
+      const response = await untilAborted(this.deps.fetchAudio(track.streamUrl, signal, load.prefetch), signal);
       check();
       if (response.noPermission) {
         this.status.set(key, 'unavailable');
         return;
       }
       if (!response.audioBase64) throw new Error(response.error ?? 'No audio');
-      const channels = await untilAborted(this.deps.decode(base64ToBytes(response.audioBase64)), signal);
-      check();
+      // From here on the load is never stopped (see RunningLoad.decoding).
+      load.decoding = true;
+      const channels = await withTimeout(this.deps.decode(base64ToBytes(response.audioBase64)), WAVEFORM_DECODE_TIMEOUT_MS);
       const waveform = computeWaveform(channels, WAVEFORM_SAMPLE_RATE);
       if (!(waveform.seconds > 0)) throw new Error('The audio decoded to nothing');
       this.waveforms.set(key, waveform);
@@ -255,18 +297,16 @@ export class WaveformLoader {
       this.failedAhead.delete(key);
       this.deps.write(key, waveform);
     } catch (err) {
-      // Stopped by a newer request or turning waveforms off: stopRunning has
-      // already cleared its status.
+      // No longer wanted: schedule() has already cleared its status.
       if (err instanceof Superseded) return;
       log.warn('[bcp] Could not get the audio for the waveform of', track.trackTitle, err);
       this.status.set(key, 'error');
       this.retryAt.set(key, Date.now() + WAVEFORM_RETRY_AFTER_MS);
-      if (job.prefetch) this.failedAhead.add(key);
+      if (load.prefetch) this.failedAhead.add(key);
       else this.failedAhead.delete(key);
-    } finally {
-      this.notify();
     }
   }
+
   private notify(): void {
     for (const listener of this.listeners) listener();
   }

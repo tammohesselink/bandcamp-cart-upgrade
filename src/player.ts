@@ -310,11 +310,6 @@ export class Player {
   setWaveformLoader(loader: WaveformLoader) {
     this.waveformLoader = loader;
     loader.onChange(() => this.scheduleWaveformRender());
-    // Turned on while a track plays: load it now rather than at the next track.
-    loader.onChange(() => {
-      const track = this.currentTrack();
-      if (track && loader.isEnabled && !this.audio.paused) loader.request(track);
-    });
     const track = this.currentTrack();
     if (track) void loader.loadStored(track);
     this.renderWaveform();
@@ -1285,7 +1280,7 @@ export class Player {
       // Detected once it plays rather than when cued, so opening a page
       // downloads nothing extra.
       if (this.sourceTrack) this.tempoAnalyzer?.analyse(this.sourceTrack);
-      if (this.sourceTrack) this.waveformLoader?.request(this.sourceTrack);
+      if (this.sourceTrack) this.waveformLoader?.setPlaying(this.sourceTrack);
       void this.preloadUpcoming();
     });
 
