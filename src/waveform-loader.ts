@@ -90,17 +90,14 @@ function decodeWithTimeout(decoding: Promise<Float32Array[]>): Promise<Float32Ar
 interface WantedLoad {
   track: PlaylistTrack;
   key: string;
+  // Loaded ahead for an upcoming track rather than for the one playing.
   prefetch: boolean;
 }
 
-interface RunningLoad {
-  track: PlaylistTrack;
-  key: string;
+interface RunningLoad extends WantedLoad {
   requestId: string;
-  // Loaded ahead for an upcoming track rather than for the one playing. Read
-  // when each step starts, so the steps after its track starts playing aren't
-  // bulk.
-  prefetch: boolean;
+  // `prefetch` is read when each step starts, so the steps after its track
+  // starts playing aren't bulk.
   controller: AbortController;
   // Its download has been sent, so it may be waiting in the background's queue.
   fetching: boolean;
@@ -126,8 +123,8 @@ export class WaveformLoader {
   // again straight away, as a download the user is waiting on.
   private failedAhead = new Set<string>();
   // Tracks whose decode timed out but is still running, each with a token for
-  // that decode. Not loaded again until it settles, so two decodes of one
-  // track never overlap.
+  // that decode. Not loaded again until it settles (or waveforms are turned
+  // on again), so two decodes of one track don't overlap.
   private lateDecodes = new Map<string, object>();
   private playing: { track: PlaylistTrack; key: string } | null = null;
   // Whether the playing track is playing rather than paused or stopped. Only
@@ -154,11 +151,14 @@ export class WaveformLoader {
   setEnabled(enabled: boolean): void {
     if (this.enabled === enabled) return;
     this.enabled = enabled;
-    // Retry what a refused permission made unavailable, and a decode that
-    // timed out and still hasn't settled (it may never).
+    // Retry what a refused permission made unavailable. Turning on also
+    // retries a decode that timed out and still hasn't settled (it may never);
+    // that one can then overlap the new decode of its track.
     for (const [key, status] of this.status) if (status === 'unavailable') this.status.delete(key);
-    for (const key of this.lateDecodes.keys()) if (this.status.get(key) === 'loading') this.status.delete(key);
-    this.lateDecodes.clear();
+    if (enabled) {
+      for (const key of this.lateDecodes.keys()) if (this.status.get(key) === 'loading') this.status.delete(key);
+      this.lateDecodes.clear();
+    }
     this.schedule(true);
   }
 
@@ -421,7 +421,14 @@ export function createWaveformLoader(refreshStream: WaveformLoaderDeps['refreshS
       signal.addEventListener('abort', () => void sendBcpMessage({ type: 'cancel-audio', requestId }).catch(() => {}), { once: true });
       return sendBcpMessage({ type: 'fetch-audio', url, whole: true, bulk, requestId });
     },
-    promoteAudio: (requestId) => void sendBcpMessage({ type: 'promote-audio', requestId }).catch(() => {}),
+    promoteAudio: (requestId) => {
+      // sendMessage throws rather than rejects once the extension reloads.
+      try {
+        void sendBcpMessage({ type: 'promote-audio', requestId }).catch(() => {});
+      } catch {
+        // Nothing to promote then.
+      }
+    },
     decode: (bytes) => decodeAudioChannels(bytes, WAVEFORM_SAMPLE_RATE),
     read: readWaveform,
     write: writeWaveform,

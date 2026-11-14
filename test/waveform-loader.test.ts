@@ -615,7 +615,7 @@ describe('WaveformLoader', () => {
     }
   });
 
-  it('keeps a download that is still upcoming after a jump, and stops it when audio has stopped', async () => {
+  it('keeps a download that is still upcoming after a jump, and starts nothing new once audio has stopped', async () => {
     const { calls, fetchAudio } = controlledFetch();
     const [a, b, c, z] = [track(1), track(2), track(3), track(26)];
     const { loader } = setup({ fetchAudio }, new Map([[trackWaveformKey(z), { peaks: new Float32Array([1]), seconds: 60 }]]));
@@ -708,6 +708,25 @@ describe('WaveformLoader', () => {
     await settle();
     // Sent as one the user waits on instead.
     expect(vi.mocked(deps.fetchAudio).mock.calls.map(([, , bulk]) => bulk)).toEqual([false]);
+  });
+
+  it('keeps the waveform of a timed-out decode that finishes while waveforms are off', async () => {
+    vi.useFakeTimers();
+    try {
+      let finishLate!: () => void;
+      const decode = vi.fn().mockReturnValueOnce(new Promise<Float32Array[]>((resolve) => { finishLate = () => resolve([new Float32Array(8000).fill(0.5)]); }));
+      const { loader, written } = setup({ decode });
+      const a = track(1);
+
+      loader.setPlaying(a, []);
+      await vi.advanceTimersByTimeAsync(WAVEFORM_DECODE_TIMEOUT_MS);
+      loader.setEnabled(false);
+      finishLate();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(written.has(trackWaveformKey(a))).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('shows no spinner for the playing track while paused', async () => {

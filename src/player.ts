@@ -1242,11 +1242,15 @@ export class Player {
     return tracks.filter((track) => !track.unplayable && track.streamUrl && (!this.onRefreshStream || isStreamFresh(track)));
   }
 
-  // The upcoming tracks whose waveforms load ahead. The same list whenever a
-  // track plays and once links are refreshed, so the loader keeps what it is
-  // loading rather than switching between two lists.
+  // The upcoming tracks whose waveforms load ahead: those with a working link,
+  // or a stale one that isn't waiting after a failed refresh (the loader
+  // refreshes it). So the list stays the same when a track plays and once
+  // preloadUpcoming has refreshed links, and the loader keeps what it loads.
   private waveformAheadTracks(upcoming: PlaylistTrack[]): PlaylistTrack[] {
-    return this.streamableTracks(upcoming).slice(0, WAVEFORM_PREFETCH_AHEAD);
+    const fresh = new Set(this.streamableTracks(upcoming));
+    return upcoming
+      .filter((track) => fresh.has(track) || (!track.unplayable && Date.now() >= (this.preloadRetryAt.get(track) ?? 0)))
+      .slice(0, WAVEFORM_PREFETCH_AHEAD);
   }
 
   private upcomingTracks(): PlaylistTrack[] {
@@ -1294,7 +1298,6 @@ export class Player {
       // Detected once it plays rather than when cued, so opening a page
       // downloads nothing extra.
       if (this.sourceTrack) this.tempoAnalyzer?.analyse(this.sourceTrack);
-      // Those with a stale link join once preloadUpcoming has refreshed them.
       if (this.sourceTrack) this.waveformLoader?.setPlaying(this.sourceTrack, this.waveformAheadTracks(this.upcomingTracks()));
       void this.preloadUpcoming();
     });

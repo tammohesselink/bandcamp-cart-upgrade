@@ -321,6 +321,31 @@ describe('Player preloading upcoming tracks', () => {
     expect(pause).toHaveBeenCalledTimes(1);
   });
 
+  it('gives the waveform loader the same tracks ahead when a track plays and once links are refreshed', async () => {
+    const player = new Player([freshTrack(1), expiredTrack(2), freshTrack(3), freshTrack(4)]);
+    refreshWith(player);
+    const loader = new WaveformLoader({
+      refreshStream: async () => {},
+      fetchAudio: () => new Promise(() => {}),
+      decode: async () => [],
+      read: async () => null,
+      write: () => {},
+      promoteAudio: () => {},
+    });
+    const setPlaying = vi.spyOn(loader, 'setPlaying');
+    const prefetch = vi.spyOn(loader, 'prefetch');
+    player.setWaveformLoader(loader);
+    player.jumpTo('cart', 0);
+    await settle();
+    setPlaying.mockClear();
+    prefetch.mockClear();
+
+    audioOf(player).dispatchEvent(new Event('playing'));
+    await settle();
+    expect(setPlaying.mock.calls[0]![1].map((track) => track.trackTitle)).toEqual(['Track 2', 'Track 3']);
+    expect(prefetch.mock.calls.at(-1)![0].map((track) => track.trackTitle)).toEqual(['Track 2', 'Track 3']);
+  });
+
   it('plays the next track from its buffered element without refetching its link', async () => {
     const player = new Player([freshTrack(1), expiredTrack(2)]);
     const refresh = refreshWith(player);
