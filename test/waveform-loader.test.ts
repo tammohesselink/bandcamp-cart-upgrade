@@ -41,7 +41,7 @@ describe('WaveformLoader', () => {
     const { loader, deps, written } = setup();
     const t = track(1);
 
-    loader.request(t);
+    loader.setPlaying(t);
     expect(loader.get(t).status).toBe('loading');
     await settle();
 
@@ -58,7 +58,7 @@ describe('WaveformLoader', () => {
 
     await loader.loadStored(t);
     expect(loader.get(t).status).toBe('ready');
-    loader.request(t);
+    loader.setPlaying(t);
     await settle();
     expect(deps.fetchAudio).not.toHaveBeenCalled();
   });
@@ -67,9 +67,9 @@ describe('WaveformLoader', () => {
     const { loader, deps } = setup();
     const [a, b, c] = [track(1), track(2), track(3)];
 
-    loader.request(a);
-    loader.request(b);
-    loader.request(c);
+    loader.setPlaying(a);
+    loader.setPlaying(b);
+    loader.setPlaying(c);
     expect(loader.get(b).status).toBe('none');
     await settle();
 
@@ -89,10 +89,10 @@ describe('WaveformLoader', () => {
     const { loader } = setup({ fetchAudio });
     const [a, b] = [track(1), track(2)];
 
-    loader.request(a);
+    loader.setPlaying(a);
     await settle();
     expect(signals).toHaveLength(1);
-    loader.request(b);
+    loader.setPlaying(b);
     expect(signals[0]!.aborted).toBe(true);
     await settle();
 
@@ -106,7 +106,7 @@ describe('WaveformLoader', () => {
   it('refreshes a stale stream link before downloading', async () => {
     const { loader, deps } = setup();
     const t = track(1, { streamFetchedAt: 0 });
-    loader.request(t);
+    loader.setPlaying(t);
     await settle();
     expect(deps.refreshStream).toHaveBeenCalledWith(t, false);
     expect(loader.get(t).status).toBe('ready');
@@ -117,15 +117,15 @@ describe('WaveformLoader', () => {
     const { loader } = setup({ fetchAudio });
     const t = track(1);
 
-    loader.request(t);
+    loader.setPlaying(t);
     await settle();
     expect(loader.get(t).status).toBe('error');
-    loader.request(t);
+    loader.setPlaying(t);
     await settle();
     expect(fetchAudio).toHaveBeenCalledTimes(1);
 
     vi.spyOn(Date, 'now').mockReturnValue(Date.now() + WAVEFORM_RETRY_AFTER_MS + 1);
-    loader.request(t);
+    loader.setPlaying(t);
     await settle();
     expect(fetchAudio).toHaveBeenCalledTimes(2);
     vi.restoreAllMocks();
@@ -134,34 +134,38 @@ describe('WaveformLoader', () => {
   it('gives up on a track when the stream permission is missing', async () => {
     const { loader } = setup({ fetchAudio: vi.fn(async () => ({ noPermission: true })) });
     const t = track(1);
-    loader.request(t);
+    loader.setPlaying(t);
     await settle();
     expect(loader.get(t).status).toBe('unavailable');
   });
 
-  it('downloads nothing while off, and drops a load that was running when turned off', async () => {
-    let finishDecode!: (channels: Float32Array[]) => void;
-    const decode = vi.fn(() => new Promise<Float32Array[]>((resolve) => { finishDecode = resolve; }));
-    const { loader, deps, written } = setup({ decode });
+  it('downloads nothing while off, and drops a download that was running when turned off', async () => {
+    const signals: AbortSignal[] = [];
+    const fetchAudio = vi.fn((_url: string, signal: AbortSignal) => {
+      signals.push(signal);
+      return new Promise<{ error: string }>((resolve) => signal.addEventListener('abort', () => resolve({ error: 'Cancelled' })));
+    });
+    const { loader, written } = setup({ fetchAudio });
     const t = track(1);
 
-    loader.request(t);
+    loader.setPlaying(t);
     await settle();
     loader.setEnabled(false);
-    finishDecode([new Float32Array(8000)]);
+    expect(signals[0]!.aborted).toBe(true);
     await settle();
     expect(loader.get(t).status).toBe('none');
     expect(written.size).toBe(0);
 
-    loader.request(track(2));
+    loader.setPlaying(track(2));
+    loader.prefetch([track(3)]);
     await settle();
-    expect(deps.fetchAudio).toHaveBeenCalledTimes(1);
+    expect(fetchAudio).toHaveBeenCalledTimes(1);
   });
 
   it('does nothing for a track that cannot be streamed', () => {
     const { loader, deps } = setup();
     const t = track(1, { unplayable: true });
-    loader.request(t);
+    loader.setPlaying(t);
     expect(loader.get(t).status).toBe('unavailable');
     expect(deps.read).not.toHaveBeenCalled();
   });
@@ -169,7 +173,7 @@ describe('WaveformLoader', () => {
     const { loader, deps } = setup();
     const [a, b, c] = [track(1), track(2, { streamFetchedAt: 0 }), track(3)];
 
-    loader.request(a);
+    loader.setPlaying(a);
     loader.prefetch([b, c]);
     await settle();
 
@@ -183,7 +187,7 @@ describe('WaveformLoader', () => {
     expect(loader.get(c).status).toBe('ready');
 
     // Already loaded: playing them downloads nothing more.
-    loader.request(b);
+    loader.setPlaying(b);
     loader.prefetch([c]);
     await settle();
     expect(deps.fetchAudio).toHaveBeenCalledTimes(3);
@@ -203,30 +207,22 @@ describe('WaveformLoader', () => {
     expect([...signals.keys()]).toEqual([b.streamUrl]);
 
     // Playing another track goes first; what was loading ahead is dropped.
-    loader.request(a);
+    loader.setPlaying(a);
     expect(signals.get(b.streamUrl!)!.aborted).toBe(true);
     await settle();
     expect(loader.get(b).status).toBe('none');
     expect(loader.get(a).status).toBe('loading');
 
-    loader.setEnabled(false);
-    loader.setEnabled(true);
-    loader.prefetch([c]);
+    const second = setup({ fetchAudio }).loader;
+    second.prefetch([c]);
     await settle();
-    expect(loader.get(c).status).toBe('loading');
-    loader.prefetch([d]);
+    expect(second.get(c).status).toBe('loading');
+    second.prefetch([d]);
     expect(signals.get(c.streamUrl!)!.aborted).toBe(true);
     await settle();
-    expect(loader.get(c).status).toBe('none');
-    expect(loader.get(d).status).toBe('loading');
+    expect(second.get(c).status).toBe('none');
+    expect(second.get(d).status).toBe('loading');
   });
-
-  // Like the player: asks for the playing track whenever anything changes.
-  function askForPlayingOnChange(loader: WaveformLoader): (t: PlaylistTrack | null) => void {
-    let playing: PlaylistTrack | null = null;
-    loader.onChange(() => { if (playing) loader.request(playing); });
-    return (t) => { playing = t; if (t) loader.request(t); };
-  }
 
   it('keeps loading a track ahead when it starts playing, with its later steps no longer bulk', async () => {
     let finishRefresh!: () => void;
@@ -234,18 +230,18 @@ describe('WaveformLoader', () => {
       finishRefresh = () => { t.streamFetchedAt = Date.now(); resolve(); };
     }));
     const { loader, deps } = setup({ refreshStream });
-    const play = askForPlayingOnChange(loader);
     const [b, c] = [track(2, { streamFetchedAt: 0 }), track(3)];
 
     loader.prefetch([b, c]);
     await settle();
     expect(refreshStream).toHaveBeenCalledWith(b, true);
-    play(b);
+    loader.setPlaying(b);
     // The player then loads ahead from the new track.
     loader.prefetch([c]);
     finishRefresh();
     await settle();
 
+    expect(refreshStream).toHaveBeenCalledTimes(1);
     expect(loader.get(b).status).toBe('ready');
     expect(vi.mocked(deps.fetchAudio).mock.calls.map(([url, , bulk]) => [url, bulk])).toEqual([
       [b.streamUrl, false],
@@ -253,7 +249,7 @@ describe('WaveformLoader', () => {
     ]);
   });
 
-  it('lets a decode finish and keeps its waveform when another track is asked for', async () => {
+  function controlledDecode() {
     const finishers: (() => void)[] = [];
     let decoding = 0;
     let mostAtOnce = 0;
@@ -262,50 +258,88 @@ describe('WaveformLoader', () => {
       mostAtOnce = Math.max(mostAtOnce, decoding);
       return new Promise<Float32Array[]>((resolve) => finishers.push(() => { decoding--; resolve([new Float32Array(8000).fill(0.5)]); }));
     });
+    return { decode, finish: (i: number) => finishers[i]!(), mostAtOnce: () => mostAtOnce };
+  }
+
+  it('lets a decode finish and keeps its waveform when another track plays', async () => {
+    const { decode, finish, mostAtOnce } = controlledDecode();
     const { loader, deps } = setup({ decode });
-    const play = askForPlayingOnChange(loader);
     const [a, b, c] = [track(1), track(2), track(3)];
 
     loader.prefetch([b]);
     await settle();
-    play(a);
+    loader.setPlaying(a);
     await settle();
-    // Nothing else starts while the decode runs.
+    // Nothing else starts while the decode runs, and the playing track shows
+    // it is on its way.
     expect(deps.fetchAudio).toHaveBeenCalledTimes(1);
-    finishers[0]!();
+    expect(loader.get(a).status).toBe('loading');
+    finish(0);
     await settle();
     expect(loader.get(b).status).toBe('ready');
-    play(c);
+    loader.setPlaying(c);
     await settle();
-    finishers[1]!();
+    finish(1);
     await settle();
-    finishers[2]!();
+    finish(2);
     await settle();
 
-    expect(mostAtOnce).toBe(1);
+    expect(mostAtOnce()).toBe(1);
     expect(loader.get(a).status).toBe('ready');
     expect(loader.get(c).status).toBe('ready');
     expect(vi.mocked(deps.fetchAudio).mock.calls.map(([url]) => url)).toEqual([b.streamUrl, a.streamUrl, c.streamUrl]);
   });
 
-  it('stops a decode when turned off, and waits for it before loading again', async () => {
-    const finishers: (() => void)[] = [];
-    const decode = vi.fn(() => new Promise<Float32Array[]>((resolve) => finishers.push(() => resolve([new Float32Array(8000).fill(0.5)]))));
+  it('finishes a decode when turned off, keeping its waveform, before loading anything else', async () => {
+    const { decode, finish } = controlledDecode();
     const { loader, deps, written } = setup({ decode });
     const [a, b] = [track(1), track(2)];
 
-    loader.request(a);
+    loader.setPlaying(a);
     await settle();
     loader.setEnabled(false);
     loader.setEnabled(true);
-    loader.request(b);
+    loader.setPlaying(b);
     await settle();
     expect(deps.fetchAudio).toHaveBeenCalledTimes(1);
-    finishers[0]!();
+    finish(0);
     await settle();
-    expect(loader.get(a).status).toBe('none');
-    expect(written.has(trackWaveformKey(a))).toBe(false);
-    expect(deps.fetchAudio).toHaveBeenCalledTimes(2);
+    expect(loader.get(a).status).toBe('ready');
+    expect(written.has(trackWaveformKey(a))).toBe(true);
+    expect(vi.mocked(deps.fetchAudio).mock.calls.map(([url]) => url)).toEqual([a.streamUrl, b.streamUrl]);
+  });
+
+  it('decodes a track once when turned off and on during its decode', async () => {
+    const { decode, finish } = controlledDecode();
+    const { loader, deps } = setup({ decode });
+    const a = track(1);
+
+    loader.setPlaying(a);
+    await settle();
+    loader.setEnabled(false);
+    loader.setEnabled(true);
+    finish(0);
+    await settle();
+    expect(loader.get(a).status).toBe('ready');
+    expect(deps.fetchAudio).toHaveBeenCalledTimes(1);
+    expect(decode).toHaveBeenCalledTimes(1);
+  });
+
+  it('loads the playing track and the ones ahead when turned on', async () => {
+    const { loader, deps } = setup();
+    const [a, b] = [track(1), track(2)];
+    loader.setEnabled(false);
+    loader.setPlaying(a);
+    loader.prefetch([b]);
+    await settle();
+    expect(deps.fetchAudio).not.toHaveBeenCalled();
+
+    loader.setEnabled(true);
+    await settle();
+    expect(vi.mocked(deps.fetchAudio).mock.calls.map(([url, , bulk]) => [url, bulk])).toEqual([
+      [a.streamUrl, false],
+      [b.streamUrl, true],
+    ]);
   });
 
   it('gives up on a decode that never finishes, so later loads still run', async () => {
@@ -315,9 +349,9 @@ describe('WaveformLoader', () => {
       const { loader } = setup({ decode });
       const [a, b] = [track(1), track(2)];
 
-      loader.request(a);
+      loader.setPlaying(a);
       await vi.advanceTimersByTimeAsync(0);
-      loader.request(b);
+      loader.setPlaying(b);
       await vi.advanceTimersByTimeAsync(0);
       expect(loader.get(b).status).toBe('loading');
       await vi.advanceTimersByTimeAsync(WAVEFORM_DECODE_TIMEOUT_MS);
@@ -337,75 +371,64 @@ describe('WaveformLoader', () => {
       })
     );
     const { loader } = setup({ fetchAudio });
-    const play = askForPlayingOnChange(loader);
     const [a, b, c, x] = [track(1), track(2), track(3), track(9)];
+    try {
+      loader.setPlaying(a);
+      await settle();
+      calls[0]!.fail();
+      await settle();
+      loader.prefetch([b, c]);
+      await settle();
+      expect(calls.map(({ url }) => url)).toEqual([a.streamUrl, b.streamUrl]);
 
-    play(a);
-    await settle();
-    calls[0]!.fail();
-    await settle();
-    loader.prefetch([b, c]);
-    await settle();
-    expect(calls.map(({ url }) => url)).toEqual([a.streamUrl, b.streamUrl]);
+      // The playing track's retry interrupts b, which loads again after it.
+      vi.spyOn(Date, 'now').mockReturnValue(Date.now() + WAVEFORM_RETRY_AFTER_MS + 1);
+      loader.setPlaying(a);
+      await settle();
+      calls[2]!.finish();
+      await settle();
+      expect(calls.map(({ url }) => url)).toEqual([a.streamUrl, b.streamUrl, a.streamUrl, b.streamUrl]);
 
-    // The playing track's retry interrupts b, which loads again after it.
-    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + WAVEFORM_RETRY_AFTER_MS + 1);
-    play(a);
-    await settle();
-    calls[2]!.finish();
-    await settle();
-    expect(calls.map(({ url }) => url)).toEqual([a.streamUrl, b.streamUrl, a.streamUrl, b.streamUrl]);
-
-    // Jumping elsewhere drops it: the player sends what is upcoming from there.
-    play(x);
-    await settle();
-    calls[4]!.finish();
-    await settle();
-    expect(calls.map(({ url }) => url)).toEqual([a.streamUrl, b.streamUrl, a.streamUrl, b.streamUrl, x.streamUrl]);
-    vi.restoreAllMocks();
+      // Jumping elsewhere drops it: the player sends what is upcoming from there.
+      loader.setPlaying(x);
+      await settle();
+      calls[4]!.finish();
+      await settle();
+      expect(calls.map(({ url }) => url)).toEqual([a.streamUrl, b.streamUrl, a.streamUrl, b.streamUrl, x.streamUrl]);
+      expect(loader.get(b).status).toBe('none');
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
-  it('keeps the wait before retrying a track that failed as the playing track is asked for', async () => {
+  it('keeps the wait before retrying a track ahead that failed as the playing track is retried', async () => {
     const pending = new Map<string, () => void>();
     const fetchAudio = vi.fn((url: string) => new Promise<{ error: string }>((resolve) => pending.set(url, () => resolve({ error: 'HTTP 500' }))));
     const { loader } = setup({ fetchAudio });
-    const play = askForPlayingOnChange(loader);
     const [playing, c] = [track(1), track(3)];
-
-    play(playing);
-    await settle();
-    pending.get(playing.streamUrl!)!();
-    await settle();
-    loader.prefetch([c]);
-    await settle();
-    // The playing track may be retried by the time c fails, so c's failure
-    // makes the player ask for it, which must not wipe c's failure.
-    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + WAVEFORM_RETRY_AFTER_MS + 1);
-    pending.get(c.streamUrl!)!();
-    await settle();
-    expect(loader.get(c).status).toBe('error');
-    loader.prefetch([c]);
-    await settle();
-    expect(fetchAudio.mock.calls.filter(([url]) => url === c.streamUrl)).toHaveLength(1);
-    vi.restoreAllMocks();
+    try {
+      loader.setPlaying(playing);
+      await settle();
+      pending.get(playing.streamUrl!)!();
+      await settle();
+      loader.prefetch([c]);
+      await settle();
+      // The playing track's wait is over by the time c fails, so it is tried
+      // again then, which must not wipe c's failure.
+      vi.spyOn(Date, 'now').mockReturnValue(Date.now() + WAVEFORM_RETRY_AFTER_MS + 1);
+      pending.get(c.streamUrl!)!();
+      await settle();
+      expect(loader.get(c).status).toBe('error');
+      expect(fetchAudio.mock.calls.map(([url]) => url)).toEqual([playing.streamUrl, c.streamUrl, playing.streamUrl]);
+      loader.prefetch([c]);
+      await settle();
+      expect(fetchAudio.mock.calls.filter(([url]) => url === c.streamUrl)).toHaveLength(1);
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
-  it('plays a track whose load ahead failed, trying it again once, while asked for on every change', async () => {
-    const fetchAudio = vi.fn().mockResolvedValueOnce({ error: 'HTTP 500' }).mockResolvedValue({ audioBase64: bytesToBase64(new Uint8Array([1])) });
-    const { loader } = setup({ fetchAudio });
-    const play = askForPlayingOnChange(loader);
-    const b = track(2);
-
-    loader.prefetch([b]);
-    await settle();
-    expect(loader.get(b).status).toBe('error');
-    play(b);
-    await settle();
-    expect(loader.get(b).status).toBe('ready');
-    expect(fetchAudio).toHaveBeenCalledTimes(2);
-  });
-
-  it('loads one track at a time when a listener asks for the playing track as a load ahead starts', async () => {
+  it('is safe with a listener that says which track plays on every change', async () => {
     const pending: AbortSignal[] = [];
     const fetchAudio = vi.fn((_url: string, signal: AbortSignal) => {
       pending.push(signal);
@@ -413,9 +436,9 @@ describe('WaveformLoader', () => {
     });
     const { loader } = setup({ fetchAudio });
     const [playing, ahead] = [track(1), track(2)];
-    // Like the player: asks for the playing track whenever anything changes.
-    loader.onChange(() => loader.request(playing));
+    loader.onChange(() => loader.setPlaying(playing));
 
+    loader.setPlaying(playing);
     loader.prefetch([ahead]);
     await settle();
 
@@ -433,7 +456,7 @@ describe('WaveformLoader', () => {
 
     loader.prefetch([ahead]);
     await settle();
-    loader.request(playing);
+    loader.setPlaying(playing);
     await settle();
 
     expect(fetchAudio.mock.calls.map(([url]) => url)).toEqual([ahead.streamUrl, playing.streamUrl]);
@@ -469,11 +492,11 @@ describe('WaveformLoader', () => {
     await settle();
     expect(fetchAudio).toHaveBeenCalledTimes(1);
 
-    loader.request(t);
+    loader.setPlaying(t);
     await settle();
     expect(fetchAudio.mock.calls.map(([, , bulk]) => bulk)).toEqual([true, false]);
     // Failed while playing: waits before trying again.
-    loader.request(t);
+    loader.setPlaying(t);
     await settle();
     expect(fetchAudio).toHaveBeenCalledTimes(2);
   });

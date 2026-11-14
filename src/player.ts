@@ -310,17 +310,6 @@ export class Player {
   setWaveformLoader(loader: WaveformLoader) {
     this.waveformLoader = loader;
     loader.onChange(() => this.scheduleWaveformRender());
-    // Turned on while a track plays: load it, and the next ones ahead, now
-    // rather than at the next track.
-    let wasEnabled = loader.isEnabled;
-    loader.onChange(() => {
-      const turnedOn = loader.isEnabled && !wasEnabled;
-      wasEnabled = loader.isEnabled;
-      const track = this.currentTrack();
-      if (!track || !loader.isEnabled || this.audio.paused) return;
-      loader.request(track);
-      if (turnedOn) loader.prefetch(this.waveformPrefetchTracks());
-    });
     const track = this.currentTrack();
     if (track) void loader.loadStored(track);
     this.renderWaveform();
@@ -1218,7 +1207,9 @@ export class Player {
     // Their BPMs are ready by the time they play, which "Keep BPM" needs.
     for (const track of upcoming) this.tempoAnalyzer?.analyse(track, { bulk: true });
 
-    const streamable = this.streamableTracks(upcoming);
+    // Only tracks with a working link: one whose refresh just failed is left
+    // alone, like its buffering.
+    const streamable = upcoming.filter((t) => !t.unplayable && t.streamUrl && (!this.onRefreshStream || isStreamFresh(t)));
     // Their waveforms show as soon as they start.
     this.waveformLoader?.prefetch(streamable.slice(0, WAVEFORM_PREFETCH_AHEAD));
 
@@ -1242,18 +1233,6 @@ export class Player {
     this.waveformLoader?.prefetch([]);
     for (const standby of this.preloaded.values()) unloadAudio(standby);
     this.preloaded.clear();
-  }
-
-  // Only tracks with a working link: one whose refresh just failed is left
-  // alone, like its buffering.
-  private streamableTracks(tracks: PlaylistTrack[]): PlaylistTrack[] {
-    return tracks.filter((t) => !t.unplayable && t.streamUrl && (!this.onRefreshStream || isStreamFresh(t)));
-  }
-
-  // The loader refreshes stale links itself, so unlike buffering these needn't
-  // have a fresh one.
-  private waveformPrefetchTracks(): PlaylistTrack[] {
-    return this.upcomingTracks().filter((t) => !t.unplayable).slice(0, WAVEFORM_PREFETCH_AHEAD);
   }
 
   private upcomingTracks(): PlaylistTrack[] {
@@ -1301,7 +1280,7 @@ export class Player {
       // Detected once it plays rather than when cued, so opening a page
       // downloads nothing extra.
       if (this.sourceTrack) this.tempoAnalyzer?.analyse(this.sourceTrack);
-      if (this.sourceTrack) this.waveformLoader?.request(this.sourceTrack);
+      if (this.sourceTrack) this.waveformLoader?.setPlaying(this.sourceTrack);
       void this.preloadUpcoming();
     });
 

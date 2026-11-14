@@ -262,29 +262,30 @@ describe('Player preloading upcoming tracks', () => {
     expect(prefetch.mock.calls.at(-1)![0]).toEqual([]);
   });
 
-  it('loads the waveforms ahead when "Show a waveform" is turned on while a track plays', async () => {
-    // The loader refreshes an old link itself, so that track isn't skipped.
-    const player = new Player([freshTrack(1), expiredTrack(2), freshTrack(3), freshTrack(4)]);
+  it('loads the playing track\'s waveform and the ones ahead when "Show a waveform" is turned on while a track plays', async () => {
+    const player = new Player([freshTrack(1), freshTrack(2), freshTrack(3), freshTrack(4)]);
+    const fetchAudio = vi.fn(async (_url: string, _signal: AbortSignal, _bulk: boolean) => ({ error: 'HTTP 500' }));
     const loader = new WaveformLoader({
       refreshStream: async () => {},
-      fetchAudio: () => new Promise(() => {}),
+      fetchAudio,
       decode: async () => [],
       read: async () => null,
       write: () => {},
     });
-    const prefetch = vi.spyOn(loader, 'prefetch');
-    const request = vi.spyOn(loader, 'request');
     player.setWaveformLoader(loader);
     player.jumpTo('cart', 0);
     await settle();
-    Object.defineProperty(audioOf(player), 'paused', { value: false, configurable: true });
-    prefetch.mockClear();
-    request.mockClear();
+    audioOf(player).dispatchEvent(new Event('playing'));
+    await settle();
+    expect(fetchAudio).not.toHaveBeenCalled();
 
     loader.setEnabled(true);
-    expect(request.mock.calls[0]![0].trackTitle).toBe('Track 1');
-    expect(prefetch).toHaveBeenCalledTimes(1);
-    expect(prefetch.mock.calls[0]![0].map((t) => t.trackTitle)).toEqual(['Track 2', 'Track 3']);
+    await settle();
+    expect(fetchAudio.mock.calls.map(([url, , bulk]) => [url, bulk])).toEqual([
+      ['https://t4.bcbits.com/stream/track-1-old', false],
+      ['https://t4.bcbits.com/stream/track-2-old', true],
+      ['https://t4.bcbits.com/stream/track-3-old', true],
+    ]);
   });
 
   it('plays the next track from its buffered element without refetching its link', async () => {
