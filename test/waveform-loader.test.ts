@@ -29,10 +29,13 @@ function setup(overrides: Partial<WaveformLoaderDeps> = {}, stored = new Map<str
     decode: vi.fn(async () => [new Float32Array(16000).fill(0.5)]),
     read: vi.fn(async (key: string) => stored.get(key) ?? null),
     write: vi.fn((key: string, waveform: Waveform) => { written.set(key, waveform); }),
+    promoteAudio: vi.fn(),
     ...overrides,
   };
   const loader = new WaveformLoader(deps);
   loader.setEnabled(true);
+  // Loads only start while something plays; this one has no waveform to get.
+  loader.setPlaying(track(0, { unplayable: true }));
   return { loader, deps, written };
 }
 
@@ -426,6 +429,113 @@ describe('WaveformLoader', () => {
     } finally {
       vi.restoreAllMocks();
     }
+  });
+
+  function controlledFetch() {
+    const calls: { url: string; bulk: boolean; signal: AbortSignal; finish: () => void; fail: () => void }[] = [];
+    const fetchAudio = vi.fn((url: string, signal: AbortSignal, bulk: boolean) =>
+      new Promise<{ audioBase64?: string; error?: string }>((resolve) => {
+        calls.push({ url, bulk, signal, finish: () => resolve({ audioBase64: bytesToBase64(new Uint8Array([1])) }), fail: () => resolve({ error: 'HTTP 500' }) });
+        signal.addEventListener('abort', () => resolve({ error: 'Cancelled' }));
+      })
+    );
+    return { calls, fetchAudio, urls: () => calls.map(({ url }) => url) };
+  }
+
+  it('keeps loading ahead the track after next when the next one starts', async () => {
+    const { calls, fetchAudio, urls } = controlledFetch();
+    const { loader } = setup({ fetchAudio });
+    const [a, b, c, d] = [track(1), track(2), track(3), track(4)];
+
+    loader.setPlaying(a);
+    loader.prefetch([b, c]);
+    await settle();
+    calls[0]!.finish();
+    await settle();
+    calls[1]!.finish();
+    await settle();
+    expect(urls()).toEqual([a.streamUrl, b.streamUrl, c.streamUrl]);
+
+    // a ends and b plays, then the player sends what follows b.
+    loader.setPlaying(b);
+    loader.prefetch([c, d]);
+    await settle();
+    expect(calls[2]!.signal.aborted).toBe(false);
+    calls[2]!.finish();
+    await settle();
+    expect(urls()).toEqual([a.streamUrl, b.streamUrl, c.streamUrl, d.streamUrl]);
+  });
+
+  it('moves a track loading ahead up the download queue when it starts playing', async () => {
+    const { calls, fetchAudio } = controlledFetch();
+    const { loader, deps } = setup({ fetchAudio });
+    const [b, c] = [track(2), track(3)];
+
+    loader.prefetch([b, c]);
+    await settle();
+    expect(calls[0]!.bulk).toBe(true);
+    loader.setPlaying(b);
+    expect(deps.promoteAudio).toHaveBeenCalledWith(calls[0]!.signal);
+    expect(calls[0]!.signal.aborted).toBe(false);
+    loader.setPlaying(b);
+    expect(deps.promoteAudio).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps loading a track ahead when an earlier one becomes due for a retry', async () => {
+    const { calls, fetchAudio, urls } = controlledFetch();
+    const { loader } = setup({ fetchAudio });
+    const [b, c] = [track(2), track(3)];
+    try {
+      loader.prefetch([b, c]);
+      await settle();
+      calls[0]!.fail();
+      await settle();
+      expect(urls()).toEqual([b.streamUrl, c.streamUrl]);
+      vi.spyOn(Date, 'now').mockReturnValue(Date.now() + WAVEFORM_RETRY_AFTER_MS + 1);
+      loader.prefetch([b, c]);
+      await settle();
+      expect(calls[1]!.signal.aborted).toBe(false);
+      calls[1]!.finish();
+      await settle();
+      expect(urls()).toEqual([b.streamUrl, c.streamUrl, b.streamUrl]);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('starts nothing new while paused, finishing what is loading', async () => {
+    const { calls, fetchAudio, urls } = controlledFetch();
+    const { loader } = setup({ fetchAudio });
+    const [a, b, c] = [track(1), track(2), track(3)];
+
+    loader.setPlaying(a);
+    loader.prefetch([b, c]);
+    await settle();
+    loader.pause();
+    calls[0]!.finish();
+    await settle();
+    expect(loader.get(a).status).toBe('ready');
+    expect(urls()).toEqual([a.streamUrl]);
+
+    loader.setPlaying(a);
+    await settle();
+    expect(urls()).toEqual([a.streamUrl, b.streamUrl]);
+  });
+
+  it('downloads nothing when turned on while paused', async () => {
+    const { loader, deps } = setup();
+    const [a, b] = [track(1), track(2)];
+    loader.setEnabled(false);
+    loader.setPlaying(a);
+    loader.prefetch([b]);
+    loader.pause();
+
+    loader.setEnabled(true);
+    await settle();
+    expect(deps.fetchAudio).not.toHaveBeenCalled();
+    loader.setPlaying(a);
+    await settle();
+    expect(deps.fetchAudio).toHaveBeenCalledTimes(2);
   });
 
   it('is safe with a listener that says which track plays on every change', async () => {

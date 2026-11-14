@@ -247,6 +247,7 @@ describe('Player preloading upcoming tracks', () => {
       decode: async () => [],
       read: async () => null,
       write: () => {},
+      promoteAudio: () => {},
     });
     loader.setEnabled(true);
     const prefetch = vi.spyOn(loader, 'prefetch');
@@ -271,6 +272,7 @@ describe('Player preloading upcoming tracks', () => {
       decode: async () => [],
       read: async () => null,
       write: () => {},
+      promoteAudio: () => {},
     });
     player.setWaveformLoader(loader);
     player.jumpTo('cart', 0);
@@ -286,6 +288,25 @@ describe('Player preloading upcoming tracks', () => {
       ['https://t4.bcbits.com/stream/track-2-old', true],
       ['https://t4.bcbits.com/stream/track-3-old', true],
     ]);
+  });
+
+  it('tells the waveform loader when playback pauses', async () => {
+    const player = new Player([freshTrack(1)]);
+    const loader = new WaveformLoader({
+      refreshStream: async () => {},
+      fetchAudio: () => new Promise(() => {}),
+      decode: async () => [],
+      read: async () => null,
+      write: () => {},
+      promoteAudio: () => {},
+    });
+    const pause = vi.spyOn(loader, 'pause');
+    player.setWaveformLoader(loader);
+    player.jumpTo('cart', 0);
+    await settle();
+    pause.mockClear();
+    audioOf(player).dispatchEvent(new Event('pause'));
+    expect(pause).toHaveBeenCalledTimes(1);
   });
 
   it('plays the next track from its buffered element without refetching its link', async () => {

@@ -1257,6 +1257,7 @@ export class Player {
 
     on('pause', () => {
       this.reflectPlaybackState(false);
+      this.waveformLoader?.pause();
     });
 
     on('timeupdate', () => {

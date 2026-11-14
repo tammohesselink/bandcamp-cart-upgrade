@@ -81,6 +81,13 @@ export interface CancelAudioRequest {
   requestId: string;
 }
 
+// Moves a bulk fetch-audio download still waiting for its turn ahead of the
+// other bulk ones, e.g. a waveform loading ahead once its track plays.
+export interface PromoteAudioRequest {
+  type: 'promote-audio';
+  requestId: string;
+}
+
 // Reads one page of the logged-in fan's order history (the list on
 // bandcamp.com/<username>/purchases), for the purchase export.
 export interface OrderHistoryPageRequest {
@@ -99,6 +106,7 @@ export type BcpRequest =
   | OrderHistoryPageRequest
   | FetchAudioRequest
   | CancelAudioRequest
+  | PromoteAudioRequest
   | CartAddRequest
   | CartRemoveRequest
   | WishlistRemoveRequest
@@ -144,6 +152,7 @@ export type BcpResponse = FetchResponse | OrderHistoryPageResponse | FetchAudioR
 export function sendBcpMessage(msg: FetchRequest): Promise<FetchResponse>;
 export function sendBcpMessage(msg: FetchAudioRequest): Promise<FetchAudioResponse>;
 export function sendBcpMessage(msg: CancelAudioRequest): Promise<void>;
+export function sendBcpMessage(msg: PromoteAudioRequest): Promise<void>;
 export function sendBcpMessage(
   msg: CartAddRequest | CartRemoveRequest | WishlistRemoveRequest | OpenIncognitoCheckoutRequest
 ): Promise<CartMutationResponse>;
