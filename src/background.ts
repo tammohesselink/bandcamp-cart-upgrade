@@ -140,7 +140,7 @@ chrome.runtime.onMessage.addListener((message: BcpRequest, sender, sendResponse)
     const controller = new AbortController();
     const { requestId } = message;
     if (requestId) cancellableAudioFetches.set(requestId, controller);
-    limitAudioFetches(message.bulk ? 'bulk' : 'interactive', () => fetchAudio(message.url, !!message.whole, controller))
+    limitAudioFetches(message.bulk ? 'bulk' : 'interactive', () => fetchAudio(message.url, !!message.whole, controller), requestId)
       .then(sendResponse)
       .finally(() => { if (requestId) cancellableAudioFetches.delete(requestId); });
     return true;
@@ -148,6 +148,11 @@ chrome.runtime.onMessage.addListener((message: BcpRequest, sender, sendResponse)
 
   if (message.type === 'cancel-audio') {
     cancellableAudioFetches.get(message.requestId)?.abort(new Error('Cancelled'));
+    return false;
+  }
+
+  if (message.type === 'promote-audio') {
+    limitAudioFetches.promote(message.requestId);
     return false;
   }
 

@@ -310,11 +310,7 @@ export class Player {
   setWaveformLoader(loader: WaveformLoader) {
     this.waveformLoader = loader;
     loader.onChange(() => this.scheduleWaveformRender());
-    // Turned on while a track plays: load it now rather than at the next track.
-    loader.onChange(() => {
-      const track = this.currentTrack();
-      if (track && loader.isEnabled && !this.audio.paused) loader.request(track);
-    });
+    loader.setPlaybackCheck(() => !this.audio.paused);
     const track = this.currentTrack();
     if (track) void loader.loadStored(track);
     this.renderWaveform();
@@ -1168,6 +1164,8 @@ export class Player {
 
   private reflectPlaybackState(playing: boolean) {
     this.setPlayButton(playing ? 'pause' : 'play');
+    // Every way playback stops ends up here, not all of them in a 'pause' event.
+    if (!playing) this.waveformLoader?.pause();
     if ('mediaSession' in navigator) {
       navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
     }
@@ -1212,11 +1210,9 @@ export class Player {
     // Their BPMs are ready by the time they play, which "Keep BPM" needs.
     for (const track of upcoming) this.tempoAnalyzer?.analyse(track, { bulk: true });
 
-    // Only tracks with a working link: one whose refresh just failed is left
-    // alone, like its buffering.
-    const streamable = upcoming.filter((t) => !t.unplayable && t.streamUrl && (!this.onRefreshStream || isStreamFresh(t)));
+    const streamable = this.streamableTracks(upcoming);
     // Their waveforms show as soon as they start.
-    this.waveformLoader?.prefetch(streamable.slice(0, WAVEFORM_PREFETCH_AHEAD));
+    this.waveformLoader?.prefetch(this.waveformAheadTracks(upcoming));
 
     const wanted = streamable.map((t) => t.streamUrl!);
     for (const [url, standby] of this.preloaded) {
@@ -1238,6 +1234,23 @@ export class Player {
     this.waveformLoader?.prefetch([]);
     for (const standby of this.preloaded.values()) unloadAudio(standby);
     this.preloaded.clear();
+  }
+
+  // Only tracks with a working link: one whose refresh just failed is left
+  // alone, like its buffering.
+  private streamableTracks(tracks: PlaylistTrack[]): PlaylistTrack[] {
+    return tracks.filter((track) => !track.unplayable && track.streamUrl && (!this.onRefreshStream || isStreamFresh(track)));
+  }
+
+  // The upcoming tracks whose waveforms load ahead: those with a working link,
+  // or a stale one that isn't waiting after a failed refresh (the loader
+  // refreshes it). So the list stays the same when a track plays and once
+  // preloadUpcoming has refreshed links, and the loader keeps what it loads.
+  private waveformAheadTracks(upcoming: PlaylistTrack[]): PlaylistTrack[] {
+    const fresh = new Set(this.streamableTracks(upcoming));
+    return upcoming
+      .filter((track) => fresh.has(track) || (!track.unplayable && Date.now() >= (this.preloadRetryAt.get(track) ?? 0)))
+      .slice(0, WAVEFORM_PREFETCH_AHEAD);
   }
 
   private upcomingTracks(): PlaylistTrack[] {
@@ -1285,7 +1298,7 @@ export class Player {
       // Detected once it plays rather than when cued, so opening a page
       // downloads nothing extra.
       if (this.sourceTrack) this.tempoAnalyzer?.analyse(this.sourceTrack);
-      if (this.sourceTrack) this.waveformLoader?.request(this.sourceTrack);
+      if (this.sourceTrack) this.waveformLoader?.setPlaying(this.sourceTrack, this.waveformAheadTracks(this.upcomingTracks()));
       void this.preloadUpcoming();
     });
 

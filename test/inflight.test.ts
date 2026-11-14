@@ -187,6 +187,26 @@ describe('createLimiter', () => {
     expect(order).toEqual(['interactive', 'bulk']);
   });
 
+  it('starts a promoted bulk task before the other queued bulk tasks', async () => {
+    const limit = createLimiter(1);
+    const first = deferred<void>();
+    const order: string[] = [];
+
+    const running = limit('bulk', () => first.promise, 'running');
+    const queued = [
+      limit('bulk', async () => { order.push('a'); }, 'a'),
+      limit('bulk', async () => { order.push('b'); }, 'b'),
+    ];
+    limit.promote('b');
+    // Already started, and unknown: nothing to do.
+    limit.promote('running');
+    limit.promote('missing');
+    first.resolve();
+    await Promise.all([running, ...queued]);
+
+    expect(order).toEqual(['b', 'a']);
+  });
+
   it('frees the slot when a task rejects', async () => {
     const limit = createLimiter(1);
 

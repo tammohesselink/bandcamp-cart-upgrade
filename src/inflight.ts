@@ -44,28 +44,45 @@ export async function mapWithConcurrency<T, R>(
 
 export type Priority = 'interactive' | 'bulk';
 
+export interface Limiter {
+  // `id` lets promote() find the task while it is queued.
+  <R>(priority: Priority, task: () => Promise<R>, id?: string): Promise<R>;
+  // Moves a queued bulk task to the back of the interactive queue, e.g. a
+  // download that someone is now waiting on. Does nothing once it has started.
+  promote(id: string): void;
+}
+
 // Caps how many tasks run at once across every caller. Interactive tasks start
 // before any queued bulk task.
-export function createLimiter(limit: number): <R>(priority: Priority, task: () => Promise<R>) => Promise<R> {
+export function createLimiter(limit: number): Limiter {
   let running = 0;
-  const queues: Record<Priority, Array<() => void>> = { interactive: [], bulk: [] };
+  type Queued = { id?: string; start: () => void };
+  const queues: Record<Priority, Queued[]> = { interactive: [], bulk: [] };
   const startNext = () => {
     if (running >= limit) return;
-    const start = queues.interactive.shift() ?? queues.bulk.shift();
-    if (!start) return;
+    const next = queues.interactive.shift() ?? queues.bulk.shift();
+    if (!next) return;
     running++;
-    start();
+    next.start();
   };
-  return (priority, task) =>
-    new Promise((resolve, reject) => {
-      queues[priority].push(() => {
-        task()
-          .then(resolve, reject)
-          .finally(() => {
-            running--;
-            startNext();
-          });
+  const limiter = <R>(priority: Priority, task: () => Promise<R>, id?: string) =>
+    new Promise<R>((resolve, reject) => {
+      queues[priority].push({
+        id,
+        start: () => {
+          task()
+            .then(resolve, reject)
+            .finally(() => {
+              running--;
+              startNext();
+            });
+        },
       });
       startNext();
     });
+  limiter.promote = (id: string) => {
+    const index = queues.bulk.findIndex((queued) => queued.id === id);
+    if (index !== -1) queues.interactive.push(...queues.bulk.splice(index, 1));
+  };
+  return limiter;
 }

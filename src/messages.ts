@@ -70,7 +70,8 @@ export interface FetchAudioRequest {
   bulk?: boolean;
   // The whole track (up to MAX_WHOLE_AUDIO_BYTES) instead of just its start.
   whole?: boolean;
-  // Lets a CancelAudioRequest with the same ID stop the download.
+  // Lets a CancelAudioRequest with the same ID stop the download, and a
+  // PromoteAudioRequest move it up the queue.
   requestId?: string;
 }
 
@@ -78,6 +79,13 @@ export interface FetchAudioRequest {
 // track for a waveform after skipping to the next track.
 export interface CancelAudioRequest {
   type: 'cancel-audio';
+  requestId: string;
+}
+
+// Moves a bulk fetch-audio download still waiting for its turn ahead of the
+// other bulk ones, e.g. a waveform loading ahead once its track plays.
+export interface PromoteAudioRequest {
+  type: 'promote-audio';
   requestId: string;
 }
 
@@ -99,6 +107,7 @@ export type BcpRequest =
   | OrderHistoryPageRequest
   | FetchAudioRequest
   | CancelAudioRequest
+  | PromoteAudioRequest
   | CartAddRequest
   | CartRemoveRequest
   | WishlistRemoveRequest
@@ -144,6 +153,7 @@ export type BcpResponse = FetchResponse | OrderHistoryPageResponse | FetchAudioR
 export function sendBcpMessage(msg: FetchRequest): Promise<FetchResponse>;
 export function sendBcpMessage(msg: FetchAudioRequest): Promise<FetchAudioResponse>;
 export function sendBcpMessage(msg: CancelAudioRequest): Promise<void>;
+export function sendBcpMessage(msg: PromoteAudioRequest): Promise<void>;
 export function sendBcpMessage(
   msg: CartAddRequest | CartRemoveRequest | WishlistRemoveRequest | OpenIncognitoCheckoutRequest
 ): Promise<CartMutationResponse>;

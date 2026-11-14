@@ -247,6 +247,7 @@ describe('Player preloading upcoming tracks', () => {
       decode: async () => [],
       read: async () => null,
       write: () => {},
+      promoteAudio: () => {},
     });
     loader.setEnabled(true);
     const prefetch = vi.spyOn(loader, 'prefetch');
@@ -260,6 +261,89 @@ describe('Player preloading upcoming tracks', () => {
 
     (player as unknown as { clearPreloaded(): void }).clearPreloaded();
     expect(prefetch.mock.calls.at(-1)![0]).toEqual([]);
+  });
+
+  it('loads the playing track\'s waveform and the ones ahead when "Show a waveform" is turned on while a track plays', async () => {
+    const player = new Player([freshTrack(1), freshTrack(2), freshTrack(3), freshTrack(4)]);
+    const fetchAudio = vi.fn(async (_url: string, _signal: AbortSignal, _bulk: boolean) => ({ error: 'HTTP 500' }));
+    const loader = new WaveformLoader({
+      refreshStream: async () => {},
+      fetchAudio,
+      decode: async () => [],
+      read: async () => null,
+      write: () => {},
+      promoteAudio: () => {},
+    });
+    player.setWaveformLoader(loader);
+    player.jumpTo('cart', 0);
+    await settle();
+    audioOf(player).dispatchEvent(new Event('playing'));
+    await settle();
+    expect(fetchAudio).not.toHaveBeenCalled();
+
+    loader.setEnabled(true);
+    await settle();
+    expect(fetchAudio.mock.calls.map(([url, , bulk]) => [url, bulk])).toEqual([
+      ['https://t4.bcbits.com/stream/track-1-old', false],
+      ['https://t4.bcbits.com/stream/track-2-old', true],
+      ['https://t4.bcbits.com/stream/track-3-old', true],
+    ]);
+  });
+
+  it('tells the waveform loader when playback pauses, also while a link refreshes', async () => {
+    const player = new Player([freshTrack(1), expiredTrack(2)]);
+    const loader = new WaveformLoader({
+      refreshStream: async () => {},
+      fetchAudio: () => new Promise(() => {}),
+      decode: async () => [],
+      read: async () => null,
+      write: () => {},
+      promoteAudio: () => {},
+    });
+    const pause = vi.spyOn(loader, 'pause');
+    player.setWaveformLoader(loader);
+    player.jumpTo('cart', 0);
+    await settle();
+    pause.mockClear();
+    audioOf(player).dispatchEvent(new Event('pause'));
+    expect(pause).toHaveBeenCalledTimes(1);
+
+    // Its link refreshes before it can play, and pausing then fires no
+    // 'pause' event.
+    player.onRefreshStream = () => new Promise(() => {});
+    player.jumpTo('cart', 1);
+    await settle();
+    // Like a browser with no audio loaded: paused, and pausing fires no event.
+    Object.defineProperty(audioOf(player), 'paused', { value: true, configurable: true });
+    vi.spyOn(audioOf(player), 'pause').mockImplementation(() => {});
+    pause.mockClear();
+    player.pause();
+    expect(pause).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives the waveform loader the same tracks ahead when a track plays and once links are refreshed', async () => {
+    const player = new Player([freshTrack(1), expiredTrack(2), freshTrack(3), freshTrack(4)]);
+    refreshWith(player);
+    const loader = new WaveformLoader({
+      refreshStream: async () => {},
+      fetchAudio: () => new Promise(() => {}),
+      decode: async () => [],
+      read: async () => null,
+      write: () => {},
+      promoteAudio: () => {},
+    });
+    const setPlaying = vi.spyOn(loader, 'setPlaying');
+    const prefetch = vi.spyOn(loader, 'prefetch');
+    player.setWaveformLoader(loader);
+    player.jumpTo('cart', 0);
+    await settle();
+    setPlaying.mockClear();
+    prefetch.mockClear();
+
+    audioOf(player).dispatchEvent(new Event('playing'));
+    await settle();
+    expect(setPlaying.mock.calls[0]![1].map((track) => track.trackTitle)).toEqual(['Track 2', 'Track 3']);
+    expect(prefetch.mock.calls.at(-1)![0].map((track) => track.trackTitle)).toEqual(['Track 2', 'Track 3']);
   });
 
   it('plays the next track from its buffered element without refetching its link', async () => {
