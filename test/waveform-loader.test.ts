@@ -127,11 +127,14 @@ describe('WaveformLoader', () => {
     await settle();
     expect(fetchAudio).toHaveBeenCalledTimes(1);
 
-    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + WAVEFORM_RETRY_AFTER_MS + 1);
-    loader.setPlaying(t);
-    await settle();
-    expect(fetchAudio).toHaveBeenCalledTimes(2);
-    vi.restoreAllMocks();
+    try {
+      vi.spyOn(Date, 'now').mockReturnValue(Date.now() + WAVEFORM_RETRY_AFTER_MS + 1);
+      loader.setPlaying(t);
+      await settle();
+      expect(fetchAudio).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
   it('gives up on a track when the stream permission is missing', async () => {
@@ -358,14 +361,15 @@ describe('WaveformLoader', () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(loader.get(b).status).toBe('loading');
       await vi.advanceTimersByTimeAsync(WAVEFORM_DECODE_TIMEOUT_MS);
-      expect(loader.get(a).status).toBe('error');
+      // Still decoding, as far as anyone can tell.
+      expect(loader.get(a).status).toBe('loading');
       expect(loader.get(b).status).toBe('ready');
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it('loads a track ahead again after a retry of the playing track interrupted it, but not after a jump', async () => {
+  it('loads a track ahead again after a retry of the playing track interrupted it, and after a jump only the one that was loading', async () => {
     const calls: { url: string; finish: () => void; fail: () => void }[] = [];
     const fetchAudio = vi.fn((url: string, signal: AbortSignal) =>
       new Promise<{ audioBase64?: string; error?: string }>((resolve) => {
@@ -392,13 +396,16 @@ describe('WaveformLoader', () => {
       await settle();
       expect(calls.map(({ url }) => url)).toEqual([a.streamUrl, b.streamUrl, a.streamUrl, b.streamUrl]);
 
-      // Jumping elsewhere drops it: the player sends what is upcoming from there.
+      // Jumping elsewhere keeps only b, which was loading, until the player
+      // sends what is upcoming from there; c is dropped.
       loader.setPlaying(x);
       await settle();
       calls[4]!.finish();
       await settle();
-      expect(calls.map(({ url }) => url)).toEqual([a.streamUrl, b.streamUrl, a.streamUrl, b.streamUrl, x.streamUrl]);
-      expect(loader.get(b).status).toBe('none');
+      calls[5]!.finish();
+      await settle();
+      expect(calls.map(({ url }) => url)).toEqual([a.streamUrl, b.streamUrl, a.streamUrl, b.streamUrl, x.streamUrl, b.streamUrl]);
+      expect(loader.get(c).status).toBe('none');
     } finally {
       vi.restoreAllMocks();
     }
@@ -550,8 +557,7 @@ describe('WaveformLoader', () => {
 
       loader.setPlaying(a);
       await vi.advanceTimersByTimeAsync(WAVEFORM_DECODE_TIMEOUT_MS);
-      expect(loader.get(a).status).toBe('error');
-      // Its wait is over, but the first decode still runs.
+      expect(loader.get(a).status).toBe('loading');
       await vi.advanceTimersByTimeAsync(WAVEFORM_RETRY_AFTER_MS);
       loader.setPlaying(a);
       await vi.advanceTimersByTimeAsync(0);
@@ -565,6 +571,77 @@ describe('WaveformLoader', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('waits before trying again a decode that fails after timing out', async () => {
+    vi.useFakeTimers();
+    try {
+      let failLate!: () => void;
+      const decode = vi.fn()
+        .mockReturnValueOnce(new Promise<Float32Array[]>((_, reject) => { failLate = () => reject(new Error('Bad audio')); }))
+        .mockResolvedValue([new Float32Array(8000).fill(0.5)]);
+      const { loader, deps } = setup({ decode });
+      const a = track(1);
+
+      loader.setPlaying(a);
+      await vi.advanceTimersByTimeAsync(WAVEFORM_DECODE_TIMEOUT_MS + WAVEFORM_RETRY_AFTER_MS);
+      failLate();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(loader.get(a).status).toBe('error');
+      loader.setPlaying(a);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(deps.fetchAudio).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(WAVEFORM_RETRY_AFTER_MS);
+      loader.setPlaying(a);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(deps.fetchAudio).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('lets a load ahead finish when paused with the playing track due for a retry', async () => {
+    const { calls, fetchAudio } = controlledFetch();
+    const { loader } = setup({ fetchAudio });
+    const [a, b] = [track(1), track(2)];
+    try {
+      loader.setPlaying(a);
+      await settle();
+      calls[0]!.fail();
+      await settle();
+      loader.prefetch([b]);
+      await settle();
+      vi.spyOn(Date, 'now').mockReturnValue(Date.now() + WAVEFORM_RETRY_AFTER_MS + 1);
+      loader.pause();
+      expect(calls[1]!.signal.aborted).toBe(false);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('keeps the download loading ahead after a jump elsewhere, until the player sends what follows', async () => {
+    const { calls, fetchAudio, urls } = controlledFetch();
+    const { loader } = setup({ fetchAudio, read: vi.fn(async (key: string) => (key === trackWaveformKey(track(9)) ? { peaks: new Float32Array([1]), seconds: 60 } : null)) });
+    const [a, b, c, x] = [track(1), track(2), track(3), track(9)];
+
+    loader.setPlaying(a);
+    await settle();
+    calls[0]!.finish();
+    await settle();
+    loader.prefetch([b, c]);
+    await settle();
+    // x's waveform is stored, so nothing is held up and b keeps loading.
+    await loader.loadStored(x);
+    loader.setPlaying(x);
+    await settle();
+    expect(loader.get(x).status).toBe('ready');
+    expect(calls[1]!.signal.aborted).toBe(false);
+    loader.prefetch([a, b]);
+    expect(calls[1]!.signal.aborted).toBe(false);
+    // c wasn't kept: it isn't loaded once b is done unless sent again.
+    calls[1]!.finish();
+    await settle();
+    expect(urls()).toEqual([a.streamUrl, b.streamUrl]);
   });
 
   it('shows no spinner for the playing track while paused', async () => {

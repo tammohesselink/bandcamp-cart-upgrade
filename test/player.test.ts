@@ -290,8 +290,8 @@ describe('Player preloading upcoming tracks', () => {
     ]);
   });
 
-  it('tells the waveform loader when playback pauses', async () => {
-    const player = new Player([freshTrack(1)]);
+  it('tells the waveform loader when playback pauses, also while a link refreshes', async () => {
+    const player = new Player([freshTrack(1), expiredTrack(2)]);
     const loader = new WaveformLoader({
       refreshStream: async () => {},
       fetchAudio: () => new Promise(() => {}),
@@ -307,9 +307,18 @@ describe('Player preloading upcoming tracks', () => {
     pause.mockClear();
     audioOf(player).dispatchEvent(new Event('pause'));
     expect(pause).toHaveBeenCalledTimes(1);
-    // Pausing while a link refreshes stops playback without a 'pause' event.
+
+    // Its link refreshes before it can play, and pausing then fires no
+    // 'pause' event.
+    player.onRefreshStream = () => new Promise(() => {});
+    player.jumpTo('cart', 1);
+    await settle();
+    // Like a browser with no audio loaded: paused, and pausing fires no event.
+    Object.defineProperty(audioOf(player), 'paused', { value: true, configurable: true });
+    vi.spyOn(audioOf(player), 'pause').mockImplementation(() => {});
+    pause.mockClear();
     player.pause();
-    expect(pause).toHaveBeenCalledTimes(2);
+    expect(pause).toHaveBeenCalledTimes(1);
   });
 
   it('plays the next track from its buffered element without refetching its link', async () => {
