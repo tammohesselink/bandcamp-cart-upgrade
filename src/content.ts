@@ -1551,7 +1551,7 @@ async function main() {
 
   // Draws the playing track's waveform in place of the seek bar while "Show a
   // waveform" is on in the popup.
-  const waveformLoader = createWaveformLoader((track) => player.onRefreshStream!(track, false, false));
+  const waveformLoader = createWaveformLoader((track, bulk) => player.onRefreshStream!(track, false, bulk));
   waveformLoader.setEnabled(settings.showWaveform);
   onSettingsChanged((changed) => waveformLoader.setEnabled(changed.showWaveform));
   player.setWaveformLoader(waveformLoader);
