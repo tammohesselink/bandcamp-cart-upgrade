@@ -43,6 +43,10 @@ export const PLAYLIST_LABELS: Record<PlaylistId, string> = {
 // How many upcoming tracks get a fresh stream link and start buffering while
 // the current one plays.
 const PRELOAD_AHEAD = 4;
+// How many upcoming tracks get their waveform loaded before they play, while
+// "Show a waveform" is on. Each is a whole-track download, so fewer than
+// PRELOAD_AHEAD.
+const WAVEFORM_PREFETCH_AHEAD = 2;
 // How long preloading leaves a track alone after its refresh failed.
 const PRELOAD_RETRY_AFTER_MS = 10 * 60 * 1000;
 
@@ -1207,6 +1211,8 @@ export class Player {
     }
     // Their BPMs are ready by the time they play, which "Keep BPM" needs.
     for (const track of upcoming) this.tempoAnalyzer?.analyse(track, { bulk: true });
+    // Their waveforms show as soon as they start.
+    this.waveformLoader?.prefetch(upcoming.slice(0, WAVEFORM_PREFETCH_AHEAD));
 
     const wanted = upcoming
       .filter((t) => !t.unplayable && t.streamUrl && (!this.onRefreshStream || isStreamFresh(t)))

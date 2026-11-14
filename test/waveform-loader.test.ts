@@ -45,7 +45,7 @@ describe('WaveformLoader', () => {
     expect(loader.get(t).status).toBe('loading');
     await settle();
 
-    expect(deps.fetchAudio).toHaveBeenCalledWith(t.streamUrl, expect.any(AbortSignal));
+    expect(deps.fetchAudio).toHaveBeenCalledWith(t.streamUrl, expect.any(AbortSignal), false);
     expect(loader.get(t).status).toBe('ready');
     expect(loader.get(t).waveform!.seconds).toBe(2);
     expect(written.has(trackWaveformKey(t))).toBe(true);
@@ -108,7 +108,7 @@ describe('WaveformLoader', () => {
     const t = track(1, { streamFetchedAt: 0 });
     loader.request(t);
     await settle();
-    expect(deps.refreshStream).toHaveBeenCalledWith(t);
+    expect(deps.refreshStream).toHaveBeenCalledWith(t, false);
     expect(loader.get(t).status).toBe('ready');
   });
 
@@ -164,5 +164,84 @@ describe('WaveformLoader', () => {
     loader.request(t);
     expect(loader.get(t).status).toBe('unavailable');
     expect(deps.read).not.toHaveBeenCalled();
+  });
+  it('loads upcoming tracks after the playing one, as bulk downloads', async () => {
+    const { loader, deps } = setup();
+    const [a, b, c] = [track(1), track(2, { streamFetchedAt: 0 }), track(3)];
+
+    loader.request(a);
+    loader.prefetch([b, c]);
+    await settle();
+
+    expect(vi.mocked(deps.fetchAudio).mock.calls.map(([url, , bulk]) => [url, bulk])).toEqual([
+      [a.streamUrl, false],
+      [b.streamUrl, true],
+      [c.streamUrl, true],
+    ]);
+    expect(deps.refreshStream).toHaveBeenCalledWith(b, true);
+    expect(loader.get(b).status).toBe('ready');
+    expect(loader.get(c).status).toBe('ready');
+
+    // Already loaded: playing them downloads nothing more.
+    loader.request(b);
+    loader.prefetch([c]);
+    await settle();
+    expect(deps.fetchAudio).toHaveBeenCalledTimes(3);
+  });
+
+  it('stops loading ahead for the playing track, and for a track no longer upcoming', async () => {
+    const signals = new Map<string, AbortSignal>();
+    const fetchAudio = vi.fn((url: string, signal: AbortSignal) => {
+      signals.set(url, signal);
+      return new Promise<{ error: string }>((resolve) => signal.addEventListener('abort', () => resolve({ error: 'Cancelled' })));
+    });
+    const { loader } = setup({ fetchAudio });
+    const [a, b, c, d] = [track(1), track(2), track(3), track(4)];
+
+    loader.prefetch([b, c]);
+    await settle();
+    expect([...signals.keys()]).toEqual([b.streamUrl]);
+
+    // Playing another track goes first; what was loading ahead is dropped.
+    loader.request(a);
+    expect(signals.get(b.streamUrl!)!.aborted).toBe(true);
+    await settle();
+    expect(loader.get(b).status).toBe('none');
+    expect(loader.get(a).status).toBe('loading');
+
+    loader.setEnabled(false);
+    loader.setEnabled(true);
+    loader.prefetch([c]);
+    await settle();
+    expect(loader.get(c).status).toBe('loading');
+    loader.prefetch([d]);
+    expect(signals.get(c.streamUrl!)!.aborted).toBe(true);
+    await settle();
+    expect(loader.get(c).status).toBe('none');
+    expect(loader.get(d).status).toBe('loading');
+  });
+
+  it('keeps loading a track ahead when it starts playing', async () => {
+    let finish!: () => void;
+    const signals: AbortSignal[] = [];
+    const fetchAudio = vi.fn((_url: string, signal: AbortSignal) => {
+      signals.push(signal);
+      return new Promise<{ audioBase64: string }>((resolve) => {
+        finish = () => resolve({ audioBase64: bytesToBase64(new Uint8Array([1])) });
+      });
+    });
+    const { loader } = setup({ fetchAudio });
+    const [b, c] = [track(2), track(3)];
+
+    loader.prefetch([b, c]);
+    await settle();
+    loader.request(b);
+    // The player then loads ahead from the new track.
+    loader.prefetch([c]);
+    expect(signals[0]!.aborted).toBe(false);
+    finish();
+    await settle();
+    expect(loader.get(b).status).toBe('ready');
+    expect(fetchAudio).toHaveBeenCalledTimes(2);
   });
 });
