@@ -310,6 +310,7 @@ export class Player {
   setWaveformLoader(loader: WaveformLoader) {
     this.waveformLoader = loader;
     loader.onChange(() => this.scheduleWaveformRender());
+    loader.setPlaybackCheck(() => !this.audio.paused);
     const track = this.currentTrack();
     if (track) void loader.loadStored(track);
     this.renderWaveform();
@@ -1282,7 +1283,10 @@ export class Player {
       // Detected once it plays rather than when cued, so opening a page
       // downloads nothing extra.
       if (this.sourceTrack) this.tempoAnalyzer?.analyse(this.sourceTrack);
-      if (this.sourceTrack) this.waveformLoader?.setPlaying(this.sourceTrack);
+      // The loader refreshes stale links itself; preloadUpcoming narrows this
+      // down once it has refreshed them.
+      const upcoming = this.upcomingTracks().filter((t) => !t.unplayable).slice(0, WAVEFORM_PREFETCH_AHEAD);
+      if (this.sourceTrack) this.waveformLoader?.setPlaying(this.sourceTrack, upcoming);
       void this.preloadUpcoming();
     });
 

@@ -126,11 +126,13 @@ export class WaveformLoader {
   // Tracks whose decode timed out but is still running. Not loaded again
   // until it settles, so two decodes of one track never overlap.
   private lateDecodes = new Set<string>();
-  private playing: PlaylistTrack | null = null;
-  private playingKey: string | null = null;
+  private playing: { track: PlaylistTrack; key: string } | null = null;
   // Whether the playing track is playing rather than paused or stopped. Only
   // then do new loads start, so a tab left paused downloads nothing more.
   private active = false;
+  // Asks the player whether audio is playing, for ways playback stops that
+  // don't call pause().
+  private isAudioPlaying: () => boolean = () => true;
   private upcoming: PlaylistTrack[] = [];
   private running: RunningLoad | null = null;
   private listeners = new Set<() => void>();
@@ -149,8 +151,11 @@ export class WaveformLoader {
   setEnabled(enabled: boolean): void {
     if (this.enabled === enabled) return;
     this.enabled = enabled;
-    // Retry what a refused permission made unavailable.
+    // Retry what a refused permission made unavailable, and a decode that
+    // timed out and still hasn't settled (it may never).
     for (const [key, status] of this.status) if (status === 'unavailable') this.status.delete(key);
+    for (const key of this.lateDecodes) if (this.status.get(key) === 'loading') this.status.delete(key);
+    this.lateDecodes.clear();
     this.schedule(true);
   }
 
@@ -179,22 +184,18 @@ export class WaveformLoader {
     this.notify();
   }
 
-  // The track that started playing, called each time it does. Its waveform
-  // loads before any upcoming one, and a failed one is tried again once its
-  // wait is over. Until the player sends the tracks that follow it, those
-  // after it in the tracks to load ahead stay. After a jump elsewhere only
-  // the one loading ahead stays, as it may well still come up.
-  setPlaying(track: PlaylistTrack): void {
-    const key = trackWaveformKey(track);
-    if (this.playingKey !== key) {
-      const index = this.upcoming.findIndex((upcoming) => trackWaveformKey(upcoming) === key);
-      if (index !== -1) this.upcoming = this.upcoming.slice(index + 1);
-      else this.upcoming = this.running?.prefetch ? [this.running.track] : [];
-    }
-    this.playing = track;
-    this.playingKey = key;
+  // The track that started playing, called each time it does, with the
+  // tracks that play after it (see prefetch). Its waveform loads before any
+  // upcoming one, and a failed one is tried again once its wait is over.
+  setPlaying(track: PlaylistTrack, upcoming: PlaylistTrack[]): void {
+    this.playing = { track, key: trackWaveformKey(track) };
+    this.upcoming = upcoming;
     this.active = true;
     this.schedule();
+  }
+
+  setPlaybackCheck(isAudioPlaying: () => boolean): void {
+    this.isAudioPlaying = isAudioPlaying;
   }
 
   // Playback paused or stopped: nothing new starts until a track plays again.
@@ -207,9 +208,9 @@ export class WaveformLoader {
     this.schedule();
   }
 
-  // The tracks that play next, in order, to load after the playing track.
-  // Replaces the tracks sent before; the download of one no longer among
-  // them stops.
+  // The tracks that play next, in order, to load after the playing track,
+  // once their links have been refreshed. Replaces the tracks sent before;
+  // the download of one no longer among them stops.
   prefetch(tracks: PlaylistTrack[]): void {
     this.upcoming = tracks;
     this.schedule();
@@ -235,7 +236,7 @@ export class WaveformLoader {
       if (wanted.some((entry) => entry.key === key) || !this.needsLoad(track, key, prefetch)) return;
       wanted.push({ track, key, prefetch });
     };
-    if (this.playing && this.playingKey) add(this.playing, this.playingKey, false);
+    if (this.playing) add(this.playing.track, this.playing.key, false);
     for (const track of this.upcoming) add(track, trackWaveformKey(track), true);
     return wanted;
   }
@@ -249,15 +250,16 @@ export class WaveformLoader {
     const wanted = this.wanted();
     const first = wanted[0];
     const running = this.running;
+    const playing = this.active && this.isAudioPlaying();
     if (running) {
-      if (running.key === this.playingKey && running.prefetch) {
+      if (running.key === this.playing?.key && running.prefetch) {
         // Loading ahead when its track started playing: someone is waiting
         // for it now.
         running.prefetch = false;
         this.deps.promoteAudio(running.requestId);
       }
       // Only while it plays: once paused, what is loading finishes.
-      const holdsUpPlaying = this.active && first !== undefined && !first.prefetch && running.key !== first.key;
+      const holdsUpPlaying = playing && first !== undefined && !first.prefetch && running.key !== first.key;
       const stillWanted = wanted.some(({ key }) => key === running.key);
       if (!running.decoding && (holdsUpPlaying || !stillWanted)) {
         running.controller.abort();
@@ -267,7 +269,7 @@ export class WaveformLoader {
     }
     // Only what is running, and the playing track waiting for its turn while
     // it plays (which shows its spinner meanwhile), is loading.
-    const waitingKey = first && !first.prefetch && this.active ? first.key : undefined;
+    const waitingKey = first && !first.prefetch && playing ? first.key : undefined;
     if (waitingKey && this.status.get(waitingKey) !== 'loading') {
       this.status.set(waitingKey, 'loading');
       changed = true;
@@ -278,7 +280,7 @@ export class WaveformLoader {
         changed = true;
       }
     }
-    if (this.running || !first || !this.active) {
+    if (this.running || !first || !playing) {
       if (changed) this.notify();
       return;
     }
