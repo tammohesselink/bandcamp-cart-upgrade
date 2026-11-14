@@ -1250,8 +1250,10 @@ export class Player {
     return tracks.filter((t) => !t.unplayable && t.streamUrl && (!this.onRefreshStream || isStreamFresh(t)));
   }
 
+  // The loader refreshes stale links itself, so unlike buffering these needn't
+  // have a fresh one.
   private waveformPrefetchTracks(): PlaylistTrack[] {
-    return this.streamableTracks(this.upcomingTracks()).slice(0, WAVEFORM_PREFETCH_AHEAD);
+    return this.upcomingTracks().filter((t) => !t.unplayable).slice(0, WAVEFORM_PREFETCH_AHEAD);
   }
 
   private upcomingTracks(): PlaylistTrack[] {

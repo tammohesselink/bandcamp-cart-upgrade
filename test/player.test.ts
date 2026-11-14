@@ -263,7 +263,8 @@ describe('Player preloading upcoming tracks', () => {
   });
 
   it('loads the waveforms ahead when "Show a waveform" is turned on while a track plays', async () => {
-    const player = new Player([freshTrack(1), freshTrack(2), freshTrack(3), freshTrack(4)]);
+    // The loader refreshes an old link itself, so that track isn't skipped.
+    const player = new Player([freshTrack(1), expiredTrack(2), freshTrack(3), freshTrack(4)]);
     const loader = new WaveformLoader({
       refreshStream: async () => {},
       fetchAudio: () => new Promise(() => {}),
