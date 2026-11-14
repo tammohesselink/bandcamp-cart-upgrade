@@ -310,10 +310,16 @@ export class Player {
   setWaveformLoader(loader: WaveformLoader) {
     this.waveformLoader = loader;
     loader.onChange(() => this.scheduleWaveformRender());
-    // Turned on while a track plays: load it now rather than at the next track.
+    // Turned on while a track plays: load it, and the next ones ahead, now
+    // rather than at the next track.
+    let wasEnabled = loader.isEnabled;
     loader.onChange(() => {
+      const turnedOn = loader.isEnabled && !wasEnabled;
+      wasEnabled = loader.isEnabled;
       const track = this.currentTrack();
-      if (track && loader.isEnabled && !this.audio.paused) loader.request(track);
+      if (!track || !loader.isEnabled || this.audio.paused) return;
+      loader.request(track);
+      if (turnedOn) loader.prefetch(this.waveformPrefetchTracks());
     });
     const track = this.currentTrack();
     if (track) void loader.loadStored(track);
@@ -1212,9 +1218,7 @@ export class Player {
     // Their BPMs are ready by the time they play, which "Keep BPM" needs.
     for (const track of upcoming) this.tempoAnalyzer?.analyse(track, { bulk: true });
 
-    // Only tracks with a working link: one whose refresh just failed is left
-    // alone, like its buffering.
-    const streamable = upcoming.filter((t) => !t.unplayable && t.streamUrl && (!this.onRefreshStream || isStreamFresh(t)));
+    const streamable = this.streamableTracks(upcoming);
     // Their waveforms show as soon as they start.
     this.waveformLoader?.prefetch(streamable.slice(0, WAVEFORM_PREFETCH_AHEAD));
 
@@ -1238,6 +1242,16 @@ export class Player {
     this.waveformLoader?.prefetch([]);
     for (const standby of this.preloaded.values()) unloadAudio(standby);
     this.preloaded.clear();
+  }
+
+  // Only tracks with a working link: one whose refresh just failed is left
+  // alone, like its buffering.
+  private streamableTracks(tracks: PlaylistTrack[]): PlaylistTrack[] {
+    return tracks.filter((t) => !t.unplayable && t.streamUrl && (!this.onRefreshStream || isStreamFresh(t)));
+  }
+
+  private waveformPrefetchTracks(): PlaylistTrack[] {
+    return this.streamableTracks(this.upcomingTracks()).slice(0, WAVEFORM_PREFETCH_AHEAD);
   }
 
   private upcomingTracks(): PlaylistTrack[] {
