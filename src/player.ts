@@ -1210,11 +1210,9 @@ export class Player {
     // Their BPMs are ready by the time they play, which "Keep BPM" needs.
     for (const track of upcoming) this.tempoAnalyzer?.analyse(track, { bulk: true });
 
-    // Only tracks with a working link: one whose refresh just failed is left
-    // alone, like its buffering.
-    const streamable = upcoming.filter((t) => !t.unplayable && t.streamUrl && (!this.onRefreshStream || isStreamFresh(t)));
+    const streamable = this.streamableTracks(upcoming);
     // Their waveforms show as soon as they start.
-    this.waveformLoader?.prefetch(streamable.slice(0, WAVEFORM_PREFETCH_AHEAD));
+    this.waveformLoader?.prefetch(this.waveformAheadTracks(upcoming));
 
     const wanted = streamable.map((t) => t.streamUrl!);
     for (const [url, standby] of this.preloaded) {
@@ -1236,6 +1234,19 @@ export class Player {
     this.waveformLoader?.prefetch([]);
     for (const standby of this.preloaded.values()) unloadAudio(standby);
     this.preloaded.clear();
+  }
+
+  // Only tracks with a working link: one whose refresh just failed is left
+  // alone, like its buffering.
+  private streamableTracks(tracks: PlaylistTrack[]): PlaylistTrack[] {
+    return tracks.filter((track) => !track.unplayable && track.streamUrl && (!this.onRefreshStream || isStreamFresh(track)));
+  }
+
+  // The upcoming tracks whose waveforms load ahead. The same list whenever a
+  // track plays and once links are refreshed, so the loader keeps what it is
+  // loading rather than switching between two lists.
+  private waveformAheadTracks(upcoming: PlaylistTrack[]): PlaylistTrack[] {
+    return this.streamableTracks(upcoming).slice(0, WAVEFORM_PREFETCH_AHEAD);
   }
 
   private upcomingTracks(): PlaylistTrack[] {
@@ -1283,10 +1294,8 @@ export class Player {
       // Detected once it plays rather than when cued, so opening a page
       // downloads nothing extra.
       if (this.sourceTrack) this.tempoAnalyzer?.analyse(this.sourceTrack);
-      // The loader refreshes stale links itself; preloadUpcoming narrows this
-      // down once it has refreshed them.
-      const upcoming = this.upcomingTracks().filter((t) => !t.unplayable).slice(0, WAVEFORM_PREFETCH_AHEAD);
-      if (this.sourceTrack) this.waveformLoader?.setPlaying(this.sourceTrack, upcoming);
+      // Those with a stale link join once preloadUpcoming has refreshed them.
+      if (this.sourceTrack) this.waveformLoader?.setPlaying(this.sourceTrack, this.waveformAheadTracks(this.upcomingTracks()));
       void this.preloadUpcoming();
     });
 

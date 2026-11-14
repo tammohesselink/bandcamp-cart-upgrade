@@ -79,12 +79,12 @@ function untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
   });
 }
 
-function withTimeout<T>(promise: Promise<T>, milliseconds: number): Promise<T> {
+function decodeWithTimeout(decoding: Promise<Float32Array[]>): Promise<Float32Array[]> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new DecodeTimedOut('The decode timed out')), milliseconds);
+    timer = setTimeout(() => reject(new DecodeTimedOut('The decode timed out')), WAVEFORM_DECODE_TIMEOUT_MS);
   });
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+  return Promise.race([decoding, timeout]).finally(() => clearTimeout(timer));
 }
 
 interface WantedLoad {
@@ -102,6 +102,8 @@ interface RunningLoad {
   // bulk.
   prefetch: boolean;
   controller: AbortController;
+  // Its download has been sent, so it may be waiting in the background's queue.
+  fetching: boolean;
   // Decoding a whole track takes a lot of memory and can't be stopped, so a
   // decoding load is never stopped: it finishes and its waveform is kept.
   decoding: boolean;
@@ -123,9 +125,10 @@ export class WaveformLoader {
   // Tracks whose last failure was while loading ahead. Playing one tries it
   // again straight away, as a download the user is waiting on.
   private failedAhead = new Set<string>();
-  // Tracks whose decode timed out but is still running. Not loaded again
-  // until it settles, so two decodes of one track never overlap.
-  private lateDecodes = new Set<string>();
+  // Tracks whose decode timed out but is still running, each with a token for
+  // that decode. Not loaded again until it settles, so two decodes of one
+  // track never overlap.
+  private lateDecodes = new Map<string, object>();
   private playing: { track: PlaylistTrack; key: string } | null = null;
   // Whether the playing track is playing rather than paused or stopped. Only
   // then do new loads start, so a tab left paused downloads nothing more.
@@ -154,7 +157,7 @@ export class WaveformLoader {
     // Retry what a refused permission made unavailable, and a decode that
     // timed out and still hasn't settled (it may never).
     for (const [key, status] of this.status) if (status === 'unavailable') this.status.delete(key);
-    for (const key of this.lateDecodes) if (this.status.get(key) === 'loading') this.status.delete(key);
+    for (const key of this.lateDecodes.keys()) if (this.status.get(key) === 'loading') this.status.delete(key);
     this.lateDecodes.clear();
     this.schedule(true);
   }
@@ -254,9 +257,9 @@ export class WaveformLoader {
     if (running) {
       if (running.key === this.playing?.key && running.prefetch) {
         // Loading ahead when its track started playing: someone is waiting
-        // for it now.
+        // for it now. A download not sent yet goes out as one they wait on.
         running.prefetch = false;
-        this.deps.promoteAudio(running.requestId);
+        if (running.fetching) this.deps.promoteAudio(running.requestId);
       }
       // Only while it plays: once paused, what is loading finishes.
       const holdsUpPlaying = playing && first !== undefined && !first.prefetch && running.key !== first.key;
@@ -290,6 +293,7 @@ export class WaveformLoader {
       requestId: `waveform-${crypto.randomUUID()}`,
       prefetch: first.prefetch,
       controller: new AbortController(),
+      fetching: false,
       decoding: false,
     };
     this.running = load;
@@ -332,7 +336,9 @@ export class WaveformLoader {
         this.status.set(key, 'unavailable');
         return;
       }
+      load.fetching = true;
       const response = await untilAborted(this.deps.fetchAudio(track.streamUrl, signal, load.prefetch, load.requestId), signal);
+      load.fetching = false;
       check();
       if (response.noPermission) {
         this.status.set(key, 'unavailable');
@@ -343,16 +349,17 @@ export class WaveformLoader {
       load.decoding = true;
       const decoding = this.deps.decode(base64ToBytes(response.audioBase64));
       try {
-        this.keepWaveform(key, await withTimeout(decoding, WAVEFORM_DECODE_TIMEOUT_MS));
-      } catch (err) {
-        if (!(err instanceof DecodeTimedOut)) throw err;
+        this.keepWaveform(key, await decodeWithTimeout(decoding));
+      } catch (error) {
+        if (!(error instanceof DecodeTimedOut)) throw error;
         // Still decoding: it stays loading, and no longer holds up the rest.
         this.awaitLateDecode(track, key, decoding);
       }
-    } catch (err) {
-      // No longer wanted: schedule() has already cleared its status.
-      if (err instanceof Superseded) return;
-      log.warn('[bcp] Could not get the audio for the waveform of', track.trackTitle, err);
+    } catch (error) {
+      // No longer wanted: schedule() has already cleared its status. A step
+      // can fail just as it is stopped; that is no failure of the track.
+      if (error instanceof Superseded || signal.aborted) return;
+      log.warn('[bcp] Could not get the audio for the waveform of', track.trackTitle, error);
       this.fail(key, load.prefetch);
     }
   }
@@ -367,15 +374,22 @@ export class WaveformLoader {
   // Keeps the waveform of a decode that finishes after timing out. One that
   // fails then counts as failed from then, while playing, so it waits before
   // being tried again.
+  // Ignored once turning waveforms off and on has given up on it.
   private awaitLateDecode(track: PlaylistTrack, key: string, decoding: Promise<Float32Array[]>): void {
-    this.lateDecodes.add(key);
+    const token = {};
+    this.lateDecodes.set(key, token);
+    const current = () => this.lateDecodes.get(key) === token;
     decoding
-      .then((channels) => this.keepWaveform(key, channels))
-      .catch((err: unknown) => {
-        log.warn('[bcp] Could not get the audio for the waveform of', track.trackTitle, err);
+      .then((channels) => {
+        if (current()) this.keepWaveform(key, channels);
+      })
+      .catch((error: unknown) => {
+        if (!current()) return;
+        log.warn('[bcp] Could not get the audio for the waveform of', track.trackTitle, error);
         this.fail(key, false);
       })
       .finally(() => {
+        if (!current()) return;
         this.lateDecodes.delete(key);
         this.schedule(true);
       });

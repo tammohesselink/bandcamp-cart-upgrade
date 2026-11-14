@@ -664,6 +664,52 @@ describe('WaveformLoader', () => {
     }
   });
 
+  it('ignores a hung decode that settles after turning waveforms off and on retried the track', async () => {
+    vi.useFakeTimers();
+    try {
+      let failFirst!: () => void;
+      let finishSecond!: () => void;
+      const decode = vi.fn()
+        .mockReturnValueOnce(new Promise<Float32Array[]>((_, reject) => { failFirst = () => reject(new Error('Bad audio')); }))
+        .mockReturnValueOnce(new Promise<Float32Array[]>((resolve) => { finishSecond = () => resolve([new Float32Array(8000).fill(0.5)]); }));
+      const { loader } = setup({ decode });
+      const a = track(1);
+
+      loader.setPlaying(a, []);
+      await vi.advanceTimersByTimeAsync(WAVEFORM_DECODE_TIMEOUT_MS);
+      loader.setEnabled(false);
+      loader.setEnabled(true);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(decode).toHaveBeenCalledTimes(2);
+      failFirst();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(loader.get(a).status).toBe('loading');
+      finishSecond();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(loader.get(a).status).toBe('ready');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('promotes only a download that has been sent', async () => {
+    let finishRead!: () => void;
+    const read = vi.fn((key: string) => (key === trackWaveformKey(track(2))
+      ? new Promise<null>((resolve) => { finishRead = () => resolve(null); })
+      : Promise.resolve(null)));
+    const { loader, deps } = setup({ read });
+    const b = track(2);
+
+    loader.prefetch([b]);
+    await settle();
+    loader.setPlaying(b, []);
+    expect(deps.promoteAudio).not.toHaveBeenCalled();
+    finishRead();
+    await settle();
+    // Sent as one the user waits on instead.
+    expect(vi.mocked(deps.fetchAudio).mock.calls.map(([, , bulk]) => bulk)).toEqual([false]);
+  });
+
   it('shows no spinner for the playing track while paused', async () => {
     const { decode, finish } = controlledDecode();
     const { loader } = setup({ decode });

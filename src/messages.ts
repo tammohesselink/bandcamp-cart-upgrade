@@ -70,7 +70,8 @@ export interface FetchAudioRequest {
   bulk?: boolean;
   // The whole track (up to MAX_WHOLE_AUDIO_BYTES) instead of just its start.
   whole?: boolean;
-  // Lets a CancelAudioRequest with the same ID stop the download.
+  // Lets a CancelAudioRequest with the same ID stop the download, and a
+  // PromoteAudioRequest move it up the queue.
   requestId?: string;
 }
 
