@@ -74,3 +74,33 @@ jobs:
         run: |
           git tag "v$VERSION"
           git push origin "v$VERSION"
+
+  publish-firefox:
+    needs: check-version
+    if: needs.check-version.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - run: npm ci
+
+      - run: make typecheck
+
+      - run: make lint
+
+      - run: make test
+
+      - run: make lint-firefox
+
+      # Submits the version for review and returns without waiting for it: it goes
+      # live on addons.mozilla.org once Mozilla approves it.
+      - name: Upload to addons.mozilla.org and submit for review
+        env:
+          WEB_EXT_API_KEY: ${{ secrets.AMO_JWT_ISSUER }}
+          WEB_EXT_API_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+        run: make publish-firefox

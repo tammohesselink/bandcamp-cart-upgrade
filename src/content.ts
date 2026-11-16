@@ -20,6 +20,7 @@ import { addSnapshotIfChanged, loadSnapshots, saveSnapshots } from './cart-histo
 import { openCartHistoryModal } from './cart-history-modal';
 import { createNamedCart, deleteNamedCart, countItemsInNamedCart, setItemsInNamedCart, partitionByCart } from './named-carts';
 import { normalizeUrl } from './url';
+import { isFirefox } from './browser';
 import { ensureModalStyles } from './styles';
 import {
   readCache,
@@ -838,6 +839,15 @@ function showRemovePurchasedConfirm(items: SavedCartItem[]): Promise<boolean> {
 // Resolves each item's release page and opens a private-window checkout
 // containing exactly `items`. The real cart is left as is.
 async function checkoutInPrivateWindow(player: Player | null, items: SavedCartItem[]): Promise<boolean> {
+  // Firefox doesn't support "incognito": "split", so it never runs the extension
+  // in private windows. Allowing that instead ("spanning") wouldn't help: the
+  // cart requests go through the background page, which uses the normal
+  // window's cookies, so they would fill the real cart instead of the private one.
+  if (isFirefox()) {
+    alert('Checking out a named cart in a private window is not available in Firefox.');
+    return false;
+  }
+
   // Without incognito access the private window still opens, but nothing runs
   // in it to build the cart. A pop-up rather than a toast: it needs action.
   const { allowed } = await sendBcpMessage({ type: 'incognito-access' });
