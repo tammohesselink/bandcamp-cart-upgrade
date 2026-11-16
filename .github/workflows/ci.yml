@@ -21,3 +21,5 @@ jobs:
       - run: make lint
 
       - run: make test
+
+      - run: make lint-firefox
