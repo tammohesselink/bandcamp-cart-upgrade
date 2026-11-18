@@ -212,7 +212,7 @@ function preloadedOf(player: Player): Map<string, HTMLAudioElement> {
 }
 
 describe('Player preloading upcoming tracks', () => {
-  it('refreshes the links of the next four playable tracks and buffers them while a track plays', async () => {
+  it('refreshes the links of the next eight playable tracks and buffers them while a track plays', async () => {
     const player = new Player([
       freshTrack(1),
       expiredTrack(2),
@@ -221,6 +221,10 @@ describe('Player preloading upcoming tracks', () => {
       expiredTrack(5),
       freshTrack(6),
       freshTrack(7),
+      freshTrack(8),
+      freshTrack(9),
+      freshTrack(10),
+      freshTrack(11),
     ]);
     const refresh = refreshWith(player);
     player.jumpTo('cart', 0);
@@ -235,6 +239,10 @@ describe('Player preloading upcoming tracks', () => {
       'https://t4.bcbits.com/stream/track-4-old',
       'https://t4.bcbits.com/stream/track-5-new',
       'https://t4.bcbits.com/stream/track-6-old',
+      'https://t4.bcbits.com/stream/track-7-old',
+      'https://t4.bcbits.com/stream/track-8-old',
+      'https://t4.bcbits.com/stream/track-9-old',
+      'https://t4.bcbits.com/stream/track-10-old',
     ]);
     expect(preloadedOf(player).get('https://t4.bcbits.com/stream/track-2-new')!.preload).toBe('auto');
   });
@@ -1030,6 +1038,7 @@ describe('Player reverse order', () => {
       'https://t4.bcbits.com/stream/track-4-old',
       'https://t4.bcbits.com/stream/track-5-old',
       'https://t4.bcbits.com/stream/track-1-old',
+      'https://t4.bcbits.com/stream/track-2-old',
     ]);
   });
 

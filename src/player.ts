@@ -42,7 +42,7 @@ export const PLAYLIST_LABELS: Record<PlaylistId, string> = {
 
 // How many upcoming tracks get a fresh stream link and start buffering while
 // the current one plays.
-const PRELOAD_AHEAD = 4;
+const PRELOAD_AHEAD = 8;
 // How many upcoming tracks get their waveform loaded before they play, while
 // "Show a waveform" is on. Each is a whole-track download, so fewer than
 // PRELOAD_AHEAD.
