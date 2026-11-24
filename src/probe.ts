@@ -132,22 +132,26 @@ export function injectCheckoutCartButton(namedCartCount: number, enabled: boolea
   return button;
 }
 
-// Always-available button that lets the fan check the cart against Bandcamp's
-// own ownership state. Covers items bought through a private-window checkout,
-// whether the extension opened it or the fan checked out the same cart in a
-// separate anonymous/incognito window themselves.
-export function injectRemoveAlreadyOwnedButton(): HTMLButtonElement | null {
+// Button that lets the fan check the cart against Bandcamp's own ownership
+// state. Covers items bought through a private-window checkout, whether the
+// extension opened it or the fan checked out the same cart in a separate
+// anonymous/incognito window themselves. Hidden while the cart is empty.
+export function injectRemoveAlreadyOwnedButton(cartItemCount: number): HTMLButtonElement | null {
   const anchor = document.getElementById('sidecart')
     ?? document.querySelector('#sidecartReveal')
     ?? document.getElementById('sidecartBody');
   if (!anchor) return null;
 
   const existing = document.querySelector<HTMLButtonElement>('.bcp-remove-owned-btn');
-  if (existing) return existing;
+  if (existing) {
+    existing.hidden = cartItemCount === 0;
+    return existing;
+  }
 
   const button = document.createElement('button');
   button.className = 'bcp-remove-owned-btn';
   button.textContent = 'Remove purchased items from cart';
+  button.hidden = cartItemCount === 0;
   anchor.insertAdjacentElement('afterend', button);
   return button;
 }

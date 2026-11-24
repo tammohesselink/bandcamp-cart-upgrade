@@ -902,8 +902,16 @@ async function isCartItemOwned(item: CartItem): Promise<boolean | null> {
 // whichever ones the fan already owns — e.g. items bought through a
 // private-window checkout, whether or not the extension opened it.
 function setupRemoveAlreadyOwnedButton(): void {
-  const btn = injectRemoveAlreadyOwnedButton();
+  const btn = injectRemoveAlreadyOwnedButton(probeCart().length);
   if (!btn) return;
+  // Items can be added to or removed from the sidecart without a reload. Its
+  // own observer, as the player's sidecart observer isn't set up on every page.
+  const sidecartBody = document.querySelector<HTMLElement>(SEL_SIDECART_BODY);
+  if (sidecartBody) {
+    const observer = new MutationObserver(() => injectRemoveAlreadyOwnedButton(probeCart().length));
+    observer.observe(sidecartBody, { childList: true, subtree: true });
+    window.addEventListener('pagehide', () => observer.disconnect(), { once: true });
+  }
   const idleLabel = btn.textContent ?? 'Remove purchased items from cart';
   const reset = () => {
     btn.disabled = false;

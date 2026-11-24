@@ -1394,7 +1394,8 @@ export const MODAL_CSS = `
     cursor: default;
   }
 
-  .bcp-checkout-cart-btn[hidden] {
+  .bcp-checkout-cart-btn[hidden],
+  .bcp-remove-owned-btn[hidden] {
     display: none;
   }
 `;
