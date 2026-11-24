@@ -521,26 +521,39 @@ describe('injectRemoveAlreadyOwnedButton — with #sidecart', () => {
   beforeEach(() => loadFixture('sidecart-with-data-cart.html'));
 
   it('returns a button element', () => {
-    const btn = injectRemoveAlreadyOwnedButton();
+    const btn = injectRemoveAlreadyOwnedButton(2);
     expect(btn?.tagName).toBe('BUTTON');
   });
 
   it('button has bcp-remove-owned-btn class', () => {
-    const btn = injectRemoveAlreadyOwnedButton();
+    const btn = injectRemoveAlreadyOwnedButton(2);
     expect(btn?.classList.contains('bcp-remove-owned-btn')).toBe(true);
   });
 
   it('button is inserted after #sidecart', () => {
-    const btn = injectRemoveAlreadyOwnedButton();
+    const btn = injectRemoveAlreadyOwnedButton(2);
     const sidecart = document.getElementById('sidecart')!;
     expect(sidecart.nextElementSibling).toBe(btn);
   });
 
   it('does not double-inject', () => {
-    injectRemoveAlreadyOwnedButton();
-    injectRemoveAlreadyOwnedButton();
+    injectRemoveAlreadyOwnedButton(2);
+    injectRemoveAlreadyOwnedButton(2);
     const btns = document.querySelectorAll('.bcp-remove-owned-btn');
     expect(btns).toHaveLength(1);
+  });
+
+  it('is shown when the cart has items', () => {
+    expect(injectRemoveAlreadyOwnedButton(2)?.hidden).toBe(false);
+  });
+
+  it('is hidden when the cart is empty', () => {
+    expect(injectRemoveAlreadyOwnedButton(0)?.hidden).toBe(true);
+  });
+
+  it('shows the existing button again once items are added', () => {
+    injectRemoveAlreadyOwnedButton(0);
+    expect(injectRemoveAlreadyOwnedButton(1)?.hidden).toBe(false);
   });
 });
 
@@ -550,7 +563,7 @@ describe('injectRemoveAlreadyOwnedButton — no sidecart anchor', () => {
   });
 
   it('returns null when #sidecart, #sidecartReveal and #sidecartBody are absent', () => {
-    expect(injectRemoveAlreadyOwnedButton()).toBeNull();
+    expect(injectRemoveAlreadyOwnedButton(2)).toBeNull();
   });
 });
 
