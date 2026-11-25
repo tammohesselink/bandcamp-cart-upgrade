@@ -1,5 +1,6 @@
 import type { PlaylistTrack } from './types';
 import { normalizeUrl } from './url';
+import { WAVEFORM_KEY_FAMILY, WAVEFORM_KEY_PREFIX } from './waveform';
 
 export const CACHE_KEY_PREFIX = 'bcp_tracks_v7_';
 
@@ -82,12 +83,15 @@ export function writeCache(url: string, tracks: PlaylistTrack[]): void {
   chrome.storage.local.set({ [cacheKey(url)]: entry }).catch(() => {});
 }
 
-// Removes expired entries and entries from older cache versions. Entries are
-// otherwise only dropped when read, and a label page visited once never is.
+// Removes expired entries and entries from older cache versions, and
+// waveforms stored by an older version. Entries are otherwise only dropped
+// when read, and a label page visited once never is.
 export async function pruneTrackCache(): Promise<void> {
   try {
     const all = await chrome.storage.local.get(null);
     const keys = Object.keys(all).filter((key) => {
+      // Waveforms drawn by an older version of computeWaveform.
+      if (key.startsWith(WAVEFORM_KEY_FAMILY)) return !key.startsWith(WAVEFORM_KEY_PREFIX);
       if (!key.startsWith('bcp_tracks_')) return false;
       if (!key.startsWith(CACHE_KEY_PREFIX)) return true;
       return !isCacheEntryUsable(all[key] as CacheEntry, TRACK_DETAILS_MAX_AGE_MS);

@@ -6,6 +6,7 @@ import { isStreamFresh } from './cache';
 import { decodeAudioChannels } from './audio-decode';
 import { trackStorageId } from './tempo-store';
 import {
+  WAVEFORM_KEY_PREFIX,
   WAVEFORM_SAMPLE_RATE,
   computeWaveform,
   decodeWaveform,
@@ -16,8 +17,9 @@ import {
 import { log } from './log';
 
 // Waveforms, one entry per track. A track's audio never changes, so entries
-// don't expire.
-export const WAVEFORM_KEY_PREFIX = 'bcp_waveform_v1_';
+// don't expire; they are only dropped when computeWaveform changes and the
+// prefix is bumped (see pruneTrackCache).
+export { WAVEFORM_KEY_PREFIX };
 
 export function trackWaveformKey(track: Pick<PlaylistTrack, 'trackId' | 'pageUrl' | 'trackTitle'>): string {
   return `${WAVEFORM_KEY_PREFIX}${trackStorageId(track)}`;

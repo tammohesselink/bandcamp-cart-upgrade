@@ -14,16 +14,35 @@ export const WAVEFORM_PEAK_COUNT = 1200;
 
 export interface Waveform {
   // Loudness of equal stretches of the audio, from 0 (silence) to 1 (the
-  // loudest stretch of the track).
+  // loudest stretch of the track), with each track's contrast evened out (see
+  // computeWaveform).
   peaks: Float32Array;
   // How many seconds of audio the peaks cover. Less than the track's length
   // when only its start could be downloaded (a long mix).
   seconds: number;
 }
 
-// The loudest sample of each of `count` equal stretches of the audio, over
-// all its channels, scaled so the loudest stretch is 1. Reads the channels as
+// Stored waveforms are kept under keys starting with this. Bumped whenever
+// computeWaveform changes what a peak means, so older ones are drawn again
+// (and the old entries pruned, see pruneTrackCache).
+export const WAVEFORM_KEY_FAMILY = 'bcp_waveform_';
+export const WAVEFORM_KEY_PREFIX = `${WAVEFORM_KEY_FAMILY}v2_`;
+
+// How high the bar of a stretch of typical loudness (the track's median) is
+// drawn, from 0 to 1. See computeWaveform.
+export const WAVEFORM_TYPICAL_HEIGHT = 0.6;
+
+// How loud each of `count` equal stretches of the audio is, over all its
+// channels, from 0 (silence) to 1 (the loudest stretch). Reads the channels as
 // decoded, so a long mix isn't copied once more to mix it down.
+//
+// Loudness is the stretch's RMS rather than its loudest sample: mastered music
+// hits close to full scale in almost every stretch, so loudest samples draw a
+// flat bar. RMS alone still varies only a little in a heavily compressed
+// track, and a lot in a quiet, dynamic one, so each track's values are then
+// raised to the power that puts its median at WAVEFORM_TYPICAL_HEIGHT: small
+// differences in a loud master are stretched out, and the quiet parts of a
+// dynamic track are lifted so they don't vanish.
 export function computeWaveform(channels: Float32Array[], sampleRate: number, count = WAVEFORM_PEAK_COUNT): Waveform {
   const peaks = new Float32Array(count);
   const length = channels.length > 0 ? Math.min(...channels.map((channel) => channel.length)) : 0;
@@ -32,18 +51,46 @@ export function computeWaveform(channels: Float32Array[], sampleRate: number, co
   for (let i = 0; i < count; i++) {
     const from = Math.floor((i * length) / count);
     const to = Math.min(length, Math.max(from + 1, Math.floor(((i + 1) * length) / count)));
-    let peak = 0;
+    let sumOfSquares = 0;
     for (const channel of channels) {
       for (let j = from; j < to; j++) {
-        const value = Math.abs(channel[j]!);
-        if (value > peak) peak = value;
+        const value = channel[j]!;
+        sumOfSquares += value * value;
       }
     }
-    peaks[i] = peak;
-    if (peak > loudest) loudest = peak;
+    const rms = Math.sqrt(sumOfSquares / ((to - from) * channels.length));
+    peaks[i] = rms;
+    if (rms > loudest) loudest = rms;
   }
-  if (loudest > 0) for (let i = 0; i < count; i++) peaks[i] = peaks[i]! / loudest;
+  if (loudest === 0) return { peaks, seconds: length / sampleRate };
+  for (let i = 0; i < count; i++) peaks[i] = peaks[i]! / loudest;
+  const exponent = contrastExponent(peaks);
+  for (let i = 0; i < count; i++) peaks[i] = Math.pow(peaks[i]!, exponent);
   return { peaks, seconds: length / sampleRate };
+}
+
+// Stretches quieter than this (relative to the loudest, -60 dB) are left out
+// of the median: a silent intro, outro or gap shouldn't count as the track's
+// typical loudness. Only silence: a quiet track with one loud moment still
+// takes its typical loudness from the quiet part, and so is lifted.
+const SILENT = 0.001;
+// Bounds on the exponent, so a track of near equal loudness throughout isn't
+// stretched into noise, and a mostly quiet one isn't lifted to the top.
+const MIN_EXPONENT = 0.5;
+const MAX_EXPONENT = 6;
+
+// The power that takes the median of the non-silent `levels` (0 to 1, the
+// loudest being 1) to WAVEFORM_TYPICAL_HEIGHT.
+function contrastExponent(levels: Float32Array): number {
+  const heard = Array.from(levels).filter((level) => level >= SILENT).sort((a, b) => a - b);
+  if (heard.length === 0) return 1;
+  const middle = heard.length / 2;
+  const median = heard.length % 2 === 1 ? heard[Math.floor(middle)]! : (heard[middle - 1]! + heard[middle]!) / 2;
+  // Most of the track is as loud as its loudest stretch: no typical level
+  // below the top to aim for, so the levels are drawn as they are.
+  if (median >= 1) return 1;
+  const exponent = Math.log(WAVEFORM_TYPICAL_HEIGHT) / Math.log(median);
+  return Math.max(MIN_EXPONENT, Math.min(MAX_EXPONENT, exponent));
 }
 
 // The height of each of `barCount` bars drawn across a track `duration`

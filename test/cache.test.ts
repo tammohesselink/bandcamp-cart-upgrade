@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
+import { WAVEFORM_KEY_PREFIX } from '../src/waveform';
 import {
+  pruneTrackCache,
   isCacheEntryUsable,
   isStreamFresh,
   needsPlayabilityRecheck,
@@ -115,5 +117,27 @@ describe('needsPlayabilityRecheck', () => {
     },
   ])('$name', ({ tracks, ageMs, expected }) => {
     expect(needsPlayabilityRecheck({ tracks, cachedAt: NOW - ageMs }, NOW)).toBe(expected);
+  });
+});
+
+describe('pruneTrackCache', () => {
+  it('removes waveforms stored by an older version and keeps current ones', async () => {
+    const stored: Record<string, unknown> = {
+      bcp_waveform_v1_track: { peaks: 'AA==', seconds: 1 },
+      [`${WAVEFORM_KEY_PREFIX}track`]: { peaks: 'AA==', seconds: 1 },
+      bcp_settings: { debugLogging: false },
+    };
+    (globalThis as unknown as { chrome: unknown }).chrome = {
+      storage: {
+        local: {
+          get: async () => ({ ...stored }),
+          remove: async (keys: string[]) => {
+            for (const key of keys) delete stored[key];
+          },
+        },
+      },
+    };
+    await pruneTrackCache();
+    expect(Object.keys(stored).sort()).toEqual([`${WAVEFORM_KEY_PREFIX}track`, 'bcp_settings'].sort());
   });
 });
