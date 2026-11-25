@@ -1,6 +1,6 @@
 # Bandcamp Cart Player
 
-A Chrome extension that embeds a persistent playlist player into your Bandcamp cart and label pages.
+A Chrome and Firefox extension that embeds a persistent playlist player into your Bandcamp cart and label pages.
 
 ## Features
 
@@ -34,26 +34,49 @@ make test         # run tests
 make lint         # lint
 make typecheck    # type-check
 make zip          # build and package as bandcamp-cart-player.zip
+make lint-firefox # check the build against addons.mozilla.org's rules
+make run-firefox  # open a temporary Firefox profile with the extension loaded
 ```
 
-Built output goes to `dist/`. To load the extension in Chrome: open `chrome://extensions`, enable Developer Mode, click "Load unpacked", and select the `dist/` folder.
+Built output goes to `dist/`. To load the extension in Chrome: open `chrome://extensions`, enable Developer Mode, click "Load unpacked", and select the `dist/` folder. To load it in Firefox for the session: open `about:debugging#/runtime/this-firefox`, click "Load Temporary Add-on…", and select `dist/manifest.json` (or run `make run-firefox`).
+
+Firefox doesn't support running the extension in private windows the way Chrome does (`"incognito": "split"`), so it doesn't run in them at all there, and "Checkout a cart" says it is not available.
 
 The extension logs nothing to the browser console by default. To see its `[bcp]` logs, turn on "Show advanced functionality" and then "Debug logging in the browser console" in the extension popup.
 
 ## Releasing
 
-Bump `version` in `manifest.json` in a PR. When it merges, the Publish workflow builds the zip, uploads it to the Chrome Web Store, submits it for review and tags the commit `v<version>`. The new version goes live once Google approves it.
+Bump `version` in `manifest.json` in a PR. When it merges, the Publish workflow:
 
-One-time setup for the workflow:
+- builds the zip, uploads it to the Chrome Web Store and submits it for review, then tags the commit `v<version>`. The new version goes live once Google approves it.
+- uploads the build to addons.mozilla.org (AMO) with the source code (`git archive` of the commit, as the bundles are minified) and submits it for review. The new version goes live once Mozilla approves it.
+
+The two stores are separate jobs, so one failing doesn't stop the other.
+
+### Chrome Web Store, one-time setup
 
 1. In the Google Cloud Console, create a project, enable the Chrome Web Store API, create a service account and download a JSON key for it.
 2. In the Chrome Web Store Developer Dashboard, add the service account's email under **Account**.
 3. In the GitHub repo settings, add the JSON key as the secret `CHROME_WEB_STORE_SERVICE_ACCOUNT_KEY`, and add the variables `CHROME_WEB_STORE_PUBLISHER_ID` (from **Publisher > Settings** in the dashboard) and `CHROME_WEB_STORE_ITEM_ID` (the extension's ID).
 
+### addons.mozilla.org, one-time setup
+
+1. Create a developer account at [addons.mozilla.org/developers](https://addons.mozilla.org/developers/).
+2. Generate API credentials at [Manage API Keys](https://addons.mozilla.org/developers/addon/api/key/).
+3. In the GitHub repo settings, add the JWT issuer as the secret `AMO_JWT_ISSUER` and the JWT secret as `AMO_JWT_SECRET`.
+
+The add-on is identified by `browser_specific_settings.gecko.id` in `manifest.json`; don't change it once published. The first upload creates the listing from `amo-metadata.json` (summary, categories, licence). Add the description, screenshots and so on in the AMO Developer Hub afterwards.
+
+To upload the current version without a version bump (e.g. the first time), run it locally from a clean checkout of the commit to release:
+
+```sh
+WEB_EXT_API_KEY=<JWT issuer> WEB_EXT_API_SECRET=<JWT secret> make publish-firefox
+```
+
 ## Stack
 
 - TypeScript + esbuild
-- Manifest V3 Chrome extension
+- Manifest V3 extension for Chrome and Firefox
 - Vitest for tests
 
 ## License

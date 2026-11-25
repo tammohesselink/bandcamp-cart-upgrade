@@ -1,0 +1,9 @@
+{
+  "summary": {
+    "en-US": "Quality of life improvements to the Bandcamp cart: a persistent playlist player for your cart, label discographies, collection, wishlist and feed."
+  },
+  "categories": ["photos-music-videos", "shopping"],
+  "version": {
+    "license": "MIT"
+  }
+}
