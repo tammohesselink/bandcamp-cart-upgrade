@@ -366,12 +366,15 @@ input[type=range].bcp-range::-webkit-slider-thumb {
   cursor: pointer;
 }
 
+/* The transparent border makes the bar clickable across its whole 18px row,
+   while it is still drawn 8px high. */
 input[type=range].bcp-seek {
   grid-column: 1;
   width: 100%;
-  height: 8px;
+  height: 18px;
+  border-block: 5px solid transparent;
   border-radius: 0;
-  background: linear-gradient(to right, #aaa var(--bcp-fill, 0%), #e6e6e6 var(--bcp-fill, 0%));
+  background: linear-gradient(to right, #aaa var(--bcp-fill, 0%), #e6e6e6 var(--bcp-fill, 0%)) padding-box;
 }
 
 /* The seek bar, or the waveform drawn in its place, with a spinner beside the
@@ -1192,7 +1195,7 @@ a.itemName.bcp-playing {
 }
 
 #bcp-wrapper.bcp-dark input[type=range].bcp-range {
-  background: linear-gradient(to right, #888 var(--bcp-fill, 0%), #3d3d3d var(--bcp-fill, 0%));
+  background-image: linear-gradient(to right, #888 var(--bcp-fill, 0%), #3d3d3d var(--bcp-fill, 0%));
 }
 
 #bcp-wrapper.bcp-dark input[type=range].bcp-range::-webkit-slider-thumb {
@@ -1200,7 +1203,7 @@ a.itemName.bcp-playing {
 }
 
 #bcp-wrapper.bcp-dark input[type=range].bcp-seek {
-  background: linear-gradient(to right, #999 var(--bcp-fill, 0%), #3a3a3a var(--bcp-fill, 0%));
+  background-image: linear-gradient(to right, #999 var(--bcp-fill, 0%), #3a3a3a var(--bcp-fill, 0%));
 }
 
 #bcp-wrapper.bcp-dark .bcp-waveform {
