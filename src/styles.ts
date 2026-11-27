@@ -740,17 +740,19 @@ input[type=range].bcp-tempo {
   color: #c08050;
 }
 
+/* As tall as the title line it sits in: Bandcamp clips that line, so the
+   button can't take clicks past it. */
 .bcp-grid-play-btn {
   background: none;
   border: none;
   cursor: pointer;
   color: #1da0c3;
-  font-size: 11px;
-  padding: 0 4px 0 0;
-  vertical-align: middle;
+  font-size: 14px;
+  padding: 0 6px 0 0;
+  vertical-align: top;
   opacity: 0.7;
   transition: opacity 0.15s;
-  line-height: 1;
+  line-height: 16px;
 }
 
 .bcp-grid-play-btn:hover {
