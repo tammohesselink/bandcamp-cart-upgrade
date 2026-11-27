@@ -285,6 +285,26 @@ export const PLAYER_CSS = `
   font-size: 20px;
 }
 
+/* The small bar buttons take clicks a little past their edges: as far up and
+   down as the bar allows, and sideways up to half the gap to their neighbours. */
+.bcp-nav-btn,
+.bcp-icon-button,
+.bcp-tempo-btn {
+  position: relative;
+}
+
+.bcp-nav-btn::before,
+.bcp-icon-button::before,
+.bcp-tempo-btn::before {
+  content: '';
+  position: absolute;
+  inset: -6px -3px;
+}
+
+.bcp-tempo-btn::before {
+  inset: -10px -1px;
+}
+
 .bcp-icon {
   display: block;
   width: 1em;
@@ -431,9 +451,15 @@ input[type=range].bcp-seek::-webkit-slider-thumb {
   background: #333;
 }
 
+/* The transparent border makes the slider clickable 20px high, while it is
+   still drawn 4px high with 2px round ends. */
 input[type=range].bcp-tempo {
   width: 96px;
+  height: 20px;
   flex-shrink: 0;
+  border-block: 8px solid transparent;
+  border-radius: 2px / 10px;
+  background-clip: padding-box;
 }
 
 /* Set further off than the bar's other gaps, so the seek bar and the tempo
@@ -1192,7 +1218,7 @@ a.itemName.bcp-playing {
 }
 
 #bcp-wrapper.bcp-dark input[type=range].bcp-range {
-  background: linear-gradient(to right, #888 var(--bcp-fill, 0%), #3d3d3d var(--bcp-fill, 0%));
+  background-image: linear-gradient(to right, #888 var(--bcp-fill, 0%), #3d3d3d var(--bcp-fill, 0%));
 }
 
 #bcp-wrapper.bcp-dark input[type=range].bcp-range::-webkit-slider-thumb {
