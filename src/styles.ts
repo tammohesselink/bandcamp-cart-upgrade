@@ -707,6 +707,7 @@ input[type=range].bcp-tempo {
 }
 
 .bcp-tab {
+  position: relative;
   background: none;
   border: none;
   color: #777;
@@ -718,6 +719,14 @@ input[type=range].bcp-tempo {
   font-family: inherit;
   white-space: nowrap;
   transition: color 0.15s, background 0.15s;
+}
+
+/* Each playlist takes clicks across the whole height of the switch and a
+   little past it, and sideways up to half the gap to the next one. */
+.bcp-tab::before {
+  content: '';
+  position: absolute;
+  inset: -4px -1px;
 }
 
 .bcp-tab:hover {
@@ -788,7 +797,9 @@ input[type=range].bcp-tempo {
   flex-shrink: 0;
 }
 
+/* As tall as the row it sits in, so the whole 18px height takes a click. */
 .bcp-cart-action-btn {
+  align-self: stretch;
   background: none;
   border: none;
   padding: 0;
